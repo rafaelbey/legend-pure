@@ -1669,6 +1669,13 @@ fn render_element_representation(model: &PureModel, id: ElementId) -> String {
 /// iterative form scales with heap allocations only. Matches the
 /// shape of the iterative `Value::Clone` and `Value::Drop` in
 /// `crates/runtime/src/value.rs`.
+///
+/// The two `expect` calls below are algorithmic-invariant guards
+/// — same shape as `deep_clone_iter`'s. They can only fire on a
+/// driver bug (no user input reaches them), and the function
+/// returns `String` so there's no `Result` to thread errors
+/// through. `clippy::expect_used` is allowed here for that reason.
+#[allow(clippy::expect_used)]
 fn render_representation(value: &Value, model: &PureModel, heap: &RuntimeHeap) -> String {
     enum Op<'a> {
         Visit(&'a Value),
@@ -2882,29 +2889,110 @@ fn build_vars_from_pure_map(
     Ok(out)
 }
 
-/// Recursively re-evaluate an AST-metamodel heap wrapper back to its
-/// runtime value, using `vars` as the **only** variable scope.
+/// Re-evaluate an AST-metamodel heap wrapper back to its runtime
+/// value, using `vars` as the **only** variable scope.
 ///
-/// Mirrors [`deactivate_spec`] in reverse:
-/// - `InstanceValue { values }` → flatten `.values` (each element itself
-///   reactivated, so nested `InstanceValue { values = [x] }` collapses).
-/// - `VariableExpression { name }` → look up `name` in `vars`; absent ⇒
-///   `Attempt to use out of scope variable: {name}` error (Java-parity
-///   message — matches `Reactivator.reactivateWithoutJavaCompilationImpl`).
-///   The caller's `ctx.context()` is intentionally NOT consulted —
+/// Iterative explicit-frame DFS so deeply nested deactivated specs
+/// can't overflow the Rust thread stack. The dispatch shape mirrors
+/// the recursive version, just queued through a work-stack instead
+/// of mutual recursion between `reactivate_instance_value` /
+/// `reactivate_variable_expression` / `reactivate_function_expression`:
+///
+/// - `InstanceValue { values }` → queue an `AssembleInstanceValue`
+///   marker, then push each `.values` entry as a `Visit`. The
+///   assemble step pops the reactivated children, flattens
+///   (Collection inner → push individually, Unit → skip, scalar →
+///   push), and wraps via `Value::from_vec`.
+/// - `VariableExpression { name }` → terminal: look up `name` in
+///   `vars`, push the bound value (or error
+///   `Attempt to use out of scope variable: {name}` for Java parity
+///   with `Reactivator.reactivateWithoutJavaCompilationImpl`). The
+///   caller's `ctx.context()` is intentionally NOT consulted —
 ///   reactivation can run on a different stack frame.
 /// - `SimpleFunctionExpression { func, functionName, parametersValues }`
-///   → reactivate each parameter with the same `vars`, resolve the
-///   callable (prefer the stored `func` element, fall back to dispatching
-///   by `functionName`), and invoke via `ctx.call_function`.
-/// - Any other heap object / scalar passes through unchanged.
+///   → queue an `AssembleFunctionExpression(obj_id)` marker, then
+///   push each `parametersValues` entry as a `Visit`. The assemble
+///   step pops the reactivated args, resolves the callable from
+///   the spec (preferring the stored `func` element, falling back
+///   to a `functionName`+arity simple-name lookup), and invokes
+///   via `ctx.call_function`. Callable resolution lives in the
+///   assemble step (not the visit step) to preserve the original
+///   "reactivate params first, then resolve+invoke" ordering —
+///   relevant when a param's 0-arg lambda has side effects that
+///   should fire before any callable-resolution error.
+/// - Any other heap object / scalar passes through unchanged. The
+///   0-arg lambda thunk special case (deactivated `{|expr}` body
+///   evaluated on reactivate) lives in the non-Object branch of
+///   the Visit dispatch, matching the recursive behaviour.
 #[allow(clippy::result_large_err)]
 fn reactivate_value(
     value: &Value,
     vars: &std::collections::HashMap<SmolStr, Value>,
     ctx: &mut dyn EvalContextTrait,
 ) -> Result<Value, PureException> {
-    let Value::Object(obj_id) = value else {
+    let mut ops: Vec<ReactivateOp> = vec![ReactivateOp::Visit(value.clone())];
+    let mut built: Vec<Value> = Vec::new();
+
+    while let Some(op) = ops.pop() {
+        match op {
+            ReactivateOp::Visit(v) => visit_one_spec(v, vars, ctx, &mut ops, &mut built)?,
+            ReactivateOp::AssembleInstanceValue { len } => {
+                let start = built.len() - len;
+                let raw: Vec<Value> = built.drain(start..).collect();
+                let mut out: Vec<Value> = Vec::with_capacity(raw.len());
+                for r in raw {
+                    match &r {
+                        Value::Collection(coll) => {
+                            for inner in coll.iter() {
+                                out.push(inner.clone());
+                            }
+                        }
+                        Value::Unit => {}
+                        _ => out.push(r),
+                    }
+                }
+                built.push(Value::from_vec(out));
+            }
+            ReactivateOp::AssembleFunctionExpression { len, obj_id } => {
+                let start = built.len() - len;
+                let args: Vec<Value> = built.drain(start..).collect();
+                let callable = resolve_function_expression_callable(&obj_id, args.len(), ctx)?;
+                built.push(ctx.call_function(&callable, &args)?);
+            }
+        }
+    }
+
+    // `built` is guaranteed non-empty when the loop exits: the driver
+    // seeds it (via the initial `Visit(value.clone())` which always
+    // produces exactly one entry — either a terminal push or an
+    // assemble that resolves to a `Value::from_vec` / `call_function`
+    // result), and every dispatched arm net-pushes one entry to
+    // `built` (the assemble arms drain `len` and push 1; the visit
+    // arms push 0 or 1). An empty stack here is a driver bug, not a
+    // recoverable runtime condition — surface it as a structured
+    // error so library callers don't see a panic.
+    built.pop().ok_or_else(|| {
+        PureRuntimeError::EvaluationError(
+            "reactivate_value: internal driver bug — built stack empty after traversal".into(),
+        )
+        .into()
+    })
+}
+
+/// Handle one node of the spec tree under the iterative driver:
+/// dispatch on `Value` shape, then either produce a terminal result
+/// (push to `built`) or queue an assemble marker + child visits onto
+/// `ops`. Mirrors the recursive `reactivate_value`'s top-level match
+/// without the recursive descent.
+#[allow(clippy::result_large_err)]
+fn visit_one_spec(
+    v: Value,
+    vars: &std::collections::HashMap<SmolStr, Value>,
+    ctx: &mut dyn EvalContextTrait,
+    ops: &mut Vec<ReactivateOp>,
+    built: &mut Vec<Value>,
+) -> Result<(), PureException> {
+    let Value::Object(obj_handle) = &v else {
         // 0-arg lambda thunks deactivated as the body of
         // `{|expr}.expressionSequence->evaluateAndDeactivate()->at(0)`
         // need to be *evaluated* on reactivate so the chain returns
@@ -2921,25 +3009,28 @@ fn reactivate_value(
         // our `.expressionSequence` shortcut returns the lambda for
         // round-trip-cloning compatibility, so we reproduce the
         // semantic distinction here at the reactivate boundary.
-        if let Value::Function(fv) = value
+        if let Value::Function(fv) = &v
             && let crate::value::FunctionValue::Lambda(closure) = fv.as_ref()
             && closure.parameters.is_empty()
         {
             tracing::debug!("reactivate: 0-arg lambda thunk → invoke");
-            return ctx.call_function(value, &[]);
+            built.push(ctx.call_function(&v, &[])?);
+            return Ok(());
         }
         tracing::trace!(
-            value_type = value.type_name(),
+            value_type = v.type_name(),
             "reactivate: non-Object pass-through"
         );
-        return Ok(value.clone());
+        built.push(v);
+        return Ok(());
     };
-    let classifier = ctx.heap().classifier(&obj_id.clone())?.to_string();
+    let obj_id = obj_handle.clone();
+    let classifier = ctx.heap().classifier(&obj_id)?.to_string();
     tracing::debug!(?obj_id, %classifier, "reactivate: classifier dispatch");
     let Some(classifier_id) = crate::m3_paths::resolve(ctx.model(), &classifier) else {
-        // Unknown classifier — not a spec wrapper we know how to walk.
         tracing::trace!(%classifier, "reactivate: unresolvable classifier — pass-through");
-        return Ok(value.clone());
+        built.push(v);
+        return Ok(());
     };
 
     // Per-classifier dispatch. The order matters only because
@@ -2948,134 +3039,122 @@ fn reactivate_value(
     // `InstanceValue` / `VariableExpression` so an InstanceValue
     // that happens to also extend FunctionExpression in some future
     // M3 evolution wouldn't be misrouted.
-    let model = ctx.model();
-    if classifier_extends_m3(model, classifier_id, crate::m3_paths::INSTANCE_VALUE) {
+    if classifier_extends_m3(ctx.model(), classifier_id, crate::m3_paths::INSTANCE_VALUE) {
         tracing::debug!("reactivate: → instance_value handler");
-        return reactivate_instance_value(obj_id.clone(), vars, ctx);
-    }
-    if classifier_extends_m3(model, classifier_id, crate::m3_paths::VARIABLE_EXPRESSION) {
-        tracing::debug!("reactivate: → variable_expression handler");
-        return reactivate_variable_expression(obj_id.clone(), vars, ctx);
-    }
-    if classifier_extends_m3(model, classifier_id, crate::m3_paths::FUNCTION_EXPRESSION) {
-        tracing::debug!("reactivate: → function_expression handler");
-        return reactivate_function_expression(obj_id.clone(), vars, ctx);
-    }
-
-    // Any other heap object — not a deactivated spec we know about; pass
-    // through unchanged.
-    tracing::trace!(%classifier, "reactivate: classifier not a known spec wrapper — pass-through");
-    Ok(value.clone())
-}
-
-/// Reactivate an `InstanceValue`-classified heap row by flattening
-/// its `.values` slot, recursively reactivating each entry, and
-/// merging Collection results in-place. Empty `.values` collapses to
-/// `Value::Unit` via [`Value::from_vec`]. `vars` threads through to
-/// any nested `VariableExpression`.
-#[allow(clippy::result_large_err)]
-fn reactivate_instance_value(
-    obj_id: crate::heap::ObjectHandle,
-    vars: &std::collections::HashMap<SmolStr, Value>,
-    ctx: &mut dyn EvalContextTrait,
-) -> Result<Value, PureException> {
-    let vals = ctx.heap().get_property_values(&obj_id, "values")?;
-    let raw: Vec<Value> = vals.iter().cloned().collect();
-    let mut out: Vec<Value> = Vec::with_capacity(raw.len());
-    for v in raw {
-        let reactivated = reactivate_value(&v, vars, ctx)?;
-        match &reactivated {
-            Value::Collection(coll) => {
-                for inner in coll.iter() {
-                    out.push(inner.clone());
-                }
-            }
-            Value::Unit => {}
-            _ => out.push(reactivated),
+        let vals = ctx.heap().get_property_values(&obj_id, "values")?;
+        let raw: Vec<Value> = vals.iter().cloned().collect();
+        let len = raw.len();
+        ops.push(ReactivateOp::AssembleInstanceValue { len });
+        for child in raw.into_iter().rev() {
+            ops.push(ReactivateOp::Visit(child));
         }
+        return Ok(());
     }
-    Ok(Value::from_vec(out))
+    if classifier_extends_m3(
+        ctx.model(),
+        classifier_id,
+        crate::m3_paths::VARIABLE_EXPRESSION,
+    ) {
+        tracing::debug!("reactivate: → variable_expression handler");
+        let name_vals = ctx.heap().get_property_values(&obj_id, "name")?;
+        let Some(Value::String(name)) = name_vals.iter().next() else {
+            return Err(PureRuntimeError::EvaluationError(
+                "reactivate: VariableExpression is missing its 'name' slot".into(),
+            )
+            .into());
+        };
+        let Some(found) = vars.get(name.as_str()) else {
+            return Err(PureRuntimeError::EvaluationError(format!(
+                "Attempt to use out of scope variable: {name}"
+            ))
+            .into());
+        };
+        built.push(found.clone());
+        return Ok(());
+    }
+    if classifier_extends_m3(
+        ctx.model(),
+        classifier_id,
+        crate::m3_paths::FUNCTION_EXPRESSION,
+    ) {
+        tracing::debug!("reactivate: → function_expression handler");
+        let params = ctx
+            .heap()
+            .get_property_values(&obj_id, "parametersValues")?;
+        let raw_params: Vec<Value> = params.iter().cloned().collect();
+        let len = raw_params.len();
+        // Callable resolution happens at assemble-time (in the
+        // matching `AssembleFunctionExpression` arm) — preserves the
+        // original "reactivate params first, then resolve+invoke"
+        // ordering when a param's side effect should fire before any
+        // resolution error.
+        ops.push(ReactivateOp::AssembleFunctionExpression { len, obj_id });
+        for child in raw_params.into_iter().rev() {
+            ops.push(ReactivateOp::Visit(child));
+        }
+        return Ok(());
+    }
+    tracing::trace!(%classifier, "reactivate: classifier not a known spec wrapper — pass-through");
+    built.push(v);
+    Ok(())
 }
 
-/// Reactivate a `VariableExpression`-classified heap row by reading
-/// its `.name` slot and looking the variable up in `vars`. The
-/// caller's `ctx.context()` is intentionally never consulted — the
-/// captured spec might be reactivated on a different stack frame.
-///
-/// Errors with the Java-parity message
-/// `Attempt to use out of scope variable: {name}` when the lookup
-/// fails, matching `PureDynamicReactivateException` in
-/// `Reactivator.reactivateWithoutJavaCompilationImpl` so parity tooling
-/// can grep for a single canonical string.
-#[allow(clippy::result_large_err)]
-fn reactivate_variable_expression(
-    obj_id: crate::heap::ObjectHandle,
-    vars: &std::collections::HashMap<SmolStr, Value>,
-    ctx: &mut dyn EvalContextTrait,
-) -> Result<Value, PureException> {
-    let name_vals = ctx.heap().get_property_values(&obj_id, "name")?;
-    let Some(Value::String(name)) = name_vals.iter().next() else {
-        return Err(PureRuntimeError::EvaluationError(
-            "reactivate: VariableExpression is missing its 'name' slot".into(),
-        )
-        .into());
-    };
-    if let Some(v) = vars.get(name.as_str()) {
-        return Ok(v.clone());
-    }
-    Err(
-        PureRuntimeError::EvaluationError(format!("Attempt to use out of scope variable: {name}"))
-            .into(),
-    )
+/// Work-stack frames for the iterative `reactivate_value` driver.
+/// One `Visit` frame per spec-tree node to dispatch; one `Assemble`
+/// frame per recursive variant (InstanceValue / FunctionExpression)
+/// to gather the reactivated children once their subtrees have been
+/// walked. Terminal variants (VariableExpression, pass-through) push
+/// straight to `built` and don't need an assemble step.
+enum ReactivateOp {
+    /// Dispatch on `Value` shape; push terminal result or queue an
+    /// `Assemble` marker with the child visits.
+    Visit(Value),
+    /// Pop `len` reactivated entries off `built`, flatten + wrap via
+    /// `Value::from_vec`, push back as one `Value`.
+    AssembleInstanceValue {
+        /// Number of children queued by the matching `Visit`.
+        len: usize,
+    },
+    /// Pop `len` reactivated args off `built`, resolve the callable
+    /// from the spec's `func` / `functionName` slots, invoke via
+    /// `ctx.call_function`, push the result.
+    AssembleFunctionExpression {
+        /// Number of `parametersValues` entries.
+        len: usize,
+        /// Heap handle for the `FunctionExpression` spec; used at
+        /// assemble time to read `func` / `functionName`.
+        obj_id: crate::heap::ObjectHandle,
+    },
 }
 
-/// Reactivate a `FunctionExpression`-classified heap row
-/// (`SimpleFunctionExpression` and any future subclass share this
-/// shape) by reactivating each `parametersValues` entry, then
-/// dispatching the call through one of two paths:
+/// Resolve the callable for a `FunctionExpression`-classified spec:
+/// prefer the stored `func` element (deactivated specs that survived
+/// a full round-trip carry this), fall back to looking up the
+/// function globally by `functionName` and arity.
 ///
-/// 1. **Resolved `func` element** — preferred path; the deactivated
-///    spec carried the `function: Some(eid)` link so we go straight
-///    through `ctx.call_function`.
-/// 2. **Simple-name fallback** — when `func` is absent, look up the
-///    function globally by `functionName` and arity (preferring an
-///    exact arity match, falling back to any). Sufficient for the
-///    deactivate → reactivate round-trip patterns surveyor exercises;
-///    full overload resolution would route through the same compiler
-///    `resolve_function_call` machinery and is tracked under
-///    "Reactivate inner-call dispatch" in BACKLOG.
+/// Errors with focused diagnostics so callers see *which* path failed
+/// instead of a generic "Function not found" — matches the recursive
+/// `reactivate_function_expression`'s error contract exactly.
 #[allow(clippy::result_large_err)]
-fn reactivate_function_expression(
-    obj_id: crate::heap::ObjectHandle,
-    vars: &std::collections::HashMap<SmolStr, Value>,
+fn resolve_function_expression_callable(
+    obj_id: &crate::heap::ObjectHandle,
+    arity: usize,
     ctx: &mut dyn EvalContextTrait,
 ) -> Result<Value, PureException> {
-    let params = ctx
-        .heap()
-        .get_property_values(&obj_id, "parametersValues")?;
-    let raw_params: Vec<Value> = params.iter().cloned().collect();
-    let mut reactivated_params: Vec<Value> = Vec::with_capacity(raw_params.len());
-    for p in raw_params {
-        reactivated_params.push(reactivate_value(&p, vars, ctx)?);
-    }
-    let func_vals = ctx.heap().get_property_values(&obj_id, "func")?;
+    let func_vals = ctx.heap().get_property_values(obj_id, "func")?;
     if let Some(func_val) = func_vals.iter().next() {
-        return ctx.call_function(&func_val.clone(), &reactivated_params);
+        return Ok(func_val.clone());
     }
-    let name_vals = ctx.heap().get_property_values(&obj_id, "functionName")?;
+    let name_vals = ctx.heap().get_property_values(obj_id, "functionName")?;
     let name_opt: Option<smol_str::SmolStr> = match name_vals.iter().next() {
         Some(Value::String(s)) => Some(s.clone()),
         _ => None,
     };
     if let Some(name) = name_opt
-        && let Some(fn_id) =
-            find_function_by_simple_name(ctx.model(), &name, reactivated_params.len())
+        && let Some(fn_id) = find_function_by_simple_name(ctx.model(), &name, arity)
     {
-        return ctx.call_function(&Value::Element(fn_id), &reactivated_params);
+        return Ok(Value::Element(fn_id));
     }
-    // Either no `functionName` slot at all, or simple-name lookup
-    // found no overload — surface a focused diagnostic so callers see
-    // *which* path failed instead of a runtime "Function not found".
     if name_vals.iter().next().is_none() {
         return Err(PureRuntimeError::EvaluationError(
             "reactivate: SimpleFunctionExpression is missing both 'func' and 'functionName'".into(),

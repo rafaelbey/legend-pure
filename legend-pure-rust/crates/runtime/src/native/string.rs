@@ -479,18 +479,23 @@ pub(crate) fn pure_to_string(
                 built.push(format!("[{}]", parts.join(", ")));
             }
             Op::AssembleUnitInstance(unit_id) => {
-                let inner_s = built
-                    .pop()
-                    .expect("pure_to_string: AssembleUnitInstance with empty built");
+                let inner_s = built.pop().ok_or_else(|| {
+                    PureRuntimeError::EvaluationError(
+                        "pure_to_string: internal driver bug — AssembleUnitInstance reached with empty built stack".into(),
+                    )
+                })?;
                 let unit_name = ctx.model().element_name(unit_id).to_string();
                 built.push(format!("{inner_s} {unit_name}"));
             }
         }
     }
 
-    Ok(built
-        .pop()
-        .expect("pure_to_string: built stack empty after traversal"))
+    built.pop().ok_or_else(|| {
+        PureRuntimeError::EvaluationError(
+            "pure_to_string: internal driver bug — built stack empty after traversal".into(),
+        )
+        .into()
+    })
 }
 
 /// `toString` rendering for the non-recursive (`Collection` / `UnitInstance` /

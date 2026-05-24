@@ -790,6 +790,16 @@ impl Clone for Value {
 /// - `built`: cloned children waiting to be consumed by the next
 ///   `Assemble` frame. Order matches source order — children are
 ///   visited in reverse so that popping gives the original sequence.
+///
+/// The two `expect` calls below are algorithmic-invariant guards
+/// (every `AssembleUnitInstance` pushes exactly one `Visit` child;
+/// the loop net-pushes one entry per top-level `Visit`). They can
+/// only fire on a driver bug — there's no runtime input that
+/// triggers them — and there's no `Result` to thread an error
+/// through (`Clone` returns `Value`). `clippy::expect_used` is
+/// allowed here for that reason; cross-references for both sites
+/// are in the inline comments.
+#[allow(clippy::expect_used)]
 fn deep_clone_iter(root: &Value) -> Value {
     enum Op<'a> {
         Visit(&'a Value),
