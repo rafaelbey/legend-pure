@@ -41,10 +41,6 @@ use smol_str::SmolStr;
 
 use crate::state::WorkspaceSnapshot;
 
-// ---------------------------------------------------------------------------
-// Tool argument schemas (one per tool with non-empty inputs)
-// ---------------------------------------------------------------------------
-
 /// Input shape for [`LegendMcpServer::search_symbols`].
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct SearchSymbolsArgs {
@@ -317,10 +313,6 @@ pub struct WorkspaceStatus {
     pub repo_count: usize,
 }
 
-// ---------------------------------------------------------------------------
-// LegendMcpServer
-// ---------------------------------------------------------------------------
-
 /// rmcp `ServerHandler` that exposes the Legend Pure workspace as
 /// MCP tools.
 ///
@@ -401,8 +393,6 @@ impl LegendMcpServer {
 
 #[tool_router]
 impl LegendMcpServer {
-    // ----- Read tools -----------------------------------------------------
-
     /// Search the compiled workspace for elements whose FQN matches
     /// a substring (case-insensitive).
     #[tool(
@@ -443,8 +433,6 @@ impl LegendMcpServer {
         };
         json_result(&rows)
     }
-
-    // ----- Execute tools --------------------------------------------------
 
     /// Call a parameter-less Pure function and return its rendered
     /// value.
@@ -565,8 +553,6 @@ impl LegendMcpServer {
         }
     }
 
-    // ----- Introspection tools -------------------------------------------
-
     /// Resolve an FQN to its kind + source location.
     #[tool(
         description = "Look up a Legend Pure element by FQN and return its kind + source location. Use this after search_symbols to confirm an element exists and find where it's defined."
@@ -647,8 +633,6 @@ impl LegendMcpServer {
         .map_err(|e| McpError::internal_error(format!("join error: {e}"), None))?;
         json_result(&result)
     }
-
-    // ----- Lifecycle tools -----------------------------------------------
 
     /// Return the timestamp + counters of the current workspace
     /// snapshot. Agents call this to decide whether to invoke
