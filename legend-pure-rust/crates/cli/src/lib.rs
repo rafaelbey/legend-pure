@@ -196,7 +196,10 @@ fn print_version_inner() {
     println!("  {} Pure grammar parser", "✓".green());
     println!("  {} Protocol JSON ↔ Grammar conversion", "✓".green());
     println!("  {} Compile Pure models", "✓".green());
-    println!("  {} Incremental build (parse + compile + test + emit)", "✓".green());
+    println!(
+        "  {} Incremental build (parse + compile + test + emit)",
+        "✓".green()
+    );
     println!("  {} Run Pure tests", "✓".green());
 }
 

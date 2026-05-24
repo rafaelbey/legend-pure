@@ -162,17 +162,11 @@ pub fn run(args: BuildArgs, classpath: Option<&std::path::Path>) -> Result<(), C
 
     if args.clean {
         clean_cache(&cache_dir).map_err(|e| {
-            CliError::Custom(format!(
-                "--clean failed for {}: {e}",
-                cache_dir.display()
-            ))
+            CliError::Custom(format!("--clean failed for {}: {e}", cache_dir.display()))
         })?;
     }
     ensure_cache_dir(&cache_dir).map_err(|e| {
-        CliError::Custom(format!(
-            "creating cache dir {}: {e}",
-            cache_dir.display()
-        ))
+        CliError::Custom(format!("creating cache dir {}: {e}", cache_dir.display()))
     })?;
 
     // Resolve the auto-import set the same way `legend test` /
@@ -246,13 +240,8 @@ pub fn run(args: BuildArgs, classpath: Option<&std::path::Path>) -> Result<(), C
                     .iter()
                     .filter_map(|d| dep_fingerprints.get(&SmolStr::new(*d)).map(|fp| (*d, *fp)))
                     .collect();
-                let fp = compute_fingerprint(
-                    repo,
-                    &dep_subset,
-                    CLI_VERSION,
-                    SCHEMA_HASH,
-                    &auto_imports,
-                );
+                let fp =
+                    compute_fingerprint(repo, &dep_subset, CLI_VERSION, SCHEMA_HASH, &auto_imports);
 
                 let repo_cache_dir = cache_dir.join(meta.name);
                 let stamp_path = repo_cache_dir.join("cache.toml");
@@ -319,12 +308,10 @@ pub fn run(args: BuildArgs, classpath: Option<&std::path::Path>) -> Result<(), C
                             // bootstrap), the new chunks are
                             // appended at the tail.
                             let chunk_count = model.chunks.len();
-                            let new_range = u16::try_from(prev_chunk_count).map_err(|_| {
-                                CliError::Custom("chunk count overflow".into())
-                            })?
-                                ..u16::try_from(chunk_count).map_err(|_| {
-                                    CliError::Custom("chunk count overflow".into())
-                                })?;
+                            let new_range = u16::try_from(prev_chunk_count)
+                                .map_err(|_| CliError::Custom("chunk count overflow".into()))?
+                                ..u16::try_from(chunk_count)
+                                    .map_err(|_| CliError::Custom("chunk count overflow".into()))?;
                             let slice = slice_by_repo(&model, new_range);
                             let bytes = write_repo(&slice).map_err(|e| {
                                 CliError::Custom(format!("write_repo for {}: {e}", meta.name))
@@ -447,9 +434,12 @@ pub fn run(args: BuildArgs, classpath: Option<&std::path::Path>) -> Result<(), C
         }
     }
 
-    let any_failure = statuses
-        .iter()
-        .any(|s| matches!(s.kind, StatusKind::Failed { .. } | StatusKind::Blocked { .. }));
+    let any_failure = statuses.iter().any(|s| {
+        matches!(
+            s.kind,
+            StatusKind::Failed { .. } | StatusKind::Blocked { .. }
+        )
+    });
 
     // Test phase. We always test all built+needs-run repos
     // together: a single surveyor pass over the unified model.
@@ -489,8 +479,7 @@ pub fn run(args: BuildArgs, classpath: Option<&std::path::Path>) -> Result<(), C
             // explicitly listed via `--repo`, only those get their
             // test_result updated; the others keep their prior
             // outcome.
-            let filter_set: HashSet<&str> =
-                args.repos.iter().map(String::as_str).collect();
+            let filter_set: HashSet<&str> = args.repos.iter().map(String::as_str).collect();
             let outcome = if summary.has_failures() {
                 TestResult::Fail
             } else {
@@ -543,9 +532,7 @@ pub fn run(args: BuildArgs, classpath: Option<&std::path::Path>) -> Result<(), C
 
     print_summary(&statuses, test_summary.as_ref(), args.format);
 
-    let test_failed = test_summary
-        .as_ref()
-        .is_some_and(|s| s.fail + s.error > 0);
+    let test_failed = test_summary.as_ref().is_some_and(|s| s.fail + s.error > 0);
     if any_failure || test_failed {
         return Err(CliError::Custom(format!(
             "build failed: {failed} repo(s) failed, {blocked} repo(s) blocked, {tf} test failure(s), {te} test error(s)",
@@ -599,19 +586,25 @@ fn print_pretty(statuses: &[RepoStatus], _test_summary: Option<&super::test::Bui
         .max(4);
     for s in statuses {
         let (mark, label) = match &s.kind {
-            StatusKind::Passthrough => ("◌".dimmed().to_string(), "passthrough".dimmed().to_string()),
+            StatusKind::Passthrough => {
+                ("◌".dimmed().to_string(), "passthrough".dimmed().to_string())
+            }
             StatusKind::Cached { needs_tests: false } => {
                 ("✓".green().to_string(), "cached".green().to_string())
             }
-            StatusKind::Cached { needs_tests: true } => {
-                ("✓".green().to_string(), "cached (needs tests)".green().to_string())
-            }
+            StatusKind::Cached { needs_tests: true } => (
+                "✓".green().to_string(),
+                "cached (needs tests)".green().to_string(),
+            ),
             StatusKind::Built => ("●".cyan().to_string(), "built".cyan().to_string()),
             StatusKind::Failed { errors } => (
                 "✗".red().to_string(),
-                format!("failed ({errors} error{})", if *errors == 1 { "" } else { "s" })
-                    .red()
-                    .to_string(),
+                format!(
+                    "failed ({errors} error{})",
+                    if *errors == 1 { "" } else { "s" }
+                )
+                .red()
+                .to_string(),
             ),
             StatusKind::Blocked { blocker } => (
                 "○".yellow().to_string(),

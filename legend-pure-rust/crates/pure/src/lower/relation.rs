@@ -259,14 +259,12 @@ fn lower_relation_columns_from_specs(
                         },
                         Multiplicity::PureOne,
                     );
-                    let expected: Vec<Option<(TypeExpr, Multiplicity)>> =
-                        l.parameters.iter().map(|_| Some(any_param.clone())).collect();
-                    super::lambda::lower_lambda_with_expected_types(
-                        l,
-                        Some(&expected),
-                        ctx,
-                        errors,
-                    )
+                    let expected: Vec<Option<(TypeExpr, Multiplicity)>> = l
+                        .parameters
+                        .iter()
+                        .map(|_| Some(any_param.clone()))
+                        .collect();
+                    super::lambda::lower_lambda_with_expected_types(l, Some(&expected), ctx, errors)
                 }
                 _ => None,
             };

@@ -494,10 +494,7 @@ pub(crate) fn run_build_tests(
     let result = evaluator
         .call(
             "meta::pure::test::surveyor::runTestsFromPath",
-            &[
-                Value::String(package.into()),
-                Value::String(filter.into()),
-            ],
+            &[Value::String(package.into()), Value::String(filter.into())],
         )
         .map_err(|e| CliError::Custom(format!("Test execution failed: {e}")))?;
 

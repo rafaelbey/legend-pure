@@ -347,7 +347,10 @@ mod tests {
         write_stamp(&path, &s).expect("write");
         let back = read_stamp(&path).expect("read");
         assert_eq!(back.fingerprint, s.fingerprint);
-        assert_eq!(back.dep_fingerprints.get("b").map(String::as_str), Some(s.dep_fingerprints["b"].as_str()));
+        assert_eq!(
+            back.dep_fingerprints.get("b").map(String::as_str),
+            Some(s.dep_fingerprints["b"].as_str())
+        );
         assert_eq!(back.last_test_result, TestResult::Pass);
     }
 

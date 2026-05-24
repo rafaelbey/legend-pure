@@ -609,8 +609,10 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
                         )
                         .map(Value::Object)
                     }
-                    _ => crate::relation::alloc_col_spec_literal(&mut self.heap, self.model, column)
-                        .map(Value::Object),
+                    _ => {
+                        crate::relation::alloc_col_spec_literal(&mut self.heap, self.model, column)
+                            .map(Value::Object)
+                    }
                 }
             }
 

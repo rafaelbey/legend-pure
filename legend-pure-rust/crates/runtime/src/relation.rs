@@ -402,6 +402,7 @@ mod tests {
             name: SmolStr::new("col name"),
             type_element: bootstrap::INTEGER_ID,
             multiplicity: Multiplicity::PureOne,
+            init_lambda: None,
         };
 
         let cs = alloc_col_spec_literal(&mut heap, &model, &column)

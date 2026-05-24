@@ -159,10 +159,7 @@ async fn read_class_detail_returns_properties_and_supertypes_and_associations() 
 
     // Properties — 3 declared (firstName, lastName, age).
     let props = parsed["properties"].as_array().expect("properties array");
-    let names: Vec<&str> = props
-        .iter()
-        .map(|p| p["name"].as_str().unwrap())
-        .collect();
+    let names: Vec<&str> = props.iter().map(|p| p["name"].as_str().unwrap()).collect();
     assert_eq!(names, vec!["firstName", "lastName", "age"]);
     assert_eq!(props[2]["multiplicity"].as_str().unwrap(), "0..1");
     assert!(
@@ -181,7 +178,10 @@ async fn read_class_detail_returns_properties_and_supertypes_and_associations() 
         "expected one association edge from Person; got {assocs:#?}"
     );
     assert_eq!(assocs[0]["role_name"].as_str().unwrap(), "addresses");
-    assert_eq!(assocs[0]["target_class_fqn"].as_str().unwrap(), "pkg::Address");
+    assert_eq!(
+        assocs[0]["target_class_fqn"].as_str().unwrap(),
+        "pkg::Address"
+    );
     assert_eq!(assocs[0]["multiplicity"].as_str().unwrap(), "*");
     assert_eq!(
         assocs[0]["association_fqn"].as_str().unwrap(),
@@ -274,7 +274,10 @@ async fn find_associations_for_class_returns_edges_from_both_sides() {
     let edges = parsed.as_array().expect("array");
     assert_eq!(edges.len(), 1);
     assert_eq!(edges[0]["role_name"].as_str().unwrap(), "resident");
-    assert_eq!(edges[0]["target_class_fqn"].as_str().unwrap(), "pkg::Person");
+    assert_eq!(
+        edges[0]["target_class_fqn"].as_str().unwrap(),
+        "pkg::Person"
+    );
 }
 
 #[tokio::test]

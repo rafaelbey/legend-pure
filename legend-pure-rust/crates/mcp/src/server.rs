@@ -1522,7 +1522,11 @@ fn build_class_detail(model: &PureModel, id: ElementId, class: &Class) -> ClassD
         .iter()
         .map(|st| render_type_fqn(model, st))
         .collect();
-    let properties = class.properties.iter().map(|p| property_info(model, p)).collect();
+    let properties = class
+        .properties
+        .iter()
+        .map(|p| property_info(model, p))
+        .collect();
     let qualified_properties = class
         .qualified_properties
         .iter()
@@ -1692,9 +1696,8 @@ fn eval_expression_impl(
         }
         s
     };
-    let wrapped = format!(
-        "###Pure\n{imports}function {MCP_SCRATCH_FQN}():Any[*]\n{{\n  {expression}\n}}\n"
-    );
+    let wrapped =
+        format!("###Pure\n{imports}function {MCP_SCRATCH_FQN}():Any[*]\n{{\n  {expression}\n}}\n");
     // The synthetic repo needs a `RepoMeta` so `topo_sort_repos` can
     // place it after every other loaded repo. Its dependency list
     // must enumerate every other repo by name so the visibility map
@@ -1744,10 +1747,7 @@ fn eval_expression_impl(
     // a noisy stack trace the user would otherwise have to ignore.
     // `resolve_function_by_path` does prefix-matching on the mangled
     // name; `resolve_fqn_str` would require the caller to pre-mangle.
-    let scratch_segments: Vec<SmolStr> = MCP_SCRATCH_FQN
-        .split("::")
-        .map(SmolStr::new)
-        .collect();
+    let scratch_segments: Vec<SmolStr> = MCP_SCRATCH_FQN.split("::").map(SmolStr::new).collect();
     if snapshot
         .model
         .resolve_function_by_path(&scratch_segments)
@@ -1766,8 +1766,7 @@ fn eval_expression_impl(
     // distributed-slice unification, populators + relational natives
     // are listed inline at every call site.
     let relational_ext = legend_pure_store_relational_runtime::RelationalStoreExtension;
-    let registry =
-        legend_pure_runtime::native::NativeRegistry::with_extensions(&[&relational_ext]);
+    let registry = legend_pure_runtime::native::NativeRegistry::with_extensions(&[&relational_ext]);
     let mapping_pop = legend_pure_dsl_mapping_runtime::MappingDSLPopulator;
     let database_pop = legend_pure_dsl_relational_runtime::RelationalDatabaseDSLPopulator;
     let class_mapping_pop = legend_pure_dsl_relational_runtime::RelationalClassMappingDSLPopulator;
