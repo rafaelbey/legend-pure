@@ -26,10 +26,6 @@ use crate::type_ref::{
     Identifier, Multiplicity, Package, TypeReference, TypeSpec, TypeVariableParameter,
 };
 
-// ---------------------------------------------------------------------------
-// Traits
-// ---------------------------------------------------------------------------
-
 /// A top-level element that lives in a package and has a name.
 ///
 /// Named `PackageableElement` to match the Java convention, easing transition
@@ -51,10 +47,6 @@ pub trait Annotated {
     /// Returns the tagged values applied to this element.
     fn tagged_values(&self) -> &[TaggedValue];
 }
-
-// ---------------------------------------------------------------------------
-// Element enum
-// ---------------------------------------------------------------------------
 
 /// A top-level packageable element in the Pure grammar.
 ///
@@ -199,10 +191,6 @@ impl Annotated for Element {
     }
 }
 
-// ---------------------------------------------------------------------------
-// PrimitiveDef
-// ---------------------------------------------------------------------------
-
 /// A primitive type definition: `Primitive meta::pure::MyInt extends Integer`.
 ///
 /// Primitives may declare parametric-value inputs and constraints:
@@ -228,10 +216,6 @@ pub struct PrimitiveDef {
     pub source_info: SourceInfo,
 }
 
-// ---------------------------------------------------------------------------
-// ProfileDef
-// ---------------------------------------------------------------------------
-
 /// A profile definition: `Profile <<stereo>> meta::pure::profiles::doc { stereotypes: [...]; tags: [...]; }`.
 #[derive(Debug, Clone, PartialEq, crate::PackageableElement)]
 pub struct ProfileDef {
@@ -250,10 +234,6 @@ pub struct ProfileDef {
     /// Source location.
     pub source_info: SourceInfo,
 }
-
-// ---------------------------------------------------------------------------
-// EnumDef
-// ---------------------------------------------------------------------------
 
 /// An enumeration definition: `Enum <<stereo>> {tag='val'} MyEnum { A, B, C }`.
 #[derive(Debug, Clone, PartialEq, crate::PackageableElement)]
@@ -284,10 +264,6 @@ pub struct EnumValue {
     /// Source location.
     pub source_info: SourceInfo,
 }
-
-// ---------------------------------------------------------------------------
-// ClassDef & related
-// ---------------------------------------------------------------------------
 
 /// Aggregation kind for properties.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -406,10 +382,6 @@ pub struct ClassDef {
     pub source_info: SourceInfo,
 }
 
-// ---------------------------------------------------------------------------
-// AssociationDef
-// ---------------------------------------------------------------------------
-
 /// An association definition linking two classes.
 ///
 /// ```text
@@ -435,10 +407,6 @@ pub struct AssociationDef {
     /// Source location.
     pub source_info: SourceInfo,
 }
-
-// ---------------------------------------------------------------------------
-// MeasureDef
-// ---------------------------------------------------------------------------
 
 /// A unit definition within a measure.
 ///
@@ -476,10 +444,6 @@ pub struct MeasureDef {
     /// Source location.
     pub source_info: SourceInfo,
 }
-
-// ---------------------------------------------------------------------------
-// FunctionDef
-// ---------------------------------------------------------------------------
 
 /// Test data for a function test — either inline or reference.
 #[derive(Debug, Clone, PartialEq, crate::Spanned)]
@@ -689,10 +653,6 @@ impl FunctionSignature for NativeFunctionDef {
     }
 }
 
-// ---------------------------------------------------------------------------
-// FQN encoding helpers (used by `FunctionSignature::mangled_name`)
-// ---------------------------------------------------------------------------
-
 /// Append the type name from a `TypeReference` to the FQN builder.
 fn append_type_name(b: &mut String, tr: &TypeReference) {
     use crate::type_ref::FUNCTION_TYPE_SENTINEL;
@@ -749,10 +709,6 @@ fn append_mult(b: &mut String, m: &Multiplicity) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Visitor
-// ---------------------------------------------------------------------------
-
 /// Visitor pattern for walking top-level elements.
 ///
 /// Implement this for compiler passes, linters, protocol converters, etc.
@@ -794,10 +750,6 @@ impl Element {
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

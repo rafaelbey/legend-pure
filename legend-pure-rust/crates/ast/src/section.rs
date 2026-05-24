@@ -34,10 +34,6 @@ use crate::element::Element;
 use crate::source_info::SourceInfo;
 use crate::type_ref::{Identifier, Package};
 
-// ---------------------------------------------------------------------------
-// SourceFile
-// ---------------------------------------------------------------------------
-
 /// The top-level parse result — a complete Pure source file.
 ///
 /// Contains one or more sections, each with its own import scope and elements.
@@ -70,10 +66,6 @@ impl SourceFile {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Section
-// ---------------------------------------------------------------------------
-
 /// A section within a Pure source file.
 ///
 /// Each section has its own kind (Pure, Mapping, etc.), its own imports,
@@ -92,10 +84,6 @@ pub struct Section {
     pub source_info: SourceInfo,
 }
 
-// ---------------------------------------------------------------------------
-// ImportStatement
-// ---------------------------------------------------------------------------
-
 /// An import statement: `import meta::pure::profiles::*;`.
 ///
 /// The `path` represents the package being imported. In Pure, all imports
@@ -107,10 +95,6 @@ pub struct ImportStatement {
     /// Source location of the full import statement.
     pub source_info: SourceInfo,
 }
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

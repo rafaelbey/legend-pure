@@ -31,10 +31,6 @@ use crate::island::IslandExpression;
 use crate::source_info::{SourceInfo, Spanned};
 use crate::type_ref::{Identifier, Multiplicity, TypeReference};
 
-// ---------------------------------------------------------------------------
-// Expression enum
-// ---------------------------------------------------------------------------
-
 /// An expression in the Pure grammar.
 ///
 /// This is a recursive type — expressions contain sub-expressions.
@@ -167,10 +163,6 @@ impl Spanned for Expression {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Literal enum
-// ---------------------------------------------------------------------------
-
 /// All literal types grouped together.
 ///
 /// Enables pattern matching on "is this any literal?" without enumerating
@@ -209,10 +201,6 @@ impl Spanned for Literal {
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// Literal value types
-// ---------------------------------------------------------------------------
 
 /// Integer literal: `42`.
 #[derive(Debug, Clone, PartialEq, Eq, crate::Spanned)]
@@ -286,10 +274,6 @@ pub struct StrictTimeLiteral {
     pub source_info: SourceInfo,
 }
 
-// ---------------------------------------------------------------------------
-// Variable
-// ---------------------------------------------------------------------------
-
 /// A variable reference: `$name`.
 #[derive(Debug, Clone, PartialEq, Eq, crate::Spanned)]
 pub struct Variable {
@@ -298,10 +282,6 @@ pub struct Variable {
     /// Source location.
     pub source_info: SourceInfo,
 }
-
-// ---------------------------------------------------------------------------
-// Operators
-// ---------------------------------------------------------------------------
 
 /// Arithmetic operator.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -440,10 +420,6 @@ pub struct BitwiseNotExpr {
     pub source_info: SourceInfo,
 }
 
-// ---------------------------------------------------------------------------
-// Function & member access
-// ---------------------------------------------------------------------------
-
 /// A function application: `func(args)` or `pkg::func(args)`.
 #[derive(Debug, Clone, PartialEq, crate::Spanned)]
 pub struct FunctionApplication {
@@ -542,10 +518,6 @@ pub struct QualifiedMemberAccess {
     pub source_info: SourceInfo,
 }
 
-// ---------------------------------------------------------------------------
-// Type reference expression
-// ---------------------------------------------------------------------------
-
 /// A type reference expression: `@MyType`.
 ///
 /// Used as an argument to `cast` and `instanceOf` arrow functions:
@@ -576,10 +548,6 @@ pub struct MultiplicityReferenceExpr {
     /// Source location (the `@` token through the closing `]`).
     pub source_info: SourceInfo,
 }
-
-// ---------------------------------------------------------------------------
-// Complex expressions
-// ---------------------------------------------------------------------------
 
 /// A lambda expression: `{params | body}` or `params | body`.
 #[derive(Debug, Clone, PartialEq, crate::Spanned)]
@@ -686,10 +654,6 @@ pub struct KeyValuePair {
     pub source_info: SourceInfo,
 }
 
-// ---------------------------------------------------------------------------
-// Navigation path
-// ---------------------------------------------------------------------------
-
 /// A navigation path expression: `#/StartType/prop1(args)/prop2!alias#`.
 ///
 /// Path expressions describe a chain of property accesses through the type
@@ -752,10 +716,6 @@ pub struct UnitInstanceExpr {
     pub source_info: SourceInfo,
 }
 
-// ---------------------------------------------------------------------------
-// Column specification
-// ---------------------------------------------------------------------------
-
 /// A column specification: `~name` or `~name:Type[mult]` or `~name:x|$x+1`.
 #[derive(Debug, Clone, PartialEq, crate::Spanned)]
 pub struct ColumnSpec {
@@ -799,10 +759,6 @@ pub struct ColumnBuilderExpr {
     /// Source info.
     pub source_info: SourceInfo,
 }
-
-// ---------------------------------------------------------------------------
-// Visitor
-// ---------------------------------------------------------------------------
 
 /// Visitor pattern for walking expression trees.
 ///
@@ -908,10 +864,6 @@ pub trait ExpressionVisitor {
     /// Visit a unit instance expression.
     fn visit_unit_instance(&mut self, expr: &UnitInstanceExpr) {}
 }
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

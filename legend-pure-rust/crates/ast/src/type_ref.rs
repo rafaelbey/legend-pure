@@ -20,10 +20,6 @@ use smol_str::SmolStr;
 
 use crate::source_info::{SourceInfo, Spanned};
 
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
-
 /// Sentinel name used in synthetic `TypeReference` nodes that encode relation types.
 ///
 /// When a parameter has a bare relation type like `r: (a:Integer, b:String)[1]`,
@@ -48,19 +44,11 @@ pub const RELATION_TYPE_SENTINEL: &str = "(RelationType)";
 /// Uses curly braces which are lexically impossible for user-defined identifiers.
 pub const FUNCTION_TYPE_SENTINEL: &str = "{FunctionType}";
 
-// ---------------------------------------------------------------------------
-// Identifier
-// ---------------------------------------------------------------------------
-
 /// Interned identifier — cheap to clone, compare, and hash.
 ///
 /// Most Pure identifiers (class names, property names, keywords) fit within
 /// `SmolStr`'s 24-byte inline buffer, avoiding heap allocation entirely.
 pub type Identifier = SmolStr;
-
-// ---------------------------------------------------------------------------
-// Package
-// ---------------------------------------------------------------------------
 
 /// A package in the Package hierarchy, with an optional parent.
 ///
@@ -181,10 +169,6 @@ impl Spanned for Package {
         &self.source_info
     }
 }
-
-// ---------------------------------------------------------------------------
-// Multiplicity
-// ---------------------------------------------------------------------------
 
 /// Multiplicity specification for properties and parameters.
 ///
@@ -339,10 +323,6 @@ impl std::fmt::Display for Multiplicity {
     }
 }
 
-// ---------------------------------------------------------------------------
-// MultiplicityArgument
-// ---------------------------------------------------------------------------
-
 /// A multiplicity argument inside a generic type's angle brackets.
 ///
 /// Multiplicity arguments appear after a `|` in type argument lists:
@@ -399,10 +379,6 @@ impl std::fmt::Display for MultiplicityArgument {
     }
 }
 
-// ---------------------------------------------------------------------------
-// TypeVariableParameter
-// ---------------------------------------------------------------------------
-
 /// A type variable parameter declaration on a Class or Primitive.
 ///
 /// e.g. `x:Integer[1]` in `Class Foo(x:Integer[1])`.
@@ -418,10 +394,6 @@ pub struct TypeVariableParameter {
     /// Source location.
     pub source_info: SourceInfo,
 }
-
-// ---------------------------------------------------------------------------
-// TypeReference
-// ---------------------------------------------------------------------------
 
 /// A reference to a type, including optional type arguments and type variable values.
 ///
@@ -484,10 +456,6 @@ pub struct UnitReference {
     /// Source location.
     pub source_info: SourceInfo,
 }
-
-// ---------------------------------------------------------------------------
-// RelationType
-// ---------------------------------------------------------------------------
 
 /// A single column in a relation type: `name:Type[mult]`.
 ///
@@ -638,10 +606,6 @@ impl Spanned for TypeVariableValue {
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

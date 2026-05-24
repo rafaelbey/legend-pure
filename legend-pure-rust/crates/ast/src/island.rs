@@ -41,10 +41,6 @@ use std::fmt;
 
 use crate::source_info::SourceInfo;
 
-// ---------------------------------------------------------------------------
-// IslandContent Trait
-// ---------------------------------------------------------------------------
-
 /// Trait for island grammar content stored in the AST.
 ///
 /// Every island grammar (graph fetch, path, SQL, etc.) implements this
@@ -82,10 +78,6 @@ pub trait IslandContent: fmt::Debug + Send + Sync {
     /// Implementations should downcast `other` to `Self` and compare.
     fn eq_content(&self, other: &dyn IslandContent) -> bool;
 }
-
-// ---------------------------------------------------------------------------
-// IslandExpression — AST envelope
-// ---------------------------------------------------------------------------
 
 /// An island grammar expression: `#tag{ content }#`.
 ///

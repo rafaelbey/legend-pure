@@ -22,10 +22,6 @@ use crate::element::PackageableElement;
 use crate::source_info::SourceInfo;
 use crate::type_ref::{Identifier, Multiplicity, Package, TypeReference};
 
-// ---------------------------------------------------------------------------
-// Packageable Element Pointer
-// ---------------------------------------------------------------------------
-
 /// A qualified reference to a packageable element (e.g., a Profile, Class, Enum).
 ///
 /// This is distinct from [`Package`] which models the package hierarchy itself.
@@ -75,10 +71,6 @@ impl std::fmt::Display for PackageableElementPtr {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Stereotypes & Tagged Values
-// ---------------------------------------------------------------------------
-
 /// A reference to a stereotype on a profile: `<<profile.stereotypeName>>`.
 ///
 /// For example, `<<temporal.businesstemporal>>` has:
@@ -120,10 +112,6 @@ pub struct TagPtr {
     pub source_info: SourceInfo,
 }
 
-// ---------------------------------------------------------------------------
-// Parameters
-// ---------------------------------------------------------------------------
-
 /// A function or qualified property parameter.
 ///
 /// For example, `name: String[1]` has:
@@ -141,10 +129,6 @@ pub struct Parameter {
     /// Source location of this parameter.
     pub source_info: SourceInfo,
 }
-
-// ---------------------------------------------------------------------------
-// String with source info (used in profiles for tag/stereotype names)
-// ---------------------------------------------------------------------------
 
 /// A simple string value with source information.
 ///
