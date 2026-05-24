@@ -32,10 +32,6 @@ use crate::identifier::{escape_pure_string, maybe_quote};
 use crate::type_ref::{compose_type_reference, compose_type_spec};
 use crate::writer::IndentWriter;
 
-// ---------------------------------------------------------------------------
-// Element dispatcher
-// ---------------------------------------------------------------------------
-
 /// Composes any element.
 ///
 /// `Element::DSLElement` is currently emitted as an empty placeholder
@@ -56,10 +52,6 @@ pub fn compose_element(w: &mut IndentWriter, elem: &Element) {
         Element::DSLElement(_) => { /* delegated to DSL crate composer */ }
     }
 }
-
-// ---------------------------------------------------------------------------
-// Annotation helpers
-// ---------------------------------------------------------------------------
 
 /// Writes stereotypes inline: `<<profile.stereo, profile2.stereo2>>`.
 fn compose_stereotypes_inline(w: &mut IndentWriter, stereotypes: &[StereotypePtr]) {
@@ -120,10 +112,6 @@ fn compose_element_header(w: &mut IndentWriter, e: &impl PackageableElement) {
     compose_qualified_name(w, e.package(), e.name());
 }
 
-// ---------------------------------------------------------------------------
-// Profile
-// ---------------------------------------------------------------------------
-
 fn compose_profile(w: &mut IndentWriter, p: &ProfileDef) {
     w.write("Profile ");
     compose_element_header(w, p);
@@ -154,10 +142,6 @@ fn compose_profile(w: &mut IndentWriter, p: &ProfileDef) {
     w.write_line("}");
 }
 
-// ---------------------------------------------------------------------------
-// Enumeration
-// ---------------------------------------------------------------------------
-
 fn compose_enumeration(w: &mut IndentWriter, e: &EnumDef) {
     w.write("Enum ");
     compose_element_header(w, e);
@@ -176,10 +160,6 @@ fn compose_enumeration(w: &mut IndentWriter, e: &EnumDef) {
     w.pop_indent();
     w.write_line("}");
 }
-
-// ---------------------------------------------------------------------------
-// Class
-// ---------------------------------------------------------------------------
 
 fn compose_class(w: &mut IndentWriter, c: &ClassDef) {
     w.write("Class ");
@@ -352,10 +332,6 @@ fn compose_qualified_property(w: &mut IndentWriter, qp: &QualifiedProperty) {
     w.write_line(";");
 }
 
-// ---------------------------------------------------------------------------
-// Association
-// ---------------------------------------------------------------------------
-
 fn compose_association(w: &mut IndentWriter, a: &AssociationDef) {
     w.write("Association ");
     compose_element_header(w, a);
@@ -372,10 +348,6 @@ fn compose_association(w: &mut IndentWriter, a: &AssociationDef) {
     w.write_line("}");
 }
 
-// ---------------------------------------------------------------------------
-// Primitive
-// ---------------------------------------------------------------------------
-
 fn compose_primitive(w: &mut IndentWriter, p: &PrimitiveDef) {
     w.write("Primitive ");
     compose_qualified_name(w, p.package.as_ref(), &p.name.value);
@@ -384,10 +356,6 @@ fn compose_primitive(w: &mut IndentWriter, p: &PrimitiveDef) {
     compose_type_reference(w, &p.super_type);
     w.newline();
 }
-
-// ---------------------------------------------------------------------------
-// Measure
-// ---------------------------------------------------------------------------
 
 fn compose_measure(w: &mut IndentWriter, m: &MeasureDef) {
     w.write("Measure ");
@@ -421,10 +389,6 @@ fn compose_unit(w: &mut IndentWriter, u: &UnitDef) {
     }
     w.write_line(";");
 }
-
-// ---------------------------------------------------------------------------
-// Function
-// ---------------------------------------------------------------------------
 
 /// Composes type and multiplicity parameters: `<T, U|m, n>`.
 fn compose_type_and_multiplicity_params(

@@ -47,10 +47,6 @@ pub mod writer;
 
 pub use section::{compose_many, compose_source_file};
 
-// ---------------------------------------------------------------------------
-// Protocol convenience functions
-// ---------------------------------------------------------------------------
-
 /// Composes a `PureModelContextData` (protocol model) directly to Pure grammar text.
 ///
 /// This is the Rust equivalent of Java's

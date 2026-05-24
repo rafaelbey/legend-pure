@@ -35,10 +35,6 @@ use legend_pure_parser_ast::type_ref::{RELATION_TYPE_SENTINEL, TypeReference};
 use crate::identifier::{escape_pure_string, maybe_quote};
 use crate::writer::IndentWriter;
 
-// ---------------------------------------------------------------------------
-// Precedence
-// ---------------------------------------------------------------------------
-
 /// Operator precedence levels (higher = binds tighter).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Precedence {
@@ -123,10 +119,6 @@ fn needs_parens(child: &Expression, parent_prec: Precedence, is_right: bool) -> 
     false
 }
 
-// ---------------------------------------------------------------------------
-// Expression composer
-// ---------------------------------------------------------------------------
-
 /// Writes an expression to the writer.
 pub fn compose_expression(w: &mut IndentWriter, expr: &Expression) {
     compose_expression_prec(w, expr, Precedence::None, false);
@@ -186,10 +178,6 @@ fn compose_expression_prec(
     }
 }
 
-// ---------------------------------------------------------------------------
-// Literals
-// ---------------------------------------------------------------------------
-
 fn compose_literal(w: &mut IndentWriter, lit: &Literal) {
     match lit {
         Literal::Integer(i) => w.write(&i.value.to_string()),
@@ -240,10 +228,6 @@ fn compose_variable(w: &mut IndentWriter, var: &Variable) {
     w.write(&maybe_quote(&var.name));
 }
 
-// ---------------------------------------------------------------------------
-// Binary operators
-// ---------------------------------------------------------------------------
-
 fn compose_arithmetic(w: &mut IndentWriter, e: &ArithmeticExpr) {
     let prec = arithmetic_precedence(e.op);
     compose_expression_prec(w, &e.left, prec, false);
@@ -292,10 +276,6 @@ fn compose_bitwise(w: &mut IndentWriter, e: &BitwiseExpr) {
     compose_expression(w, &e.right);
 }
 
-// ---------------------------------------------------------------------------
-// Unary operators
-// ---------------------------------------------------------------------------
-
 fn compose_not(w: &mut IndentWriter, e: &NotExpr) {
     w.write("!");
     compose_expression(w, &e.operand);
@@ -310,10 +290,6 @@ fn compose_bitwise_not(w: &mut IndentWriter, e: &BitwiseNotExpr) {
     w.write("~~~");
     compose_expression(w, &e.operand);
 }
-
-// ---------------------------------------------------------------------------
-// Function calls
-// ---------------------------------------------------------------------------
 
 fn compose_function_application(w: &mut IndentWriter, e: &FunctionApplication) {
     compose_element_ptr(w, &e.function);
@@ -404,10 +380,6 @@ fn compose_multiplicity_reference_expr(w: &mut IndentWriter, e: &MultiplicityRef
     w.write("]");
 }
 
-// ---------------------------------------------------------------------------
-// Navigation path
-// ---------------------------------------------------------------------------
-
 /// Renders a navigation path: `#/StartType/prop1(args)/prop2!alias#`.
 ///
 /// Round-trip with the parser: every input token survives the compose
@@ -436,10 +408,6 @@ fn compose_navigation_path(w: &mut IndentWriter, e: &NavigationPath) {
     }
     w.write("#");
 }
-
-// ---------------------------------------------------------------------------
-// Complex expressions
-// ---------------------------------------------------------------------------
 
 fn compose_lambda(w: &mut IndentWriter, e: &Lambda) {
     // Determine rendering form per Java grammar rules:
@@ -607,10 +575,6 @@ fn compose_column(w: &mut IndentWriter, e: &ColumnBuilderExpr) {
         w.write("]");
     }
 }
-
-// ---------------------------------------------------------------------------
-// Shared helpers
-// ---------------------------------------------------------------------------
 
 /// Writes a `PackageableElementPtr` as `pkg::name`.
 pub fn compose_element_ptr(w: &mut IndentWriter, ptr: &PackageableElementPtr) {
