@@ -91,10 +91,6 @@ use crate::ast::{
     RelationalClassMappingBody, SingleMappingLine, View,
 };
 
-// ---------------------------------------------------------------------------
-// PureColumnType — SQL → Pure primitive mapping
-// ---------------------------------------------------------------------------
-
 /// Pure primitive type that a SQL column resolves to.
 ///
 /// Mirrors Java's `ColumnDataTypeFactory.COLUMN_TYPE_MAP`. The variants
@@ -212,10 +208,6 @@ impl PureColumnType {
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// Resolved snapshot types
-// ---------------------------------------------------------------------------
 
 /// One resolved column on a [`ResolvedTable`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -586,10 +578,6 @@ pub struct ResolvedDatabase {
     pub view_bodies: Vec<ResolvedViewBody>,
 }
 
-// ---------------------------------------------------------------------------
-// Processor entry point
-// ---------------------------------------------------------------------------
-
 /// Build a [`ResolvedDatabase`] for one [`DatabaseDef`]. The walk is
 /// strictly local: it does not chase `include` edges (the include
 /// closure is the caller's job — see
@@ -663,10 +651,6 @@ pub fn process_database(def: &DatabaseDef) -> ResolvedDatabase {
         view_bodies: Vec::new(),
     }
 }
-
-// ---------------------------------------------------------------------------
-// Phase B2 — op-column reference resolution
-// ---------------------------------------------------------------------------
 
 /// Walk every Filter / Join / MultiGrainFilter op-body on every
 /// registered database, producing [`ResolvedOpBody`] rows that map
@@ -848,10 +832,6 @@ fn walk_op_expr_for_columns(
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// Phase B3 — view body resolution + main-table inference
-// ---------------------------------------------------------------------------
 
 /// Walk every View on every registered database, producing a
 /// [`ResolvedViewBody`] per view. Each view-column-mapping-line's
@@ -1249,10 +1229,6 @@ fn database_fqn(db: &DatabaseDef) -> SmolStr {
     SmolStr::new(&s)
 }
 
-// ---------------------------------------------------------------------------
-// Phase B4 — class-mapping property resolution
-// ---------------------------------------------------------------------------
-
 /// Resolve every `SingleMappingLine` in `body` to a
 /// [`ResolvedClassMappingProperty`]. The class-mapping's contextual
 /// database is determined by the `~mainTable [db]` block when present
@@ -1552,10 +1528,6 @@ fn resolve_join_col_value(
         source_info: source_info.clone(),
     })
 }
-
-// ---------------------------------------------------------------------------
-// Phase C — milestoning auto-rewrite
-// ---------------------------------------------------------------------------
 
 /// For each class mapping whose effective main table declares a
 /// `milestoning(...)` spec, synthesise the embedded property mapping

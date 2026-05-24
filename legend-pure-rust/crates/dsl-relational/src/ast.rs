@@ -48,10 +48,6 @@ use smol_str::SmolStr;
 /// Section kind string this DSL claims (`###Relational`).
 pub const SECTION_KIND: &str = "Relational";
 
-// ---------------------------------------------------------------------------
-// DatabaseDef
-// ---------------------------------------------------------------------------
-
 /// A `Database` definition: `Database pkg::db ( includes* (schema | table |
 /// join | filter | multiGrainFilter | view)* )`.
 #[derive(Debug, Clone, PartialEq)]
@@ -114,10 +110,6 @@ impl DSLElement for DatabaseDef {
     }
 }
 
-// ---------------------------------------------------------------------------
-// DatabaseInclude
-// ---------------------------------------------------------------------------
-
 /// `include pkg::OtherDb` — pulls another database's schemas / tables /
 /// joins / filters into this one.
 #[derive(Debug, Clone, PartialEq)]
@@ -127,10 +119,6 @@ pub struct DatabaseInclude {
     /// Span of the entire `include …` directive.
     pub source_info: SourceInfo,
 }
-
-// ---------------------------------------------------------------------------
-// DatabaseElement
-// ---------------------------------------------------------------------------
 
 /// One element inside a [`DatabaseDef`] body, in source order.
 #[derive(Debug, Clone, PartialEq)]
@@ -151,10 +139,6 @@ pub enum DatabaseElement {
     MultiGrainFilter(MultiGrainFilter),
 }
 
-// ---------------------------------------------------------------------------
-// Schema
-// ---------------------------------------------------------------------------
-
 /// A `Schema` block: `Schema name ( (table | view)* )`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Schema {
@@ -167,10 +151,6 @@ pub struct Schema {
     /// Span of the entire `Schema … ( … )` declaration.
     pub source_info: SourceInfo,
 }
-
-// ---------------------------------------------------------------------------
-// Table
-// ---------------------------------------------------------------------------
 
 /// A `Table` declaration: `Table name ( <milestoning>? <columns> )`.
 ///
@@ -302,10 +282,6 @@ pub struct ColumnDef {
     pub source_info: SourceInfo,
 }
 
-// ---------------------------------------------------------------------------
-// View
-// ---------------------------------------------------------------------------
-
 /// A `View` declaration: `View name ( <view-body> )`.
 ///
 /// Java grammar (RelationalParser.g4):
@@ -385,10 +361,6 @@ pub struct ViewColumnMappingLine {
     pub source_info: SourceInfo,
 }
 
-// ---------------------------------------------------------------------------
-// Join / Filter / MultiGrainFilter
-// ---------------------------------------------------------------------------
-
 /// A `Join` declaration: `Join name ( <op_operation> )`.
 ///
 /// The `body` is the structurally parsed `op_operation` tree (Stage 2).
@@ -424,10 +396,6 @@ pub struct MultiGrainFilter {
     /// Span of the entire `MultiGrainFilter … ( … )` declaration.
     pub source_info: SourceInfo,
 }
-
-// ---------------------------------------------------------------------------
-// op_operation — structured Join / Filter / MultiGrainFilter body
-// ---------------------------------------------------------------------------
 
 /// Structured `op_operation` node — the Java grammar's
 /// `op_operation`/`op_atomicOperation`/`op_function`/`op_column`
@@ -701,10 +669,6 @@ impl OpLiteral {
 // Validators in later stages walk `db.elements` directly to find
 // tables / views / joins / filters; keeping the Stage 1 surface lean
 // avoids over-engineering iterator helpers nobody uses yet.
-
-// ===========================================================================
-// Stage 5: Relational class-mapping body
-// ===========================================================================
 
 /// Class-mapping-body kind that
 /// `RelationalClassMappingBodyParser` reports — also the verbatim

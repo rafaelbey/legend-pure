@@ -277,10 +277,6 @@ fn write_multi_grain_filter(out: &mut String, m: &MultiGrainFilter) {
     out.push(')');
 }
 
-// ---------------------------------------------------------------------------
-// op_operation composition (Stage 2)
-// ---------------------------------------------------------------------------
-
 /// Round-trip composer for [`OpExpr`]. Output re-parses to the same
 /// AST shape under [`crate::parser::parse_op_operation`] (verified by
 /// the compose-smoke tests). Whitespace is normalised to single
@@ -410,10 +406,6 @@ fn write_optional_db(out: &mut String, db: Option<&PackageableElementPtr>) {
     out.push_str(db.name.as_str());
     out.push(']');
 }
-
-// ===========================================================================
-// Stage 5: class-mapping body composer
-// ===========================================================================
 
 use crate::ast::{
     EmbeddedMapping, EmbeddedMappingTrailer, FilterMappingBlock, FilterMappingJoinSequence,

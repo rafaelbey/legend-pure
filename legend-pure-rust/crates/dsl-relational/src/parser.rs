@@ -102,10 +102,6 @@ impl SectionParser for RelationalSectionParser {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Database
-// ---------------------------------------------------------------------------
-
 fn parse_database(ctx: &mut ParserContext<'_>) -> Result<DatabaseDef, ParseError> {
     let start = ctx.cursor().current_source_info();
     let kw = ctx.cursor().expect(TokenKind::Identifier)?;
@@ -159,10 +155,6 @@ fn is_keyword(cursor: &Cursor, kw: &str) -> bool {
     cursor.check(TokenKind::Identifier) && cursor.peek().text == kw
 }
 
-// ---------------------------------------------------------------------------
-// Include
-// ---------------------------------------------------------------------------
-
 fn parse_include(ctx: &mut ParserContext<'_>) -> Result<DatabaseInclude, ParseError> {
     let kw = ctx.cursor().expect(TokenKind::Identifier)?; // "include"
     let included = parse_packageable_ptr(ctx)?;
@@ -172,10 +164,6 @@ fn parse_include(ctx: &mut ParserContext<'_>) -> Result<DatabaseInclude, ParseEr
         source_info: merge_si(&kw.source_info, &end_si),
     })
 }
-
-// ---------------------------------------------------------------------------
-// Database body elements
-// ---------------------------------------------------------------------------
 
 fn parse_database_element(ctx: &mut ParserContext<'_>) -> Result<DatabaseElement, ParseError> {
     let peek = ctx.cursor().peek().clone();
@@ -202,10 +190,6 @@ fn parse_database_element(ctx: &mut ParserContext<'_>) -> Result<DatabaseElement
         )),
     }
 }
-
-// ---------------------------------------------------------------------------
-// Schema
-// ---------------------------------------------------------------------------
 
 fn parse_schema(ctx: &mut ParserContext<'_>) -> Result<Schema, ParseError> {
     let kw = ctx.cursor().expect(TokenKind::Identifier)?; // "Schema"
@@ -235,10 +219,6 @@ fn parse_schema(ctx: &mut ParserContext<'_>) -> Result<Schema, ParseError> {
         source_info: merge_si(&kw.source_info, &close.source_info),
     })
 }
-
-// ---------------------------------------------------------------------------
-// Table
-// ---------------------------------------------------------------------------
 
 fn parse_table(ctx: &mut ParserContext<'_>) -> Result<Table, ParseError> {
     let kw = ctx.cursor().expect(TokenKind::Identifier)?; // "Table"
@@ -475,10 +455,6 @@ fn parse_int(ctx: &mut ParserContext<'_>) -> Result<i64, ParseError> {
     })
 }
 
-// ---------------------------------------------------------------------------
-// View
-// ---------------------------------------------------------------------------
-
 fn parse_view(ctx: &mut ParserContext<'_>) -> Result<View, ParseError> {
     let kw = ctx.cursor().expect(TokenKind::Identifier)?; // "View"
     let name = parse_relational_identifier(ctx)?;
@@ -633,10 +609,6 @@ fn parse_view_column_mapping_line(
         source_info: span,
     })
 }
-
-// ---------------------------------------------------------------------------
-// Join / Filter / MultiGrainFilter
-// ---------------------------------------------------------------------------
 
 fn parse_join(ctx: &mut ParserContext<'_>) -> Result<Join, ParseError> {
     let kw = ctx.cursor().expect(TokenKind::Identifier)?; // "Join"
@@ -1185,10 +1157,6 @@ fn parse_float_literal(ctx: &mut ParserContext<'_>) -> Result<OpLiteral, ParseEr
         source_info: tok.source_info,
     })
 }
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 
 /// Java grammar: `relationalIdentifier: identifier | QUOTED_STRING`.
 /// Stage 1 accepts an Identifier or a StringLiteral (string literals
@@ -1761,10 +1729,6 @@ fn parse_one_join_right(ctx: &mut ParserContext<'_>) -> Result<OneJoinRight, Par
         source_info: span,
     })
 }
-
-// ---------------------------------------------------------------------------
-// Mapping elements: bare line | scope-wrapped lines
-// ---------------------------------------------------------------------------
 
 fn parse_mapping_element(ctx: &mut ParserContext<'_>) -> Result<MappingElement, ParseError> {
     if is_keyword(ctx.cursor(), "scope") {

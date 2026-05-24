@@ -885,10 +885,6 @@ impl legend_pure_ide::IdeExtension for RelationalIdeExtension {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Phase B' — predicate Boolean[1] validation
-// ---------------------------------------------------------------------------
-
 /// Walk every Filter / Join / MultiGrainFilter on every registered
 /// database; classify the body's top-level result via
 /// [`crate::op_typer::infer_op_type`]; emit a diagnostic when the
@@ -989,10 +985,6 @@ fn check_predicate(
     });
 }
 
-// ---------------------------------------------------------------------------
-// FQN helpers
-// ---------------------------------------------------------------------------
-
 fn database_fqn(db: &DatabaseDef) -> SmolStr {
     let mut s = String::new();
     if let Some(pkg) = db.package.as_ref() {
@@ -1016,10 +1008,6 @@ fn include_fqn(included: &legend_pure_parser_ast::annotation::PackageableElement
     s.push_str(included.name.as_str());
     SmolStr::new(&s)
 }
-
-// ---------------------------------------------------------------------------
-// V1 + V2: include graph
-// ---------------------------------------------------------------------------
 
 /// Walk the include DAG starting from each database. Pushes
 /// `UnresolvedElement` for any include FQN that doesn't match a
@@ -1098,10 +1086,6 @@ fn validate_include_graph(
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// Per-database body validation
-// ---------------------------------------------------------------------------
 
 fn validate_database(
     db: &DatabaseDef,
@@ -1266,10 +1250,6 @@ fn check_unique(
         });
     }
 }
-
-// ---------------------------------------------------------------------------
-// V4: alias column resolution
-// ---------------------------------------------------------------------------
 
 /// Map from a table/view's *simple name* to its column-name set, for
 /// every Table or View reachable from `db` (own elements + the
@@ -1504,10 +1484,6 @@ fn validate_op_columns(
     }
 }
 
-// ---------------------------------------------------------------------------
-// V5: milestoning column refs
-// ---------------------------------------------------------------------------
-
 fn validate_milestoning(t: &Table, errors: &mut Vec<CompilationError>) {
     let Some(spec) = &t.milestoning else { return };
     let cols: HashSet<&str> = t.columns.iter().map(|c| c.name.value.as_str()).collect();
@@ -1661,10 +1637,6 @@ fn type_matches(col_type: &str, expected: MilestoneTypeCategory) -> bool {
         MilestoneTypeCategory::Boolean => matches!(upper.as_str(), "BOOLEAN" | "BIT"),
     }
 }
-
-// ---------------------------------------------------------------------------
-// Stage 8: relational class-mapping validators
-// ---------------------------------------------------------------------------
 
 fn mapping_fqn(m: &MappingDef) -> SmolStr {
     use legend_pure_parser_ast::element::PackageableElement;
@@ -2287,10 +2259,6 @@ fn check_one_join_visible_in(
     }
 }
 
-// ---------------------------------------------------------------------------
-// Phase D: repo-boundary visibility
-// ---------------------------------------------------------------------------
-
 /// Walk every `include` and every `[db]` qualifier in every registered
 /// database, and emit `NotVisible` for each cross-repo reference whose
 /// target is not in the use-site repo's declared dependencies. No-op
@@ -2481,10 +2449,6 @@ fn walk_join_sequence_for_db_refs(
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// Phase A3' — JoinTreeNodeValidation parity
-// ---------------------------------------------------------------------------
 
 /// Validate that every chained `@a > @b > ...` join sequence in a
 /// class-mapping body shares end-tables. Mirrors Java's
@@ -2837,10 +2801,6 @@ fn walk_resolve_join_tables(
     }
     None
 }
-
-// ---------------------------------------------------------------------------
-// Phase A4 — RelationalAssociationImplementationValidator parity
-// ---------------------------------------------------------------------------
 
 /// For every AssociationMapping body (Java's
 /// `RelationalAssociationImplementation`), validate each property
@@ -3306,10 +3266,6 @@ fn find_property_type(
     None
 }
 
-// ---------------------------------------------------------------------------
-// Phase A6 — Inline-target subtype check
-// ---------------------------------------------------------------------------
-
 /// For every embedded class-mapping body that ends with an
 /// `Inline[setId]` trailer, validate that the inline target's class
 /// is a subtype of the property's declared target class. Java parity:
@@ -3533,10 +3489,6 @@ fn is_subtype_of(
     false
 }
 
-// ---------------------------------------------------------------------------
-// Phase A7 — AssociationMapping target identity + duplicate detection
-// ---------------------------------------------------------------------------
-
 /// For every relational class-mapping body whose AST is an
 /// `AssociationMapping (...)` shape, validate two Java-parity rules
 /// from `TestAssociationMappingValidation`:
@@ -3627,10 +3579,6 @@ fn validate_association_mapping_targets(
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// Phase E4 — cross-mapping include resolution helpers
-// ---------------------------------------------------------------------------
 
 /// Set of class-mapping ids visible from `mapping_fqn` — its own ids
 /// unioned with every transitively-included mapping's ids. Mirrors
