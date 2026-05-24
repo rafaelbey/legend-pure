@@ -376,10 +376,6 @@ impl Parser {
     }
 }
 
-// ---------------------------------------------------------------------------
-// ParserContext — shared interface for island grammar plugins
-// ---------------------------------------------------------------------------
-
 /// Shared parser context passed to island grammar plugins.
 ///
 /// Provides access to the token [`Cursor`] (via `.cursor`) and the host

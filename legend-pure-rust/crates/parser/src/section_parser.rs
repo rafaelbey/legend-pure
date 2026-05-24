@@ -85,10 +85,6 @@ pub trait SectionParser: Send + Sync {
     ) -> Vec<Box<dyn DSLElement>>;
 }
 
-// ---------------------------------------------------------------------------
-// SECTION_PARSERS — distributed slice for self-registering section grammars
-// ---------------------------------------------------------------------------
-
 /// Distributed slice into which each [`SectionParser`]-providing crate
 /// registers its parser instance.
 ///

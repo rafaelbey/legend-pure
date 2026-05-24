@@ -118,10 +118,6 @@ pub fn default_island_parsers() -> Vec<Box<dyn IslandParser>> {
     Vec::new()
 }
 
-// ---------------------------------------------------------------------------
-// ISLAND_PARSERS — distributed slice for self-registering island grammars
-// ---------------------------------------------------------------------------
-
 /// Distributed slice into which each [`IslandParser`]-providing crate
 /// registers its parser instance.
 ///
