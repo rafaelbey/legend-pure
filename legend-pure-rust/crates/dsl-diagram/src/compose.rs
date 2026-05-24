@@ -54,10 +54,6 @@ pub fn compose_diagram_section(diagrams: &[&DiagramDef]) -> String {
     out
 }
 
-// ---------------------------------------------------------------------------
-// Diagram
-// ---------------------------------------------------------------------------
-
 fn write_diagram(out: &mut String, d: &DiagramDef) {
     out.push_str("Diagram ");
     if let Some(pkg) = d.package.as_ref() {
@@ -79,10 +75,6 @@ fn write_diagram(out: &mut String, d: &DiagramDef) {
     }
     out.push_str("}\n");
 }
-
-// ---------------------------------------------------------------------------
-// Views
-// ---------------------------------------------------------------------------
 
 fn write_view(out: &mut String, v: &DiagramView) {
     match v {
@@ -243,10 +235,6 @@ fn write_generalization_view(out: &mut String, g: &GeneralizationView) {
     write_props(out, &props);
     out.push_str(")\n");
 }
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 
 fn write_props(out: &mut String, props: &[(String, String)]) {
     for (i, (k, v)) in props.iter().enumerate() {

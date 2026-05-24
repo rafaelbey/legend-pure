@@ -92,10 +92,6 @@ impl SectionParser for DiagramSectionParser {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Diagram
-// ---------------------------------------------------------------------------
-
 fn parse_diagram(cursor: &mut Cursor) -> Result<DiagramDef, ParseError> {
     let start = cursor.current_source_info();
     let kw = cursor.expect(TokenKind::Identifier)?;
@@ -165,10 +161,6 @@ fn parse_geometry(cursor: &mut Cursor) -> Result<DiagramGeometry, ParseError> {
         source_info: merge_si(&open.source_info, &close.source_info),
     })
 }
-
-// ---------------------------------------------------------------------------
-// Views
-// ---------------------------------------------------------------------------
 
 fn parse_view(cursor: &mut Cursor) -> Result<DiagramView, ParseError> {
     let kw = cursor.expect(TokenKind::Identifier)?;
@@ -421,10 +413,6 @@ fn parse_generalization_view(
     Ok(gv)
 }
 
-// ---------------------------------------------------------------------------
-// Property-pair / value parsers
-// ---------------------------------------------------------------------------
-
 /// Parse `key = value (',' key = value)*` until the next `)`. The
 /// `handler` callback is invoked once per pair; the closing paren is
 /// not consumed (the caller handles it).
@@ -577,10 +565,6 @@ fn parse_identifier(cursor: &mut Cursor) -> Result<Identifier, ParseError> {
     let tok = cursor.expect(TokenKind::Identifier)?;
     Ok(SmolStr::new(tok.text.clone()))
 }
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 
 fn stub_type_ref(span: &SourceInfo) -> TypeReference {
     TypeReference {

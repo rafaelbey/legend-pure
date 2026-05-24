@@ -36,10 +36,6 @@ use legend_pure_parser_ast::type_ref::{Identifier, Package, TypeReference};
 /// Section kind string this DSL claims (`###Diagram`).
 pub const SECTION_KIND: &str = "Diagram";
 
-// ---------------------------------------------------------------------------
-// DiagramDef
-// ---------------------------------------------------------------------------
-
 /// A `Diagram` definition: `Diagram pkg::MyDiagram(width=…, height=…) { … }`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DiagramDef {
@@ -113,10 +109,6 @@ pub struct DiagramGeometry {
     pub source_info: SourceInfo,
 }
 
-// ---------------------------------------------------------------------------
-// DiagramView
-// ---------------------------------------------------------------------------
-
 /// One body item inside a Diagram. Variants correspond to the four
 /// view-kind keywords: `TypeView`, `AssociationView`, `PropertyView`,
 /// `GeneralizationView`.
@@ -131,10 +123,6 @@ pub enum DiagramView {
     /// `GeneralizationView ID(source=…, target=…, …)` — an inheritance edge.
     Generalization(GeneralizationView),
 }
-
-// ---------------------------------------------------------------------------
-// TypeView
-// ---------------------------------------------------------------------------
 
 /// `TypeView identifier(type=…, position=(x,y), width=…, height=…, …)`.
 ///
@@ -166,10 +154,6 @@ pub struct TypeView {
     /// Span of the entire `TypeView … (…)` declaration.
     pub source_info: SourceInfo,
 }
-
-// ---------------------------------------------------------------------------
-// AssociationView
-// ---------------------------------------------------------------------------
 
 /// `AssociationView identifier(association=…, source=…, target=…, …)`.
 #[derive(Debug, Clone, PartialEq)]
@@ -208,10 +192,6 @@ pub struct AssociationView {
     pub source_info: SourceInfo,
 }
 
-// ---------------------------------------------------------------------------
-// PropertyView
-// ---------------------------------------------------------------------------
-
 /// `PropertyView identifier(property=Class.propName, source=…, target=…, …)`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PropertyView {
@@ -245,10 +225,6 @@ pub struct PropertyView {
     pub source_info: SourceInfo,
 }
 
-// ---------------------------------------------------------------------------
-// GeneralizationView
-// ---------------------------------------------------------------------------
-
 /// `GeneralizationView identifier(source=…, target=…, …)`.
 ///
 /// Generalization edges have no `type=` / `association=` / `property=`
@@ -274,10 +250,6 @@ pub struct GeneralizationView {
     /// Span of the entire declaration.
     pub source_info: SourceInfo,
 }
-
-// ---------------------------------------------------------------------------
-// Shared sub-types
-// ---------------------------------------------------------------------------
 
 /// `Class.propertyName` — used as the `property=` value in `PropertyView`.
 #[derive(Debug, Clone, PartialEq)]

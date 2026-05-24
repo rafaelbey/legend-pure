@@ -400,10 +400,6 @@ impl CompilerExtension for DiagramExtension {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Per-diagram validation
-// ---------------------------------------------------------------------------
-
 fn validate_diagram(d: &DiagramDef, model: &PureModel, errors: &mut Vec<CompilationError>) {
     // Local TypeView IDs that subsequent edges may reference via
     // `source=` / `target=`.
@@ -576,10 +572,6 @@ fn push_unresolved(
         kind: CompilationErrorKind::UnresolvedElement { path },
     });
 }
-
-// ---------------------------------------------------------------------------
-// FQN
-// ---------------------------------------------------------------------------
 
 fn build_fqn(d: &DiagramDef) -> SmolStr {
     if let Some(pkg) = d.package() {
