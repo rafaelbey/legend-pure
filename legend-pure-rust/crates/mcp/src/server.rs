@@ -25,6 +25,7 @@
 use std::sync::{Arc, Mutex};
 
 use legend_pure_core_platform::repo::Repo;
+use legend_pure_ide::ReferenceIndex;
 use legend_pure_parser_pure::ids::ElementId;
 use legend_pure_parser_pure::model::{Element, PureModel};
 use rmcp::{
@@ -72,6 +73,18 @@ pub struct GetDiagnosticsArgs {
 pub struct FqnArgs {
     /// Fully-qualified name of the element (e.g.
     /// `my::pkg::Person`, `meta::pure::tests::testPlus`).
+    pub fqn: String,
+}
+
+/// Input shape for [`LegendMcpServer::find_references`]. Separate from
+/// [`FqnArgs`] so the tool's JSON schema carries its own description
+/// (rmcp surfaces the struct-level docstring in the schema).
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct FindReferencesArgs {
+    /// Fully-qualified name of the element whose usages should be
+    /// returned. Same format `read_element` accepts — for functions
+    /// this is the mangled form (e.g.
+    /// `meta::pure::functions::collection::map_T_m__Function_1__V_$0_n$_`).
     pub fqn: String,
 }
 
@@ -241,6 +254,18 @@ pub struct ElementInfo {
     pub column: u32,
 }
 
+/// One reference site in the [`LegendMcpServer::find_references`]
+/// response — where the target element is used in the source.
+#[derive(Debug, Serialize)]
+pub struct ReferenceLocation {
+    /// Canonical source path of the file containing the reference.
+    pub source: String,
+    /// 1-based line of the reference's start position.
+    pub line: u32,
+    /// 1-based column of the reference's start position.
+    pub column: u32,
+}
+
 /// One test-function entry in the [`LegendMcpServer::list_tests`]
 /// response.
 #[derive(Debug, Serialize)]
@@ -383,7 +408,7 @@ impl LegendMcpServer {
     #[tool(
         description = "Find Legend Pure elements (classes, functions, profiles, enums, associations) whose FQN contains the given substring. Returns matches with source location."
     )]
-    async fn search_symbols(
+    pub async fn search_symbols(
         &self,
         Parameters(args): Parameters<SearchSymbolsArgs>,
     ) -> Result<CallToolResult, McpError> {
@@ -558,6 +583,30 @@ impl LegendMcpServer {
                 .map_err(|e| McpError::internal_error(format!("join error: {e}"), None))?;
         match result {
             Some(info) => json_result(&info),
+            None => Err(McpError::invalid_params(
+                format!("element not found in workspace: {fqn}"),
+                None,
+            )),
+        }
+    }
+
+    /// List every source location that references a given element.
+    #[tool(
+        description = "Find all source locations that reference a Legend Pure element by FQN. Returns one row per reference site (function calls, type uses, stereotype refs, etc.) sorted by source + line. Use this to scope a refactor before renaming or changing a signature. V1 limitation: property access on instances and let-bound locals do not appear yet."
+    )]
+    pub async fn find_references(
+        &self,
+        Parameters(args): Parameters<FindReferencesArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        let snapshot = self.snapshot();
+        let fqn = args.fqn.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            find_references_impl(&snapshot.model, &snapshot.references, &args.fqn)
+        })
+        .await
+        .map_err(|e| McpError::internal_error(format!("join error: {e}"), None))?;
+        match result {
+            Some(refs) => json_result(&refs),
             None => Err(McpError::invalid_params(
                 format!("element not found in workspace: {fqn}"),
                 None,
@@ -744,9 +793,10 @@ impl ServerHandler for LegendMcpServer {
         info.instructions = Some(
             "Legend Pure MCP server. Tools:\n\
              - search_symbols / read_element / list_packages / list_tests — discover elements in the compiled workspace\n\
+             - find_references — list every source site that references a given element by FQN\n\
              - get_diagnostics — surface compile errors\n\
              - run_function / run_test / run_pct / list_pct_adapters — execute Pure code\n\
-             - workspace_status / reload_workspace — inspect or refresh the in-memory snapshot\n\
+             - workspace_status / reload_workspace / apply_edit — inspect, refresh, or mutate the in-memory snapshot\n\
              \nThe workspace is compiled once at startup. Call reload_workspace after editing .pure files so subsequent tool calls see the updated model; use workspace_status to check the current snapshot's compiled_at timestamp."
                 .to_string(),
         );
@@ -831,6 +881,35 @@ fn read_element_impl(model: &PureModel, fqn: &str) -> Option<ElementInfo> {
         line: node.source_info.start_line,
         column: node.source_info.start_column,
     })
+}
+
+fn find_references_impl(
+    model: &PureModel,
+    references: &ReferenceIndex,
+    fqn: &str,
+) -> Option<Vec<ReferenceLocation>> {
+    // `None` here = element doesn't exist in the workspace; bubbles
+    // up as a 400-style McpError so the agent learns the FQN was bad.
+    // `Some(vec![])` = element exists but isn't referenced anywhere —
+    // a valid empty result, surfaced as `[]`.
+    let id = model.resolve_fqn_str(fqn)?;
+    let mut out: Vec<ReferenceLocation> = references
+        .usages_of(id)
+        .unwrap_or(&[])
+        .iter()
+        .map(|loc| ReferenceLocation {
+            source: loc.canonical_path.to_string(),
+            line: loc.range.start_line,
+            column: loc.range.start_column,
+        })
+        .collect();
+    out.sort_by(|a, b| {
+        a.source
+            .cmp(&b.source)
+            .then(a.line.cmp(&b.line))
+            .then(a.column.cmp(&b.column))
+    });
+    Some(out)
 }
 
 fn list_packages_impl(model: &PureModel, prefix: Option<&str>) -> Vec<String> {

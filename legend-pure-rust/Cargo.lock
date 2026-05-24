@@ -2245,6 +2245,7 @@ dependencies = [
  "legend-pure-dsl-relational",
  "legend-pure-dsl-relational-runtime",
  "legend-pure-dsl-store",
+ "legend-pure-ide",
  "legend-pure-parser-ast",
  "legend-pure-parser-parser",
  "legend-pure-parser-pure",

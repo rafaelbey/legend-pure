@@ -25,6 +25,12 @@ legend-pure-parser-ast = { path = "../ast" }
 legend-pure-parser-parser = { path = "../parser" }
 legend-pure-parser-pure = { path = "../pure" }
 legend-pure-core-platform = { path = "../core-platform-pure" }
+# IDE-tier reference index: `find_references` resolves an FQN to an
+# `ElementId` and looks up its reverse-references via
+# `ReferenceIndex::usages_of`. Same crate the LSP uses for
+# `textDocument/references`, so both protocols agree on what counts
+# as a reference site.
+legend-pure-ide = { path = "../ide" }
 # Runtime: the runner module — `run_function`, `run_test`, `run_pct`,
 # `list_pct_adapters` — is shared with `legend-pure-lsp`'s
 # `workspace/executeCommand` so both protocols stay in lock-step on

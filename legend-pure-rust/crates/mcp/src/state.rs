@@ -34,6 +34,7 @@ use legend_pure_dsl_mapping::parser::MappingSectionParser;
 use legend_pure_dsl_relational::compiler::RelationalExtension;
 use legend_pure_dsl_relational::parser::RelationalSectionParser;
 use legend_pure_dsl_store::compiler::RelationStoreExtension;
+use legend_pure_ide::{ReferenceIndex, build_reference_index};
 use legend_pure_parser_parser::SectionParser;
 use legend_pure_parser_pure::error::CompilationError;
 use legend_pure_parser_pure::extension::CompilerExtension;
@@ -60,6 +61,15 @@ pub struct WorkspaceSnapshot {
     /// so agents can decide whether to call
     /// [`reload_workspace`](crate::LegendMcpServer::reload_workspace).
     pub compiled_at: jiff::Timestamp,
+    /// Reverse-references index over the model. Drives the
+    /// `find_references` tool: given an [`ElementId`], list every
+    /// source site that references it (function calls, type uses,
+    /// stereotype refs, etc.). Built once per compile via
+    /// [`build_reference_index`]; the same index the LSP uses for
+    /// `textDocument/references`.
+    ///
+    /// [`ElementId`]: legend_pure_parser_pure::ids::ElementId
+    pub references: Arc<ReferenceIndex>,
 }
 
 impl WorkspaceSnapshot {
@@ -98,11 +108,14 @@ impl WorkspaceSnapshot {
                 .or_default()
                 .push(err.clone());
         }
+        let model = Arc::new(model);
+        let references = Arc::new(build_reference_index(&model));
         Self {
-            model: Arc::new(model),
+            model,
             diagnostics,
             error_count,
             compiled_at: jiff::Timestamp::now(),
+            references,
         }
     }
 }

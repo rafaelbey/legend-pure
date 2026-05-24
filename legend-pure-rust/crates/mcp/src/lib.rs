@@ -36,6 +36,7 @@
 //!
 //! Introspect:
 //! - `read_element { fqn }`
+//! - `find_references { fqn }`
 //! - `list_packages { prefix? }`
 //! - `list_tests { package_prefix? }`
 //!
