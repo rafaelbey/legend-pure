@@ -481,7 +481,6 @@ impl Embedder {
         let const_suffix = sanitize_const(&descriptor.name);
         let cp = &self.crate_path;
 
-        // --- RepoMeta const ----------------------------------------------
         writeln!(
             out,
             "/// Descriptor metadata read from the Java JSON for the `{name}` repo.",
@@ -506,7 +505,6 @@ impl Embedder {
         writeln!(out, "],").ok();
         writeln!(out, "}};\n").ok();
 
-        // --- Files array (mixed .pure + .json) ---------------------------
         writeln!(
             out,
             "/// Embedded files (.pure + .json) for the `{name}` repo.",
