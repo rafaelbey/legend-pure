@@ -50,7 +50,7 @@ Sibling to `crates/`, **outside the Cargo workspace**:
 | Parser | ✅ Complete | ~400+ | Full grammar coverage, 0 errors |
 | Compiler | ✅ Platform clean | 117 lib + ~180 integration | 0 errors on 244 files / ~1660 elements (M3 + Store + Mapping + Diagram + Graph + TDS + Relational DSL metamodels) |
 | Runtime | ✅ Surveyor 246/0/0; PCT 465/465 | 357 lib + 71 eval + 246 surveyor | ~50 native functions, PCT broad-canary 100% (9 manifest exclusions) |
-| CLI | ✅ Shipped | ~20+ | All 16 subcommands implemented (`parse`, `emit`, `compile`, `check`, `lsp`, `dap`, `mcp`, `test`, `run`, `coverage`, `init`, `java-bindings`, `completions`, `repl`, `snapshot`, `version`) |
+| CLI | ✅ Shipped | ~20+ | All 17 subcommands implemented (`parse`, `emit`, `build`, `compile`, `check`, `lsp`, `dap`, `mcp`, `test`, `run`, `coverage`, `init`, `java-bindings`, `completions`, `repl`, `snapshot`, `version`) |
 | Java codegen | ✅ v1 | 16 | `legend java-bindings` + proxy runtime support; explicit `--classes` / `--associations` seeds; hand-written `Any` as universal proxy supertype |
 | **Total** | | **~1500+** | |
 

@@ -191,22 +191,8 @@ fn print_version_inner() {
     println!("  {} Pure grammar parser", "✓".green());
     println!("  {} Protocol JSON ↔ Grammar conversion", "✓".green());
     println!("  {} Compile Pure models", "✓".green());
+    println!("  {} Incremental build (parse + compile + test + emit)", "✓".green());
     println!("  {} Run Pure tests", "✓".green());
-    println!(
-        "  {} Package artifacts    {}",
-        "◌".yellow(),
-        "(coming soon)".dimmed()
-    );
-    println!(
-        "  {} Publish to depot     {}",
-        "◌".yellow(),
-        "(coming soon)".dimmed()
-    );
-    println!(
-        "  {} SDLC integration     {}",
-        "◌".yellow(),
-        "(coming soon)".dimmed()
-    );
 }
 
 /// Initializes the tracing subscriber based on verbosity level.

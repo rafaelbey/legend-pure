@@ -26,9 +26,9 @@ is the canonical platform definition consumed by **both** stacks.
 - **Runtime** — 🚧 Active. Tree-walking interpreter with ~50 native functions,
   persistent data structures (`im-rc`), RAII-driven `Rc<RefCell<HeapEntry>>`
   heap, lazy call stack. Passing platform PCT subset.
-- **CLI** — ✅ Shipped. All 16 subcommands implemented (`parse`, `emit`,
-  `compile`, `check`, `lsp`, `dap`, `mcp`, `test`, `run`, `coverage`, `init`,
-  `java-bindings`, `completions`, `repl`, `snapshot`, `version`).
+- **CLI** — ✅ Shipped. All 17 subcommands implemented (`parse`, `emit`,
+  `build`, `compile`, `check`, `lsp`, `dap`, `mcp`, `test`, `run`, `coverage`,
+  `init`, `java-bindings`, `completions`, `repl`, `snapshot`, `version`).
   `plan` / `package` / `publish` were removed 2026-05-16; design context for
   when their prerequisites land lives in `legend-pure-rust/docs/deferred/`.
 
