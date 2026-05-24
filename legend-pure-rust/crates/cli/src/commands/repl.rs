@@ -59,10 +59,6 @@ use legend_pure_runtime::value::Value;
 
 use crate::diagnostics::CliError;
 
-// ---------------------------------------------------------------------------
-// CLI args
-// ---------------------------------------------------------------------------
-
 /// Arguments for the `legend repl` command.
 #[derive(clap::Args)]
 pub struct ReplArgs {
@@ -80,10 +76,6 @@ pub struct ReplArgs {
     #[arg(long)]
     pub platform_dir: Option<PathBuf>,
 }
-
-// ---------------------------------------------------------------------------
-// REPL loop
-// ---------------------------------------------------------------------------
 
 /// Execute the `legend repl` command.
 ///
@@ -394,10 +386,6 @@ pub fn run(mut args: ReplArgs, classpath: Option<&std::path::Path>) -> Result<()
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
 /// Extract the variable name from a let binding expression.
 fn extract_let_var(line: &str) -> Option<&str> {
     let line = line.strip_prefix("let ")?;
@@ -551,10 +539,6 @@ fn dirs_history_path() -> Option<String> {
         .ok()
         .map(|home| format!("{home}/.legend/repl_history"))
 }
-
-// ---------------------------------------------------------------------------
-// Completer
-// ---------------------------------------------------------------------------
 
 struct ReplCompleter {
     commands: Vec<&'static str>,

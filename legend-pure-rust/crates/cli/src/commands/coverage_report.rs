@@ -26,10 +26,6 @@ use lcov::Record;
 
 use super::coverage::CoverageMap;
 
-// ---------------------------------------------------------------------------
-// LCOV Writer
-// ---------------------------------------------------------------------------
-
 /// Write coverage data to an LCOV tracefile.
 ///
 /// Uses the [`lcov`] crate's typed [`Record`] enum for correct formatting.
@@ -89,7 +85,6 @@ pub fn build_lcov_records(map: &CoverageMap, source_roots: &[PathBuf]) -> Vec<Re
             path: resolved_path.into(),
         });
 
-        // -- Function records (FN, FNDA, FNF, FNH) -----------------------
         let mut fn_found: u32 = 0;
         let mut fn_hit: u32 = 0;
         for (fqn, entry) in map.functions.functions_in_file(source.as_str()) {
@@ -109,7 +104,6 @@ pub fn build_lcov_records(map: &CoverageMap, source_roots: &[PathBuf]) -> Vec<Re
         records.push(Record::FunctionsFound { found: fn_found });
         records.push(Record::FunctionsHit { hit: fn_hit });
 
-        // -- Branch records (BRDA, BRF, BRH) ------------------------------
         let mut br_found: u32 = 0;
         let mut br_hit: u32 = 0;
         for (block_idx, point) in map.branches.points_in_file(source.as_str()).enumerate() {
@@ -134,7 +128,6 @@ pub fn build_lcov_records(map: &CoverageMap, source_roots: &[PathBuf]) -> Vec<Re
         records.push(Record::BranchesFound { found: br_found });
         records.push(Record::BranchesHit { hit: br_hit });
 
-        // -- Line records (DA, LF, LH) ------------------------------------
         let mut lf: u32 = 0;
         let mut lh: u32 = 0;
         for &line in &file_cov.coverable_lines {
@@ -177,10 +170,6 @@ fn resolve_source_path(virtual_path: &str, source_roots: &[PathBuf]) -> String {
     source_roots[0].join(trimmed).to_string_lossy().into_owned()
 }
 
-// ---------------------------------------------------------------------------
-// HTML Generation (exec genhtml)
-// ---------------------------------------------------------------------------
-
 /// Shell out to `genhtml` to produce an HTML coverage report.
 ///
 /// `genhtml` is part of the `lcov` system package (installed via
@@ -216,10 +205,6 @@ pub fn generate_html(lcov_path: &Path, output_dir: &Path) -> Result<(), String> 
         Err(e) => Err(format!("Failed to run genhtml: {e}")),
     }
 }
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

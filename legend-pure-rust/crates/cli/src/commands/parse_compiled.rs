@@ -256,10 +256,6 @@ fn full_path(package_path: &str, name: &str) -> String {
     }
 }
 
-// ---------------------------------------------------------------------------
-// pure::Property → v1::property::Property
-// ---------------------------------------------------------------------------
-
 fn pure_property_to_protocol(p: &PureProperty, model: &PureModel) -> v1::property::Property {
     v1::property::Property {
         name: p.name.to_string(),
@@ -379,10 +375,6 @@ fn element_full_path(model: &PureModel, id: legend_pure_parser_pure::ids::Elemen
         .join("::")
 }
 
-// ---------------------------------------------------------------------------
-// pure::QualifiedProperty → v1::QualifiedProperty
-// ---------------------------------------------------------------------------
-
 fn pure_qp_to_protocol(qp: &PureQP, model: &PureModel) -> v1::property::QualifiedProperty {
     let parameters: Vec<serde_json::Value> = qp
         .parameters
@@ -431,10 +423,6 @@ fn pure_param_to_variable(p: &PureParam, model: &PureModel) -> v1::value_spec::V
     }
 }
 
-// ---------------------------------------------------------------------------
-// pure::Constraint → v1::Constraint
-// ---------------------------------------------------------------------------
-
 fn pure_constraint_to_protocol(
     con: &PureConstraint,
     model: &PureModel,
@@ -457,10 +445,6 @@ fn pure_constraint_to_protocol(
         message_function: msg_fn,
     }
 }
-
-// ---------------------------------------------------------------------------
-// Stereotype / tagged-value protocol rendering
-// ---------------------------------------------------------------------------
 
 fn stereotype_to_protocol(
     s: &legend_pure_parser_pure::annotations::StereotypeRef,
@@ -489,10 +473,6 @@ fn tagged_value_to_protocol(
         source_information: None,
     }
 }
-
-// ---------------------------------------------------------------------------
-// Lowered ValueSpec → protocol ValueSpecification
-// ---------------------------------------------------------------------------
 
 /// Convert a lowered `ValueSpec` to a protocol `ValueSpecification`.
 ///

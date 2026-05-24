@@ -891,10 +891,6 @@ fn read_string_slot(heap: &RuntimeHeap, id: &ObjectHandle, slot: &str) -> Result
     }
 }
 
-// ---------------------------------------------------------------------------
-// Coverage Summary (CLI output)
-// ---------------------------------------------------------------------------
-
 /// Print a colored coverage summary table to stderr.
 fn print_coverage_summary(map: &CoverageMap) {
     let summary = map.summary();

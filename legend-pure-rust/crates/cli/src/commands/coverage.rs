@@ -43,10 +43,6 @@ use smol_str::SmolStr;
 use legend_pure_runtime::hooks::EvalHooks;
 use legend_pure_runtime::value::Value;
 
-// ---------------------------------------------------------------------------
-// Line Coverage
-// ---------------------------------------------------------------------------
-
 /// Per-file line coverage data.
 #[derive(Debug, Default)]
 pub struct FileCoverage {
@@ -86,10 +82,6 @@ impl FileCoverage {
         (f64::from(self.lines_hit()) / f64::from(found)) * 100.0
     }
 }
-
-// ---------------------------------------------------------------------------
-// Branch Coverage
-// ---------------------------------------------------------------------------
 
 /// The kind of branching construct.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -162,10 +154,6 @@ impl BranchTracker {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Function Coverage
-// ---------------------------------------------------------------------------
-
 /// A tracked function definition.
 #[derive(Debug)]
 pub struct FunctionEntry {
@@ -225,10 +213,6 @@ impl FunctionTracker {
             .filter(move |(_, entry)| entry.source.source.as_str() == source)
     }
 }
-
-// ---------------------------------------------------------------------------
-// CoverageMap — aggregated coverage data
-// ---------------------------------------------------------------------------
 
 /// Aggregated coverage data across all Pure source files.
 ///
@@ -352,8 +336,6 @@ impl CoverageMap {
             function_percentage,
         }
     }
-
-    // -- Model pre-scan ---------------------------------------------------
 
     /// Walk the compiled model to discover all coverable lines, branch
     /// points (`if`/`match`), and function definitions.
@@ -491,10 +473,6 @@ impl CoverageMap {
     }
 }
 
-// ---------------------------------------------------------------------------
-// CoverageHooks — EvalHooks implementation
-// ---------------------------------------------------------------------------
-
 /// [`EvalHooks`] implementation that records line, branch, and function
 /// coverage during Pure expression evaluation.
 ///
@@ -622,10 +600,6 @@ impl EvalHooks for CoverageHooks {
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
