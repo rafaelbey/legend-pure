@@ -34,10 +34,6 @@ use crate::v1;
 /// Result alias for AST → Protocol conversions.
 pub type Result<T> = std::result::Result<T, serde_json::Error>;
 
-// ---------------------------------------------------------------------------
-// Leaf conversions
-// ---------------------------------------------------------------------------
-
 impl From<&ast::SourceInfo> for v1::source_info::SourceInformation {
     fn from(si: &ast::SourceInfo) -> Self {
         Self {
@@ -87,10 +83,6 @@ fn optional_package_to_path(pkg: Option<&ast::type_ref::Package>) -> String {
         None => String::new(),
     }
 }
-
-// ---------------------------------------------------------------------------
-// Type conversions
-// ---------------------------------------------------------------------------
 
 impl From<&ast::type_ref::TypeReference> for v1::generic_type::GenericType {
     fn from(tr: &ast::type_ref::TypeReference) -> Self {
@@ -195,10 +187,6 @@ fn type_variable_value_to_json(tvv: &ast::type_ref::TypeVariableValue) -> serde_
     }
 }
 
-// ---------------------------------------------------------------------------
-// Annotation conversions
-// ---------------------------------------------------------------------------
-
 impl From<&ast::annotation::StereotypePtr> for v1::annotation::StereotypePtr {
     fn from(s: &ast::annotation::StereotypePtr) -> Self {
         Self {
@@ -230,10 +218,6 @@ impl From<&ast::annotation::TaggedValue> for v1::annotation::TaggedValue {
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// Property conversions
-// ---------------------------------------------------------------------------
 
 /// Converts an AST `Property` into a protocol `Property`.
 ///
@@ -329,10 +313,6 @@ fn convert_parameter(p: &ast::annotation::Parameter) -> Result<serde_json::Value
     let vs = v1::value_spec::ValueSpecification::Var(var);
     serde_json::to_value(&vs)
 }
-
-// ---------------------------------------------------------------------------
-// Expression → ValueSpecification
-// ---------------------------------------------------------------------------
 
 /// Converts an AST `Expression` into a protocol `serde_json::Value`.
 ///
@@ -448,7 +428,6 @@ pub fn convert_expression_typed(
             })
         }
 
-        // -- Multiplicity reference: `@[m]` --------------------------
         //
         // Settled wire form (mirrors what Java's `MultiplicityInstance`
         // round-trips to at the metamodel level):
@@ -780,10 +759,6 @@ fn convert_column(e: &ast::expression::ColumnBuilderExpr) -> v1::value_spec::Val
     })
 }
 
-// ---------------------------------------------------------------------------
-// Navigation path conversion
-// ---------------------------------------------------------------------------
-
 /// Converts a `NavigationPath` into a `classInstance("path", ...)`.
 ///
 /// Wire format (mirrors Legend Engine's `NavigationPathComposer`):
@@ -845,10 +820,6 @@ fn convert_navigation_path(
     })
 }
 
-// ---------------------------------------------------------------------------
-// Island expression conversions
-// ---------------------------------------------------------------------------
-
 /// Converts an island grammar expression into a `ValueSpecification`.
 ///
 /// Without a registered [`IslandProtocol`](crate::IslandProtocol)
@@ -865,10 +836,6 @@ fn convert_island_expression(
         source_information: source_information(&island.source_info),
     })
 }
-
-// ---------------------------------------------------------------------------
-// Element conversions
-// ---------------------------------------------------------------------------
 
 /// Converts an AST `Element` into a protocol `PackageableElement`.
 ///
@@ -1063,10 +1030,6 @@ fn convert_unit(
     }
 }
 
-// ---------------------------------------------------------------------------
-// Multiplicity-literal value-spec wire form (`@[m]` expressions)
-// ---------------------------------------------------------------------------
-
 /// Convert an AST `MultiplicityArgument` (the `@[m]` / `@[1..*]` /
 /// `@[*]` form in expression position) to a protocol
 /// `ValueSpecification`. Settled wire form:
@@ -1179,10 +1142,6 @@ fn multiplicity_variable_value_spec(
         source_information,
     })
 }
-
-// ---------------------------------------------------------------------------
-// Top-level: SourceFile → PureModelContextData
-// ---------------------------------------------------------------------------
 
 /// Converts a parsed `SourceFile` into a `PureModelContextData`.
 ///

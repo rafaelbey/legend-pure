@@ -55,10 +55,6 @@ pub enum PackageableElement {
     SectionIndex(ProtocolSectionIndex),
 }
 
-// ---------------------------------------------------------------------------
-// Element structs — one per PackageableElement variant
-// ---------------------------------------------------------------------------
-
 /// Protocol representation of a class element.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

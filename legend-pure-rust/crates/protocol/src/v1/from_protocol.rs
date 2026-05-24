@@ -35,10 +35,6 @@ use smol_str::SmolStr;
 
 use crate::v1;
 
-// ---------------------------------------------------------------------------
-// Error type
-// ---------------------------------------------------------------------------
-
 /// Errors that can occur during Protocol → AST conversion.
 #[derive(Debug, thiserror::Error)]
 pub enum ConversionError {
@@ -59,10 +55,6 @@ pub enum ConversionError {
 /// Result alias for conversions in this module.
 pub type Result<T> = std::result::Result<T, ConversionError>;
 
-// ---------------------------------------------------------------------------
-// Synthetic source info
-// ---------------------------------------------------------------------------
-
 /// Creates a synthetic `SourceInfo` when protocol data has no source location.
 ///
 /// Every AST node must be `Spanned`, so we use a zero-span placeholder
@@ -70,10 +62,6 @@ pub type Result<T> = std::result::Result<T, ConversionError>;
 fn synthetic_source_info() -> ast::SourceInfo {
     ast::SourceInfo::new("<protocol>", 0, 0, 0, 0)
 }
-
-// ---------------------------------------------------------------------------
-// Leaf conversions
-// ---------------------------------------------------------------------------
 
 /// Converts a protocol `SourceInformation` into an AST `SourceInfo`.
 impl From<&v1::source_info::SourceInformation> for ast::SourceInfo {
@@ -100,10 +88,6 @@ impl From<&v1::multiplicity::Multiplicity> for ast::Multiplicity {
         Self::range(m.lower_bound, m.upper_bound)
     }
 }
-
-// ---------------------------------------------------------------------------
-// Path parsing
-// ---------------------------------------------------------------------------
 
 /// Parses a `"a::b::c"` path string into a recursive AST `Package` tree.
 ///
@@ -154,10 +138,6 @@ fn parse_qualified_path(path: &str) -> Result<(Option<ast::type_ref::Package>, S
     Ok((Some(pkg), name))
 }
 
-// ---------------------------------------------------------------------------
-// Type conversions
-// ---------------------------------------------------------------------------
-
 /// Converts a protocol `GenericType` into an AST `TypeReference`.
 pub fn convert_generic_type(
     gt: &v1::generic_type::GenericType,
@@ -176,10 +156,6 @@ pub fn convert_generic_type(
         source_info: si,
     })
 }
-
-// ---------------------------------------------------------------------------
-// Annotation conversions
-// ---------------------------------------------------------------------------
 
 /// Converts a protocol `StereotypePtr` into an AST `StereotypePtr`.
 pub fn convert_stereotype_ptr(
@@ -228,10 +204,6 @@ pub fn convert_tagged_value(
         source_info: si,
     })
 }
-
-// ---------------------------------------------------------------------------
-// Property conversions
-// ---------------------------------------------------------------------------
 
 /// Converts a protocol `Property` into an AST `Property`.
 pub fn convert_property(p: &v1::property::Property) -> Result<ast::element::Property> {
@@ -335,10 +307,6 @@ fn convert_json_to_parameter(json: &serde_json::Value) -> Result<ast::annotation
         _ => Err(ConversionError::UnsupportedValueSpec),
     }
 }
-
-// ---------------------------------------------------------------------------
-// ValueSpecification → Expression
-// ---------------------------------------------------------------------------
 
 /// Converts a protocol `ValueSpecification` into an AST `Expression`.
 #[allow(clippy::too_many_lines)]
@@ -783,10 +751,6 @@ fn convert_applied_property(
     }
 }
 
-// ---------------------------------------------------------------------------
-// Element conversions
-// ---------------------------------------------------------------------------
-
 /// Converts a protocol `PackageableElement` into an AST `Element`.
 ///
 /// Note: `SectionIndex` elements are metadata and don't map to an AST `Element`,
@@ -1081,10 +1045,6 @@ fn convert_unit_def(u: &v1::element::ProtocolUnit) -> Result<ast::element::UnitD
     })
 }
 
-// ---------------------------------------------------------------------------
-// Top-level: PureModelContextData → SourceFile
-// ---------------------------------------------------------------------------
-
 /// Converts a `PureModelContextData` into a parsed `SourceFile`.
 ///
 /// This reconstructs the section structure from the `SectionIndex` element
@@ -1182,10 +1142,6 @@ pub fn convert_context_to_source_file(
         source_info: file_si,
     })
 }
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

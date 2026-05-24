@@ -91,10 +91,6 @@ pub enum ValueSpecification {
     ClassInstance(ClassInstance),
 }
 
-// ---------------------------------------------------------------------------
-// Primitive value structs
-// ---------------------------------------------------------------------------
-
 /// Integer constant value.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -194,10 +190,6 @@ pub struct CLatestDate {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_information: Option<SourceInformation>,
 }
-
-// ---------------------------------------------------------------------------
-// Complex value specification structs
-// ---------------------------------------------------------------------------
 
 /// A function application (e.g., `plus(1, 2)` or `filter(x|$x > 5)`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
