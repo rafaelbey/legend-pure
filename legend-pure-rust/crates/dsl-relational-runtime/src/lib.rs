@@ -218,10 +218,6 @@ fn resolve_fqn(model: &PureModel, fqn: &str) -> Option<ElementId> {
     model.resolve_by_path(&segments)
 }
 
-// ---------------------------------------------------------------------------
-// RelationalClassMappingDSLPopulator
-// ---------------------------------------------------------------------------
-
 /// Populator for the sidecar `RelationalClassMapping` DSLInstance
 /// rows emitted by `RelationalExtension::declare`.
 ///
