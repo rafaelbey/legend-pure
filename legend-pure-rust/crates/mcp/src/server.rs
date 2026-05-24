@@ -24,10 +24,12 @@
 
 use std::sync::{Arc, Mutex};
 
-use legend_pure_core_platform::repo::Repo;
+use legend_pure_core_platform::repo::{OwnedSourceFile, Repo, RepoMeta};
 use legend_pure_ide::ReferenceIndex;
 use legend_pure_parser_pure::ids::ElementId;
 use legend_pure_parser_pure::model::{Element, PureModel};
+use legend_pure_parser_pure::nodes::class::{Class, Property, QualifiedProperty};
+use legend_pure_parser_pure::types::{Multiplicity, TypeExpr};
 use rmcp::{
     ErrorData as McpError, ServerHandler,
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
@@ -111,6 +113,30 @@ pub struct ListTestsArgs {
     /// the workspace is returned.
     #[serde(default)]
     pub package_prefix: Option<String>,
+}
+
+/// Input shape for [`LegendMcpServer::search_properties`].
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct SearchPropertiesArgs {
+    /// Case-insensitive substring to match against property names
+    /// across every Class and Association in the workspace. Example:
+    /// `"zip"` finds `zipCode` on `Address`.
+    pub name_substring: String,
+    /// Maximum number of property hits to return. Defaults to 50;
+    /// capped at 500 even if a larger value is requested.
+    #[serde(default)]
+    pub limit: Option<u32>,
+}
+
+/// Input shape for [`LegendMcpServer::eval_expression`].
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct EvalExpressionArgs {
+    /// Pure expression text to evaluate against the current workspace
+    /// snapshot. The expression is wrapped in a synthetic function
+    /// returning `Any[*]` and compiled into a transient repo; the
+    /// persistent snapshot is not mutated. Example:
+    /// `"Person.all()->filter(p | $p.age > 18)->size()"`.
+    pub expression: String,
 }
 
 /// Input shape for [`LegendMcpServer::apply_edit`].
@@ -275,6 +301,149 @@ pub struct TestEntry {
     /// Test stereotypes attached to the function, e.g.
     /// `["test::Test"]` or `["PCT.test"]`.
     pub tags: Vec<String>,
+}
+
+/// One property descriptor in [`ClassDetail`] / [`PropertyHit`].
+#[derive(Debug, Serialize)]
+pub struct PropertyInfo {
+    /// Property name as declared on the class or association.
+    pub name: String,
+    /// Rendered FQN of the property's type — e.g. `"String"`,
+    /// `"pkg::Address"`, `"meta::pure::metamodel::type::Generic"`. For
+    /// generic instantiations the type arguments are rendered inline
+    /// (`"List<pkg::Address>"`). `"<unresolved>"` if the compiler
+    /// could not resolve the type (only happens in error states).
+    pub type_fqn: String,
+    /// Pure-form multiplicity literal: `1`, `0..1`, `*`, `1..*`, or a
+    /// numeric range like `0..3`. Matches the syntax users write in
+    /// `.pure` source after the type name in `[ ... ]`.
+    pub multiplicity: String,
+    /// 1-based source line of the property declaration. `0` for
+    /// synthetic properties (e.g. bootstrap-injected `Any.classifierGenericType`).
+    pub source_line: u32,
+}
+
+/// One qualified-property descriptor in [`ClassDetail`].
+#[derive(Debug, Serialize)]
+pub struct QualifiedPropertyInfo {
+    /// QP name as declared (without parameter list).
+    pub name: String,
+    /// Parameters in declaration order. Empty for parameter-less QPs.
+    pub parameters: Vec<ParameterInfo>,
+    /// Rendered FQN of the return type.
+    pub return_type_fqn: String,
+    /// Return multiplicity.
+    pub return_multiplicity: String,
+    /// 1-based source line of the QP declaration.
+    pub source_line: u32,
+}
+
+/// One parameter descriptor in [`QualifiedPropertyInfo::parameters`].
+#[derive(Debug, Serialize)]
+pub struct ParameterInfo {
+    /// Parameter name.
+    pub name: String,
+    /// Rendered FQN of the parameter type.
+    pub type_fqn: String,
+    /// Parameter multiplicity.
+    pub multiplicity: String,
+}
+
+/// One association-edge row connecting a class to another class via a
+/// declared property. Returned both inline by
+/// [`LegendMcpServer::read_class_detail`] and standalone by
+/// [`LegendMcpServer::find_associations_for_class`].
+#[derive(Debug, Serialize)]
+pub struct AssociationEdge {
+    /// FQN of the Association element declaring this edge.
+    pub association_fqn: String,
+    /// Name of the property the source class navigates *to* (the
+    /// endpoint pointing at `target_class_fqn`). When `Address` has an
+    /// association to `Person` with properties `[address: Address[1],
+    /// owner: Person[1]]`, the edge from `Address`'s side reports
+    /// `role_name = "owner"`, `target_class_fqn = "...::Person"`.
+    pub role_name: String,
+    /// FQN of the class on the other end of the association.
+    pub target_class_fqn: String,
+    /// Multiplicity of the property the source class navigates *to*.
+    pub multiplicity: String,
+}
+
+/// Detailed view of one Class returned by
+/// [`LegendMcpServer::read_class_detail`].
+///
+/// Bundles everything an agent needs to compose a Pure expression
+/// against the class: property surface (declared + qualified),
+/// supertypes (so inheritance chains are visible), type parameters,
+/// and association edges (so multi-hop navigation is discoverable
+/// from one tool call).
+#[derive(Debug, Serialize)]
+pub struct ClassDetail {
+    /// Fully-qualified name of the class.
+    pub fqn: String,
+    /// Canonical source path the class was declared in.
+    pub source: String,
+    /// 1-based line of the class name span.
+    pub line: u32,
+    /// 1-based column of the class name span.
+    pub column: u32,
+    /// Type-parameter names in declaration order. Empty for
+    /// non-generic classes.
+    pub type_parameters: Vec<String>,
+    /// Rendered FQNs of direct supertypes. Order matches declaration
+    /// order in `extends`. For most user classes this is one entry
+    /// (or empty when the class implicitly extends `Any`).
+    pub super_types: Vec<String>,
+    /// Declared properties (not including association-injected ones —
+    /// those are surfaced via [`Self::associations`] instead).
+    pub properties: Vec<PropertyInfo>,
+    /// Qualified (derived) properties.
+    pub qualified_properties: Vec<QualifiedPropertyInfo>,
+    /// Every association that lists this class as one of its
+    /// endpoints. Use these to discover navigation paths to
+    /// neighbouring classes (e.g. `Person → addresses → Address`).
+    pub associations: Vec<AssociationEdge>,
+}
+
+/// One property hit in the [`LegendMcpServer::search_properties`] response.
+#[derive(Debug, Serialize)]
+pub struct PropertyHit {
+    /// FQN of the Class (or Association) the property is declared on.
+    pub owner_fqn: String,
+    /// Element kind of the owner — `"Class"` or `"Association"`.
+    pub owner_kind: String,
+    /// Property name.
+    pub property_name: String,
+    /// Rendered FQN of the property's type.
+    pub type_fqn: String,
+    /// Property multiplicity.
+    pub multiplicity: String,
+    /// 1-based source line of the property declaration.
+    pub source_line: u32,
+}
+
+/// Response shape for [`LegendMcpServer::eval_expression`].
+///
+/// `ok == true` means the wrapped expression compiled cleanly and the
+/// runtime returned a value (which may be empty). On compile failure
+/// `diagnostics` carries the scoped errors; on runtime failure `error`
+/// carries the structured runner error. Both fields may be non-empty
+/// simultaneously if the compile produced warnings but evaluation
+/// still failed.
+#[derive(Debug, Serialize)]
+pub struct EvalExpressionResult {
+    /// `true` when compile + execution both succeeded.
+    pub ok: bool,
+    /// Rendered runtime value. `None` on compile or runtime failure.
+    pub value: Option<String>,
+    /// Captured `print` / `println` output.
+    pub stdout: String,
+    /// Compile-time diagnostics for the synthetic scratch file. Empty
+    /// when the expression compiled without errors.
+    pub diagnostics: Vec<DiagnosticRow>,
+    /// Structured runtime error. `None` when execution succeeded or
+    /// when compilation failed before execution.
+    pub error: Option<serde_json::Value>,
 }
 
 /// Response shape for [`LegendMcpServer::apply_edit`].
@@ -765,6 +934,84 @@ impl LegendMcpServer {
             diagnostics,
         })
     }
+
+    /// Return a Class's properties, qualified properties, supertypes,
+    /// type parameters, and association edges in one call.
+    #[tool(
+        description = "Inspect a Class by FQN: returns declared properties (name, type FQN, multiplicity), qualified (derived) properties, supertypes, type parameters, and every Association that lists this class as an endpoint. Use after search_symbols to discover what fields you can navigate and which neighbouring classes are reachable. Errors if the FQN doesn't resolve or doesn't name a Class."
+    )]
+    pub async fn read_class_detail(
+        &self,
+        Parameters(args): Parameters<FqnArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        let snapshot = self.snapshot();
+        let result =
+            tokio::task::spawn_blocking(move || read_class_detail_impl(&snapshot.model, &args.fqn))
+                .await
+                .map_err(|e| McpError::internal_error(format!("join error: {e}"), None))?;
+        match result {
+            Ok(detail) => json_result(&detail),
+            Err(msg) => Err(McpError::invalid_params(msg, None)),
+        }
+    }
+
+    /// List every Association that names a given Class as one of its
+    /// endpoints. The reverse-direction lookup for navigation.
+    #[tool(
+        description = "List every Association in the workspace whose properties reference the given Class FQN. Returns one AssociationEdge per endpoint that points away from the input class (association_fqn, role_name, target_class_fqn, multiplicity). Use when you've located a class and need to discover what other classes link to it. Errors if the FQN doesn't resolve or doesn't name a Class."
+    )]
+    pub async fn find_associations_for_class(
+        &self,
+        Parameters(args): Parameters<FqnArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        let snapshot = self.snapshot();
+        let result = tokio::task::spawn_blocking(move || {
+            find_associations_for_class_impl(&snapshot.model, &args.fqn)
+        })
+        .await
+        .map_err(|e| McpError::internal_error(format!("join error: {e}"), None))?;
+        match result {
+            Ok(edges) => json_result(&edges),
+            Err(msg) => Err(McpError::invalid_params(msg, None)),
+        }
+    }
+
+    /// Find every property across every Class / Association whose
+    /// declared name contains a substring.
+    #[tool(
+        description = "Search across every Class and Association in the workspace for properties whose declared name contains the given substring (case-insensitive). Returns (owner_fqn, owner_kind, property_name, type_fqn, multiplicity, source_line). Use when the user mentions a field name (e.g. \"zipcode\") and you don't yet know which class owns it. Default limit 50, cap 500."
+    )]
+    pub async fn search_properties(
+        &self,
+        Parameters(args): Parameters<SearchPropertiesArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        let snapshot = self.snapshot();
+        let result =
+            tokio::task::spawn_blocking(move || search_properties_impl(&snapshot.model, &args))
+                .await
+                .map_err(|e| McpError::internal_error(format!("join error: {e}"), None))?;
+        json_result(&result)
+    }
+
+    /// Compile + evaluate a Pure expression against the current
+    /// workspace without persisting any source files.
+    #[tool(
+        description = "Evaluate a Pure expression against the current workspace snapshot. The expression is wrapped in `function __mcp_eval__::__eval__():Any[*] { <expr> }` and compiled into a transient in-memory repo alongside the snapshot; the persistent workspace is not mutated. Returns ok + value (or stdout) on success, or scoped compile diagnostics + structured runtime errors on failure. Use to validate a candidate expression before returning it to the user."
+    )]
+    pub async fn eval_expression(
+        &self,
+        Parameters(args): Parameters<EvalExpressionArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        let repos = self.repos_clone();
+        let auto_imports = self.auto_imports.clone();
+        let expression = args.expression;
+        let result = tokio::task::spawn_blocking(move || {
+            eval_expression_impl(&repos, &auto_imports, &expression)
+        })
+        .await
+        .map_err(|e| McpError::internal_error(format!("join error: {e}"), None))?;
+        json_result(&result)
+    }
 }
 
 #[tool_handler]
@@ -777,9 +1024,11 @@ impl ServerHandler for LegendMcpServer {
         info.instructions = Some(
             "Legend Pure MCP server. Tools:\n\
              - search_symbols / read_element / list_packages / list_tests — discover elements in the compiled workspace\n\
+             - read_class_detail / find_associations_for_class / search_properties — inspect a class's surface (properties, qualified properties, supertypes, association edges) and locate properties by name across classes\n\
              - find_references — list every source site that references a given element by FQN\n\
              - get_diagnostics — surface compile errors\n\
              - run_function / run_test / run_pct / list_pct_adapters — execute Pure code\n\
+             - eval_expression — compile + run an ad-hoc Pure expression against the current snapshot without persisting any file (use to validate a generated expression)\n\
              - workspace_status / reload_workspace / apply_edit — inspect, refresh, or mutate the in-memory snapshot\n\
              \nThe workspace is compiled once at startup. Call reload_workspace after editing .pure files so subsequent tool calls see the updated model; use workspace_status to check the current snapshot's compiled_at timestamp."
                 .to_string(),
@@ -1064,4 +1313,511 @@ fn render_package_fqn(
     }
     parts.reverse();
     parts.join("::")
+}
+
+/// Render a `TypeExpr` to a Pure-flavoured FQN string. Differs from
+/// the private helper in `pure::access::render_type_expr` in that the
+/// `Named` element is rendered as its full FQN (`pkg::Class`) rather
+/// than just its simple name, so the agent can resolve it back via
+/// `read_element` / `read_class_detail` without guessing the package.
+fn render_type_fqn(model: &PureModel, type_expr: &TypeExpr) -> String {
+    let mut out = String::new();
+    render_type_fqn_into(model, type_expr, &mut out);
+    out
+}
+
+fn render_type_fqn_into(model: &PureModel, type_expr: &TypeExpr, out: &mut String) {
+    match type_expr {
+        TypeExpr::Named {
+            element,
+            type_arguments,
+            ..
+        } => {
+            out.push_str(&render_fqn(model, *element));
+            if !type_arguments.is_empty() {
+                out.push('<');
+                for (i, arg) in type_arguments.iter().enumerate() {
+                    if i > 0 {
+                        out.push_str(", ");
+                    }
+                    render_type_fqn_into(model, arg, out);
+                }
+                out.push('>');
+            }
+        }
+        TypeExpr::Generic(name) => out.push_str(name),
+        TypeExpr::FunctionType {
+            parameters,
+            return_type,
+            return_multiplicity,
+        } => {
+            out.push('{');
+            for (i, (pty, pm)) in parameters.iter().enumerate() {
+                if i > 0 {
+                    out.push_str(", ");
+                }
+                render_type_fqn_into(model, pty, out);
+                out.push('[');
+                out.push_str(&render_multiplicity(pm));
+                out.push(']');
+            }
+            out.push_str(" -> ");
+            render_type_fqn_into(model, return_type, out);
+            out.push('[');
+            out.push_str(&render_multiplicity(return_multiplicity));
+            out.push(']');
+            out.push('}');
+        }
+        TypeExpr::AlgebraUnion(a, b) => {
+            render_type_fqn_into(model, a, out);
+            out.push_str(" + ");
+            render_type_fqn_into(model, b, out);
+        }
+        TypeExpr::Relation(_) => out.push_str("<Relation>"),
+        TypeExpr::Unresolved => out.push_str("<unresolved>"),
+    }
+}
+
+fn render_multiplicity(m: &Multiplicity) -> String {
+    match m {
+        Multiplicity::PureOne => "1".to_string(),
+        Multiplicity::ZeroOrOne => "0..1".to_string(),
+        Multiplicity::ZeroOrMany => "*".to_string(),
+        Multiplicity::OneOrMany => "1..*".to_string(),
+        Multiplicity::Range { lower, upper } => match upper {
+            Some(u) if u == lower => format!("{lower}"),
+            Some(u) => format!("{lower}..{u}"),
+            None => format!("{lower}..*"),
+        },
+        Multiplicity::Variable(v) => v.to_string(),
+    }
+}
+
+/// Convert a `Property` value into the agent-facing [`PropertyInfo`].
+/// Shared by `read_class_detail` and `search_properties`.
+fn property_info(model: &PureModel, prop: &Property) -> PropertyInfo {
+    PropertyInfo {
+        name: prop.name.to_string(),
+        type_fqn: render_type_fqn(model, &prop.type_expr),
+        multiplicity: render_multiplicity(&prop.multiplicity),
+        source_line: prop.source_info.start_line,
+    }
+}
+
+fn qualified_property_info(model: &PureModel, qp: &QualifiedProperty) -> QualifiedPropertyInfo {
+    let parameters = qp
+        .parameters
+        .iter()
+        .map(|p| ParameterInfo {
+            name: p.name.to_string(),
+            type_fqn: render_type_fqn(model, &p.type_expr),
+            multiplicity: render_multiplicity(&p.multiplicity),
+        })
+        .collect();
+    QualifiedPropertyInfo {
+        name: qp.name.to_string(),
+        parameters,
+        return_type_fqn: render_type_fqn(model, &qp.return_type),
+        return_multiplicity: render_multiplicity(&qp.return_multiplicity),
+        source_line: qp.source_info.start_line,
+    }
+}
+
+/// Walk every Association in the model and yield one
+/// [`AssociationEdge`] for each endpoint that points *away from*
+/// `class_id`. So if `Assoc` has properties `[address: Address[1],
+/// owner: Person[1]]` and `class_id` refers to `Address`, the result
+/// includes one edge with `role_name = "owner"`, `target_class_fqn =
+/// "...::Person"`. Same association consulted from `Person`'s side
+/// would emit the `"address"` edge. Self-associations yield both
+/// edges (one per endpoint) when the property names differ.
+fn scan_association_edges(model: &PureModel, class_id: ElementId) -> Vec<AssociationEdge> {
+    let mut out: Vec<AssociationEdge> = Vec::new();
+    for chunk in &model.chunks {
+        for (local_idx, element) in chunk.elements.iter() {
+            let Element::Association(assoc) = element else {
+                continue;
+            };
+            // First pass: does any endpoint point at class_id? Skip
+            // the whole association if not — avoids scanning every
+            // property's type_expr twice for unrelated associations.
+            let endpoints_referencing: Vec<usize> = assoc
+                .properties
+                .iter()
+                .enumerate()
+                .filter_map(|(idx, p)| match &p.type_expr {
+                    TypeExpr::Named { element, .. } if *element == class_id => Some(idx),
+                    _ => None,
+                })
+                .collect();
+            if endpoints_referencing.is_empty() {
+                continue;
+            }
+            let assoc_id = ElementId::InstanceId {
+                chunk_id: chunk.chunk_id,
+                local_idx,
+            };
+            let assoc_fqn = render_fqn(model, assoc_id);
+            // Emit one edge per *other* endpoint — the property the
+            // input class navigates to. For a 2-prop association where
+            // both endpoints are class_id (self-association on the
+            // same class with different role names), every endpoint
+            // counts as an "other" endpoint.
+            for (idx, prop) in assoc.properties.iter().enumerate() {
+                let TypeExpr::Named { element: tgt, .. } = &prop.type_expr else {
+                    continue;
+                };
+                // Skip the endpoint(s) that point back at us, unless
+                // every endpoint does (self-association case).
+                let is_self_assoc = endpoints_referencing.len() == assoc.properties.len();
+                if !is_self_assoc && endpoints_referencing.contains(&idx) {
+                    continue;
+                }
+                out.push(AssociationEdge {
+                    association_fqn: assoc_fqn.clone(),
+                    role_name: prop.name.to_string(),
+                    target_class_fqn: render_fqn(model, *tgt),
+                    multiplicity: render_multiplicity(&prop.multiplicity),
+                });
+            }
+        }
+    }
+    out.sort_by(|a, b| {
+        a.association_fqn
+            .cmp(&b.association_fqn)
+            .then(a.role_name.cmp(&b.role_name))
+    });
+    out
+}
+
+/// Backing impl for [`LegendMcpServer::read_class_detail`].
+///
+/// `Err(msg)` carries the user-facing error text; the tool wrapper
+/// turns it into a `McpError::invalid_params`.
+fn read_class_detail_impl(model: &PureModel, fqn: &str) -> Result<ClassDetail, String> {
+    let id = model
+        .resolve_fqn_str(fqn)
+        .ok_or_else(|| format!("element not found in workspace: {fqn}"))?;
+    let element = model
+        .try_get_element(id)
+        .ok_or_else(|| format!("element not found in workspace: {fqn}"))?;
+    let Element::Class(class) = element else {
+        return Err(format!(
+            "element '{fqn}' is not a Class (kind: {}); use read_element for non-Class elements",
+            element_kind(element)
+        ));
+    };
+    Ok(build_class_detail(model, id, class))
+}
+
+fn build_class_detail(model: &PureModel, id: ElementId, class: &Class) -> ClassDetail {
+    let node = model.get_node(id);
+    let type_parameters = class
+        .type_parameters
+        .iter()
+        .map(|tp| tp.name.to_string())
+        .collect();
+    let super_types = class
+        .super_types
+        .iter()
+        .map(|st| render_type_fqn(model, st))
+        .collect();
+    let properties = class.properties.iter().map(|p| property_info(model, p)).collect();
+    let qualified_properties = class
+        .qualified_properties
+        .iter()
+        .map(|qp| qualified_property_info(model, qp))
+        .collect();
+    let associations = scan_association_edges(model, id);
+    ClassDetail {
+        fqn: render_fqn(model, id),
+        source: node.source_info.source.to_string(),
+        line: node.source_info.start_line,
+        column: node.source_info.start_column,
+        type_parameters,
+        super_types,
+        properties,
+        qualified_properties,
+        associations,
+    }
+}
+
+/// Backing impl for [`LegendMcpServer::find_associations_for_class`].
+fn find_associations_for_class_impl(
+    model: &PureModel,
+    fqn: &str,
+) -> Result<Vec<AssociationEdge>, String> {
+    let id = model
+        .resolve_fqn_str(fqn)
+        .ok_or_else(|| format!("element not found in workspace: {fqn}"))?;
+    let element = model
+        .try_get_element(id)
+        .ok_or_else(|| format!("element not found in workspace: {fqn}"))?;
+    if !matches!(element, Element::Class(_)) {
+        return Err(format!(
+            "element '{fqn}' is not a Class (kind: {})",
+            element_kind(element)
+        ));
+    }
+    Ok(scan_association_edges(model, id))
+}
+
+/// Backing impl for [`LegendMcpServer::search_properties`]. Mirrors
+/// the bootstrap-skip and limit-cap conventions of
+/// [`search_symbols_impl`].
+fn search_properties_impl(model: &PureModel, args: &SearchPropertiesArgs) -> Vec<PropertyHit> {
+    let needle = args.name_substring.to_lowercase();
+    let limit = args.limit.unwrap_or(50).min(500) as usize;
+    let mut out: Vec<PropertyHit> = Vec::new();
+    'outer: for chunk in &model.chunks {
+        if chunk.chunk_id == 0 {
+            continue;
+        }
+        for (local_idx, element) in chunk.elements.iter() {
+            let id = ElementId::InstanceId {
+                chunk_id: chunk.chunk_id,
+                local_idx,
+            };
+            match element {
+                Element::Class(c) => {
+                    if push_property_hits(
+                        model,
+                        id,
+                        "Class",
+                        &c.properties,
+                        &needle,
+                        &mut out,
+                        limit,
+                    ) {
+                        break 'outer;
+                    }
+                }
+                Element::Association(a) => {
+                    if push_property_hits(
+                        model,
+                        id,
+                        "Association",
+                        &a.properties,
+                        &needle,
+                        &mut out,
+                        limit,
+                    ) {
+                        break 'outer;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    out
+}
+
+/// Append matching property hits onto `out`, returning `true` when
+/// the cap was reached so the caller can break out of its outer
+/// scan loop.
+fn push_property_hits(
+    model: &PureModel,
+    owner_id: ElementId,
+    owner_kind: &str,
+    properties: &[Property],
+    needle_lower: &str,
+    out: &mut Vec<PropertyHit>,
+    limit: usize,
+) -> bool {
+    for prop in properties {
+        if !prop.name.to_lowercase().contains(needle_lower) {
+            continue;
+        }
+        out.push(PropertyHit {
+            owner_fqn: render_fqn(model, owner_id),
+            owner_kind: owner_kind.to_string(),
+            property_name: prop.name.to_string(),
+            type_fqn: render_type_fqn(model, &prop.type_expr),
+            multiplicity: render_multiplicity(&prop.multiplicity),
+            source_line: prop.source_info.start_line,
+        });
+        if out.len() >= limit {
+            return true;
+        }
+    }
+    false
+}
+
+/// Canonical URL prefix the eval tool uses for its synthetic in-memory
+/// repo. The leading `/` is required by the loader (matches the
+/// `Repo::Filesystem.prefix` convention everywhere else).
+const MCP_SCRATCH_PREFIX: &str = "/__mcp_scratch__";
+/// Canonical URL of the synthetic source file inside [`MCP_SCRATCH_PREFIX`].
+const MCP_SCRATCH_PATH: &str = "/__mcp_scratch__/eval.pure";
+/// FQN of the synthetic function the eval tool runs. The single-segment
+/// package name avoids any chance of colliding with real workspace
+/// elements (no real repo lives under `__mcp_eval__::`).
+const MCP_SCRATCH_FQN: &str = "__mcp_eval__::__eval__";
+
+/// Backing impl for [`LegendMcpServer::eval_expression`].
+///
+/// Wraps `expression` in a synthetic parameter-less function returning
+/// `Any[*]`, appends an in-memory `Repo::Filesystem` carrying just
+/// that source file, recompiles the snapshot, and (if compilation
+/// succeeds) runs the synthetic function. The persistent workspace
+/// snapshot on the server is not mutated — only the scratch model
+/// built here sees the synthetic chunk.
+///
+/// `repos` is the cloned snapshot of the server's repo list (taken
+/// before this function ran so the std mutex is no longer held).
+/// `auto_imports` is the same list the server started with.
+fn eval_expression_impl(
+    repos: &[Repo],
+    auto_imports: &[SmolStr],
+    expression: &str,
+) -> EvalExpressionResult {
+    let mut augmented: Vec<Repo> = repos.to_vec();
+    // Emit explicit `import` directives for every configured
+    // auto-import. The compiler applies auto-imports lazily through
+    // the section's import scope; without an explicit `###Pure`
+    // section header + `import` lines, ad-hoc arrow calls like
+    // `->filter(...)` cannot resolve the platform function names
+    // even though those packages are technically auto-imported for
+    // the rest of the workspace. Writing the imports inline makes
+    // the scratch file behave the same way regardless of the
+    // server's auto-import configuration.
+    let imports = if auto_imports.is_empty() {
+        String::new()
+    } else {
+        let mut s = String::with_capacity(auto_imports.len() * 48);
+        for pkg in auto_imports {
+            s.push_str("import ");
+            s.push_str(pkg);
+            s.push_str("::*;\n");
+        }
+        s
+    };
+    let wrapped = format!(
+        "###Pure\n{imports}function {MCP_SCRATCH_FQN}():Any[*]\n{{\n  {expression}\n}}\n"
+    );
+    // The synthetic repo needs a `RepoMeta` so `topo_sort_repos` can
+    // place it after every other loaded repo. Its dependency list
+    // must enumerate every other repo by name so the visibility map
+    // (populated by `populate_repo_visibility`) lets the scratch
+    // chunk reference user classes (e.g. `pkg::Person`) defined in
+    // other repos. `RepoMeta` carries three `&'static str` slots
+    // (the type predates this MCP integration), so the deps slice is
+    // built with `Box::leak`. The leak is bounded — `O(repo_count)`
+    // pointers per eval call — and the MCP server is long-lived
+    // enough that the alternative (pinning the meta on the server
+    // and reusing it across calls) would also need a guard for the
+    // repo-list-changed case. Document and accept.
+    let scratch_meta = make_scratch_meta(repos);
+    augmented.push(Repo::Filesystem {
+        prefix: MCP_SCRATCH_PREFIX.to_string(),
+        files: vec![OwnedSourceFile {
+            path: MCP_SCRATCH_PATH.to_string(),
+            content: wrapped,
+        }],
+        meta: Some(scratch_meta),
+        source_root: None,
+    });
+    let snapshot = WorkspaceSnapshot::compile(&augmented, auto_imports);
+    // Diagnostics: surface (a) anything scoped to the scratch file and
+    // (b) any errors whose message text mentions the scratch FQN.
+    // Pre-existing workspace errors that didn't mention the scratch
+    // file or function aren't this tool's problem to report.
+    let diagnostics: Vec<DiagnosticRow> = snapshot
+        .diagnostics
+        .iter()
+        .flat_map(|(path, errs)| {
+            errs.iter().filter_map(move |e| {
+                if path == MCP_SCRATCH_PATH
+                    || e.source_info.source.contains(MCP_SCRATCH_PREFIX)
+                    || e.message.contains(MCP_SCRATCH_FQN)
+                {
+                    Some(diagnostic_row(e))
+                } else {
+                    None
+                }
+            })
+        })
+        .collect();
+
+    // If the scratch chunk failed to produce a runnable function,
+    // surface diagnostics only — running a missing function produces
+    // a noisy stack trace the user would otherwise have to ignore.
+    // `resolve_function_by_path` does prefix-matching on the mangled
+    // name; `resolve_fqn_str` would require the caller to pre-mangle.
+    let scratch_segments: Vec<SmolStr> = MCP_SCRATCH_FQN
+        .split("::")
+        .map(SmolStr::new)
+        .collect();
+    if snapshot
+        .model
+        .resolve_function_by_path(&scratch_segments)
+        .is_none()
+    {
+        return EvalExpressionResult {
+            ok: false,
+            value: None,
+            stdout: String::new(),
+            diagnostics,
+            error: None,
+        };
+    }
+
+    // Wiring mirrors `run_function`'s tool path. Pending the
+    // distributed-slice unification, populators + relational natives
+    // are listed inline at every call site.
+    let relational_ext = legend_pure_store_relational_runtime::RelationalStoreExtension;
+    let registry =
+        legend_pure_runtime::native::NativeRegistry::with_extensions(&[&relational_ext]);
+    let mapping_pop = legend_pure_dsl_mapping_runtime::MappingDSLPopulator;
+    let database_pop = legend_pure_dsl_relational_runtime::RelationalDatabaseDSLPopulator;
+    let class_mapping_pop = legend_pure_dsl_relational_runtime::RelationalClassMappingDSLPopulator;
+    let populators: &[&dyn legend_pure_runtime::dsl::DSLPopulator] =
+        &[&mapping_pop, &database_pop, &class_mapping_pop];
+    let run_result = legend_pure_runtime::runner::run_function(
+        &snapshot.model,
+        &registry,
+        populators,
+        MCP_SCRATCH_FQN,
+    );
+
+    let error = if run_result.ok {
+        None
+    } else {
+        // RunResult.error is a structured RunError; pass it through
+        // as JSON so the agent sees the typed stack trace rather than
+        // a flattened string.
+        serde_json::to_value(&run_result.error).ok()
+    };
+    EvalExpressionResult {
+        ok: run_result.ok,
+        value: run_result.value,
+        stdout: run_result.stdout,
+        diagnostics,
+        error,
+    }
+}
+
+/// Build the synthetic [`RepoMeta`] for the scratch repo. Dependencies
+/// list every other repo's name so the visibility map allows the
+/// scratch chunk to reference any user class. Name + pattern are
+/// fixed literals. See the call site in [`eval_expression_impl`] for
+/// the per-call leak rationale.
+fn make_scratch_meta(other_repos: &[Repo]) -> RepoMeta {
+    // `RepoMeta.name` on every well-formed repo is already
+    // `&'static str` (the type carries that lifetime, populated
+    // either from a `&'static` constant or via a one-time leak in
+    // the repo constructor). Borrow the slot directly — no per-call
+    // leak needed for the names themselves. Only the *outer*
+    // dependency slice needs a fresh leak so its length matches the
+    // live repo count.
+    let deps: Vec<&'static str> = other_repos
+        .iter()
+        .filter_map(|r| r.meta().map(|m| m.name))
+        .collect();
+    let dependencies: &'static [&'static str] = Box::leak(deps.into_boxed_slice());
+    RepoMeta {
+        name: "__mcp_scratch__",
+        pattern: "(.*)",
+        dependencies,
+    }
 }
