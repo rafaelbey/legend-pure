@@ -68,10 +68,6 @@ impl CompilerExtension for TDSExtension {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Resolution
-// ---------------------------------------------------------------------------
-
 fn resolve_fqn(model: &PureModel, fqn: &str) -> Option<ElementId> {
     let segments: Vec<SmolStr> = fqn.split("::").map(SmolStr::new).collect();
     if segments.is_empty() || segments.iter().any(smol_str::SmolStr::is_empty) {
@@ -91,10 +87,6 @@ fn is_type(model: &PureModel, fqn: &str) -> bool {
         )
     })
 }
-
-// ---------------------------------------------------------------------------
-// Source-file traversal
-// ---------------------------------------------------------------------------
 
 fn walk_source_file(sf: &SourceFile, model: &PureModel, errors: &mut Vec<CompilationError>) {
     for elem in sf.all_elements() {

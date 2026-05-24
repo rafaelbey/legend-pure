@@ -123,10 +123,6 @@ pub fn default_island_parsers() -> Vec<Box<dyn IslandParser>> {
     vec![Box::new(TDSIslandParser)]
 }
 
-// ---------------------------------------------------------------------------
-// Column spec
-// ---------------------------------------------------------------------------
-
 fn parse_column_spec(ctx: &mut ParserContext<'_>) -> Result<TDSColumn, ParseError> {
     let si = ctx.cursor().current_source_info();
     let name = parse_column_name(ctx)?;
@@ -249,10 +245,6 @@ fn parse_column_type(ctx: &mut ParserContext<'_>) -> Result<TDSColumnType, Parse
         source_info: si,
     })
 }
-
-// ---------------------------------------------------------------------------
-// Cell
-// ---------------------------------------------------------------------------
 
 fn parse_cell(ctx: &mut ParserContext<'_>) -> Result<TDSCell, ParseError> {
     // CSV semantics: a TDS cell is the sequence of tokens on a single

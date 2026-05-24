@@ -57,10 +57,6 @@
 use legend_pure_parser_pure::types::Multiplicity;
 use smol_str::SmolStr;
 
-// ---------------------------------------------------------------------------
-// Public types
-// ---------------------------------------------------------------------------
-
 /// Parsed-and-typed TDS data. The single output of [`parse_and_infer`],
 /// shared by the compile-time lowerer and the `stringToTDS` runtime
 /// native.
@@ -216,10 +212,6 @@ impl std::fmt::Display for CsvError {
 }
 
 impl std::error::Error for CsvError {}
-
-// ---------------------------------------------------------------------------
-// Public entry point
-// ---------------------------------------------------------------------------
 
 /// Parse a TDS CSV string and infer per-column types + multiplicities.
 ///
@@ -395,10 +387,6 @@ fn multiplicity_display(m: &Multiplicity) -> String {
     }
 }
 
-// ---------------------------------------------------------------------------
-// CSV parsing — minimal hand-rolled reader
-// ---------------------------------------------------------------------------
-
 /// A raw cell — the substring of source between two commas, with
 /// quoting preserved so the inferrer can distinguish `'1'` (quoted →
 /// String) from `1` (numeric).
@@ -533,10 +521,6 @@ fn parse_csv_line(line: &str, line_no: usize) -> Result<Vec<RawCell>, CsvError> 
     });
     Ok(cells)
 }
-
-// ---------------------------------------------------------------------------
-// Per-column type inference
-// ---------------------------------------------------------------------------
 
 fn infer_column(cells: &[&RawCell]) -> (ColumnType, Multiplicity) {
     let any_empty = cells.iter().any(|c| c.is_empty());
@@ -681,10 +665,6 @@ fn is_datetime_literal(s: &str) -> bool {
     }
     false
 }
-
-// ---------------------------------------------------------------------------
-// Cell materialisation
-// ---------------------------------------------------------------------------
 
 /// Materialise a single cell. Returns:
 ///

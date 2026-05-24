@@ -53,18 +53,10 @@ use smol_str::SmolStr;
 use crate::ast::{TDSCell, TDSColumn, TDSExpr};
 use crate::csv::{self, ColumnOverride, ColumnType, ParsedTDS};
 
-// ---------------------------------------------------------------------------
-// FQNs of the symbols the synthetic AST references
-// ---------------------------------------------------------------------------
-
 const RELATION_PACKAGE: &[&str] = &["meta", "pure", "metamodel", "relation"];
 const STRING_TO_TDS_NAME: &str = "stringToTDS";
 const CAST_PACKAGE: &[&str] = &["meta", "pure", "functions", "lang"];
 const CAST_NAME: &str = "cast";
-
-// ---------------------------------------------------------------------------
-// IslandLowerer impl
-// ---------------------------------------------------------------------------
 
 /// Lowerer for the TDS island.
 pub struct TDSIslandLowerer;
@@ -119,10 +111,6 @@ pub fn default_island_lowerers() -> Vec<Box<dyn IslandLowerer>> {
     vec![Box::new(TDSIslandLowerer)]
 }
 
-// ---------------------------------------------------------------------------
-// CSV reconstruction
-// ---------------------------------------------------------------------------
-
 /// Reconstruct the CSV body from a parsed [`TDSExpr`]. Header line is
 /// the column names (just names — types are stripped here; the
 /// runtime/compile-time inference re-derives them); each data row
@@ -138,10 +126,6 @@ pub(crate) fn reconstruct_csv(tds: &TDSExpr) -> String {
     }
     buf
 }
-
-// ---------------------------------------------------------------------------
-// Column-override extraction
-// ---------------------------------------------------------------------------
 
 pub(crate) fn column_overrides(columns: &[TDSColumn]) -> Vec<ColumnOverride> {
     columns
@@ -222,10 +206,6 @@ fn parse_multiplicity_str(s: &str) -> Option<legend_pure_parser_pure::types::Mul
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// AST builders
-// ---------------------------------------------------------------------------
 
 fn string_literal(value: &str, source_info: SourceInfo) -> Expression {
     Expression::Literal(Literal::String(StringLiteral {
