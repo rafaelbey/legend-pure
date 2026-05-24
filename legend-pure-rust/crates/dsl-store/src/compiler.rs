@@ -78,10 +78,6 @@ impl CompilerExtension for RelationStoreExtension {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Resolution
-// ---------------------------------------------------------------------------
-
 fn resolve_store_class(model: &PureModel) -> Option<ElementId> {
     model.resolve_by_path(&[
         SmolStr::new("meta"),
@@ -115,10 +111,6 @@ fn extends_class(model: &PureModel, candidate: ElementId, target: ElementId) -> 
     }
     false
 }
-
-// ---------------------------------------------------------------------------
-// Source-file traversal
-// ---------------------------------------------------------------------------
 
 fn walk_source_file(
     sf: &SourceFile,
