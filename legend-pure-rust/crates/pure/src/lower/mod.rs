@@ -87,10 +87,6 @@ pub(super) fn typed(kind: ExprKind, source_info: SourceInfo, ty: ResolvedType) -
     }
 }
 
-// ---------------------------------------------------------------------------
-// Public API
-// ---------------------------------------------------------------------------
-
 /// Lowers an AST expression to a semantic [`ValueSpec`].
 ///
 /// Returns `None` if the expression cannot be lowered (error pushed to `errors`).
@@ -186,10 +182,6 @@ pub(crate) fn lower_expression_body(
         .collect()
 }
 
-// ---------------------------------------------------------------------------
-// Literal lowering
-// ---------------------------------------------------------------------------
-
 // `lower_literal`, `lower_variable`, and the date-literal parsing
 // helpers (`parse_strict_date`, `parse_datetime`, `parse_strict_time`,
 // `split_tz`, `parse_subsecond_parts`) live in `lower/literal.rs`.
@@ -200,10 +192,6 @@ pub(crate) fn lower_expression_body(
 // `lower_arithmetic`, `lower_comparison`, `lower_logical`,
 // `lower_bitwise`, `lower_unary_not`, `lower_unary_minus`, and
 // `lower_bitwise_not` live in `lower/operator.rs`.
-
-// ---------------------------------------------------------------------------
-// Function application & arrow
-// ---------------------------------------------------------------------------
 
 // `lower_function_application`, `lower_arrow_function`,
 // `lower_args_with_lambda_inference`, `lower_qp_call_args`,
@@ -230,10 +218,6 @@ pub(crate) fn lower_expression_body(
 // `is_concrete_type` live in `lower/lambda.rs`.
 // `lower_lambda_with_expected_types` is re-exported above so its
 // `pub(crate)` path stays stable.
-
-// ---------------------------------------------------------------------------
-// Let
-// ---------------------------------------------------------------------------
 
 // `lower_let` and `infer_let_type` live in `lower/let_expr.rs`.
 

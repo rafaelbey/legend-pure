@@ -233,10 +233,6 @@ impl PropagationScope {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Recursive rewriter
-// ---------------------------------------------------------------------------
-
 fn rewrite_value_spec(
     model: &PureModel,
     temporal_profile: ElementId,
@@ -527,10 +523,6 @@ fn class_id_of_first_arg(args: &[ValueSpec]) -> Option<ElementId> {
         _ => None,
     }
 }
-
-// ---------------------------------------------------------------------------
-// Rewrite: PropertyCall on a milestoned-target property → QualifiedPropertyCall
-// ---------------------------------------------------------------------------
 
 fn try_inject_dates_on_property_call(
     model: &PureModel,

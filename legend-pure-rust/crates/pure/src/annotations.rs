@@ -23,10 +23,6 @@ use smol_str::SmolStr;
 
 use crate::ids::ElementId;
 
-// ---------------------------------------------------------------------------
-// StereotypeRef
-// ---------------------------------------------------------------------------
-
 /// A resolved stereotype reference: `<<profile.stereotypeName>>`.
 ///
 /// Unlike `ast::StereotypePtr` which uses string paths, this points to the
@@ -46,10 +42,6 @@ pub struct StereotypeRef {
     pub source_info: Option<SourceInfo>,
 }
 
-// ---------------------------------------------------------------------------
-// TaggedValueRef
-// ---------------------------------------------------------------------------
-
 /// A resolved tagged value reference: `{profile.tagName = 'value'}`.
 ///
 /// Unlike `ast::TaggedValue` which uses string paths, this points to the
@@ -68,10 +60,6 @@ pub struct TaggedValueRef {
     #[serde(default)]
     pub source_info: Option<SourceInfo>,
 }
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

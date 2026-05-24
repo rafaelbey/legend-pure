@@ -282,10 +282,6 @@ pub trait CompilerExtension {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Lower-and-infer wrapper
-// ---------------------------------------------------------------------------
-
 /// Lower an AST [`Expression`] to a `ValueSpec`, then run type
 /// inference against `model` with the supplied variable `bindings` in
 /// scope. Returns the inferred [`ResolvedType`] of the expression, or
@@ -391,10 +387,6 @@ pub fn lower_and_infer_expression(
 
     body.into_iter().next()?.type_info.map(|t| *t)
 }
-
-// ---------------------------------------------------------------------------
-// COMPILER_EXTENSIONS — distributed slice + topo-sorted discovery
-// ---------------------------------------------------------------------------
 
 /// Distributed slice into which each [`CompilerExtension`]-providing
 /// crate registers its top-level extension instance.

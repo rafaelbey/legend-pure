@@ -148,10 +148,6 @@ pub enum TypeExpr {
     Unresolved,
 }
 
-// ---------------------------------------------------------------------------
-// RelationColumnTypeExpr — column metadata inside `TypeExpr::Relation`
-// ---------------------------------------------------------------------------
-
 /// One column of a structural relation type.
 ///
 /// Carries the per-column metadata that a `(name:Type[mult], …)` syntax
@@ -167,10 +163,6 @@ pub struct RelationColumnTypeExpr {
     /// Column multiplicity.
     pub multiplicity: Multiplicity,
 }
-
-// ---------------------------------------------------------------------------
-// ConstValue — compile-time value arguments for parameterized types
-// ---------------------------------------------------------------------------
 
 /// A compile-time constant value used in type parameterization.
 ///
@@ -216,10 +208,6 @@ pub enum Multiplicity {
     Variable(SmolStr),
 }
 
-// ---------------------------------------------------------------------------
-// Parameter
-// ---------------------------------------------------------------------------
-
 /// A function or qualified property parameter (resolved).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Parameter {
@@ -232,10 +220,6 @@ pub struct Parameter {
     /// Source location.
     pub source_info: SourceInfo,
 }
-
-// ---------------------------------------------------------------------------
-// DateValue — parsed date/time literals
-// ---------------------------------------------------------------------------
 
 /// A parsed date/time value for use in compiled expressions.
 ///
@@ -330,10 +314,6 @@ pub enum DateValue {
     Latest,
 }
 
-// ---------------------------------------------------------------------------
-// ResolvedType — the inferred type annotation for expressions
-// ---------------------------------------------------------------------------
-
 /// Resolved type and multiplicity for a compiled expression.
 ///
 /// After type inference (Pass 2.5), every expression in the model
@@ -345,10 +325,6 @@ pub struct ResolvedType {
     /// The inferred multiplicity of the expression.
     pub multiplicity: Multiplicity,
 }
-// ---------------------------------------------------------------------------
-// ValueSpec — compiled expression (header + kind)
-// ---------------------------------------------------------------------------
-
 /// A compiled value specification — the semantic expression type.
 ///
 /// All names are resolved. Operators are desugared to function calls.
@@ -411,7 +387,6 @@ pub struct FunctionCallData {
 /// [`ValueSpec`] struct.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ExprKind {
-    // -- Literals ----------------------------------------------------------
     /// Integer literal: `42`.
     IntegerLiteral(i64),
     /// Float literal: `3.14`.
@@ -425,7 +400,6 @@ pub enum ExprKind {
     /// Date/time literal: `%2024-01-15`, `%2024-01-15T10:30:00`, `%10:30:00`.
     DateLiteral(DateValue),
 
-    // -- Variable reference ------------------------------------------------
     /// Variable reference: `$name`.
     ///
     /// Just a name. Type/multiplicity information lives on [`Parameter`]
@@ -435,7 +409,6 @@ pub enum ExprKind {
         name: SmolStr,
     },
 
-    // -- Function call (covers operators, let, new, arrow) -----------------
     /// Any function call, including desugared operators, `let`, `new`, arrow.
     ///
     /// Operators desugar to: `plus`, `minus`, `times`, `divide`, `equal`,
@@ -444,7 +417,6 @@ pub enum ExprKind {
     /// Arrow `x->filter(p)` becomes `FunctionCall("filter", [x, p])`.
     FunctionCall(FunctionCallData),
 
-    // -- Property access ---------------------------------------------------
     /// Simple property access (`$x.name`). The receiver is
     /// `arguments[0]`; the property name is in `function_name`. Mirrors
     /// Java's `SimpleFunctionExpression` with `_propertyName` set.
@@ -455,7 +427,6 @@ pub enum ExprKind {
     /// with `_qualifiedPropertyName` set.
     QualifiedPropertyCall(FunctionCallData),
 
-    // -- Enum value --------------------------------------------------------
     /// Enum value reference: `MyEnum.VALUE` (after semantic disambiguation).
     EnumValue {
         /// The resolved Enumeration element.
@@ -464,7 +435,6 @@ pub enum ExprKind {
         value: SmolStr,
     },
 
-    // -- Lambda ------------------------------------------------------------
     /// Lambda expression: `{x: String[1] | $x + 'hello'}`.
     Lambda {
         /// Lambda parameters.
@@ -473,14 +443,12 @@ pub enum ExprKind {
         body: Vec<ValueSpec>,
     },
 
-    // -- Collection --------------------------------------------------------
     /// Collection literal: `[1, 2, 3]`.
     Collection {
         /// Elements.
         elements: Vec<ValueSpec>,
     },
 
-    // -- Type reference ----------------------------------------------------
     /// Type reference expression: `@MyType`.
     TypeReference {
         /// The resolved type.
@@ -502,14 +470,12 @@ pub enum ExprKind {
         multiplicity: Multiplicity,
     },
 
-    // -- Element reference (bare) ------------------------------------------
     /// Bare element reference: `String`, `my::Enum`, `MyClass`.
     PackageableElementRef {
         /// The resolved element.
         element: ElementId,
     },
 
-    // -- Relation type literals -------------------------------------------
     /// `@(name:Type[mult], …)` — anonymous relation type at expression
     /// position. Materialises a `meta::pure::metamodel::relation::RelationType`
     /// heap object whose `columns` slot carries one `Column` per spec.
@@ -549,7 +515,6 @@ pub enum ExprKind {
         kind: ColSpecLiteralKind,
     },
 
-    // -- Navigation path literal ------------------------------------------
     /// Navigation path expression: `#/Type/p1/p2(args)/p3!alias#`.
     ///
     /// Materialises a `meta::pure::metamodel::path::Path<U,V|m>` instance
@@ -645,10 +610,6 @@ pub struct RelationColumnLowered {
 /// (`Function.body`, `Constraint.function`, `QualifiedProperty.body`, etc.).
 pub type Expression = ValueSpec;
 
-// ---------------------------------------------------------------------------
-// PrimitiveType
-// ---------------------------------------------------------------------------
-
 /// A primitive type element (String, Integer, Boolean, etc.).
 ///
 /// **Note:** `Any` and `Nil` are *not* primitive types — they are `Class`
@@ -700,10 +661,6 @@ pub struct PrimitiveType {
     /// call-site value. Empty for bootstrap primitives.
     pub constraints: Vec<crate::nodes::class::Constraint>,
 }
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

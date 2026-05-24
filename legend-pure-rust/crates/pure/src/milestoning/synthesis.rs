@@ -108,10 +108,6 @@ pub fn synthesize(model: &mut PureModel, errors: &mut Vec<CompilationError>) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Helpers — target collection
-// ---------------------------------------------------------------------------
-
 fn collect_class_targets(model: &PureModel) -> Vec<(u16, u32)> {
     let mut out: Vec<(u16, u32)> = Vec::new();
     for chunk in &model.chunks {
@@ -135,10 +131,6 @@ fn collect_association_targets(model: &PureModel) -> Vec<(u16, u32)> {
     }
     out
 }
-
-// ---------------------------------------------------------------------------
-// CarrierIds — resolved `*Milestoning` carrier classes
-// ---------------------------------------------------------------------------
 
 /// Resolved `ElementId`s for the three `*Milestoning` carrier classes
 /// declared in `platform/pure/grammar/milestoning.pure`. Each is `Some`
@@ -167,10 +159,6 @@ impl CarrierIds {
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// Phase 1 — class-level date property synthesis
-// ---------------------------------------------------------------------------
 
 fn synthesize_class_dates(
     model: &mut PureModel,
@@ -302,10 +290,6 @@ fn generated_stereotype_ref(milestoning_profile: Option<ElementId>) -> Option<St
     })
 }
 
-// ---------------------------------------------------------------------------
-// Phase 2 — property-rewrite synthesis (Class)
-// ---------------------------------------------------------------------------
-
 fn synthesize_class_property_rewrites(
     model: &mut PureModel,
     chunk_id: u16,
@@ -350,10 +334,6 @@ fn synthesize_class_property_rewrites(
     apply_property_rewrites(class, &owner_name, synth_plans, milestoning_profile, errors);
 }
 
-// ---------------------------------------------------------------------------
-// Phase 3 — property-rewrite synthesis (Association)
-// ---------------------------------------------------------------------------
-
 fn synthesize_association_property_rewrites(
     model: &mut PureModel,
     chunk_id: u16,
@@ -386,10 +366,6 @@ fn synthesize_association_property_rewrites(
     };
     apply_property_rewrites_assoc(assoc, &owner_name, synth_plans, milestoning_profile, errors);
 }
-
-// ---------------------------------------------------------------------------
-// Property-rewrite plan construction (shared between Class + Association)
-// ---------------------------------------------------------------------------
 
 struct PropertyRewritePlan {
     /// Index into the owner's `properties` vec of the original property
@@ -550,10 +526,6 @@ fn apply_property_rewrites_assoc(
     assoc.properties.extend(to_append_props);
     assoc.qualified_properties.extend(to_append_qps);
 }
-
-// ---------------------------------------------------------------------------
-// Per-property synthesis — edge-point + qualified-property signatures
-// ---------------------------------------------------------------------------
 
 #[allow(clippy::too_many_arguments)]
 fn synthesize_for_property(
@@ -739,10 +711,6 @@ fn widen_to_many(mult: &Multiplicity) -> Multiplicity {
         },
     }
 }
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

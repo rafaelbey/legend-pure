@@ -159,10 +159,6 @@ fn skip_chunk(chunk_set: Option<&HashSet<u16>>, chunk_id: u16) -> bool {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Association Validation
-// ---------------------------------------------------------------------------
-
 /// Validates an association's hydrated property list. Inlined into
 /// [`crate::pipeline::hydrate_element_signature`] right after the
 /// association's `properties` are lowered.
@@ -224,10 +220,6 @@ pub(crate) fn validate_association(
     }
 }
 
-// ---------------------------------------------------------------------------
-// Super-type Validation
-// ---------------------------------------------------------------------------
-
 /// Validates class super-types. Inlined into
 /// [`crate::pipeline::hydrate_element_signature`] right after the
 /// class's `super_types` are resolved.
@@ -285,10 +277,6 @@ pub(crate) fn validate_super_types(
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// Access-Level Declaration Shape (Step A) — piecewise
-// ---------------------------------------------------------------------------
 
 /// Step A — multiple `<<access.X>>` stereotypes on a single element.
 /// Inlined into [`crate::pipeline::hydrate_element_signature`] right
@@ -367,10 +355,6 @@ pub(crate) fn validate_no_access_on_properties(
     }
 }
 
-// ---------------------------------------------------------------------------
-// Duplicate Property Validation
-// ---------------------------------------------------------------------------
-
 /// Checks that no two properties in a class share the same name.
 /// Inlined into [`crate::pipeline::hydrate_element_signature`] right
 /// after `properties` are lowered.
@@ -396,10 +380,6 @@ pub(crate) fn validate_duplicate_properties(
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// Property Override Validation (cross-hierarchy)
-// ---------------------------------------------------------------------------
 
 /// Walks every class and checks that every property (simple +
 /// qualified, plus association-injected) in its inheritance closure
@@ -758,10 +738,6 @@ fn emit_property_conflict(
     });
 }
 
-// ---------------------------------------------------------------------------
-// Repo-boundary Visibility Validation
-// ---------------------------------------------------------------------------
-
 /// Walks every cross-repo `ElementId` reference and emits `NotVisible`
 /// errors for each target whose home repo is not in the use-site repo's
 /// declared dependencies. No-op when `model.repo_visibility` is empty,
@@ -811,10 +787,6 @@ fn validate_repo_visibility(
     }
     errors
 }
-
-// ---------------------------------------------------------------------------
-// Repo Pattern Membership Validation
-// ---------------------------------------------------------------------------
 
 /// Walks every chunk's top-level elements and emits
 /// [`CompilationErrorKind::PackageNotInRepoPattern`] for any element
@@ -899,10 +871,6 @@ fn validate_repo_pattern_membership(
     }
     errors
 }
-
-// ---------------------------------------------------------------------------
-// Property Default-Value Validation (T-20260511-01)
-// ---------------------------------------------------------------------------
 
 /// Walks every class and association property whose `default_value`
 /// is `Some(_)` and checks that the lowered expression's inferred
@@ -992,10 +960,6 @@ fn check_property_default(
         });
     }
 }
-
-// ---------------------------------------------------------------------------
-// Constructor Value Binding Validation (T-20260511-03)
-// ---------------------------------------------------------------------------
 
 /// Walks every `^Class(...)` constructor expression in the model and
 /// fires the constructor-binding validators:
@@ -1215,10 +1179,6 @@ where
         _ => {}
     }
 }
-
-// ---------------------------------------------------------------------------
-// Access-Level Validation (private / protected)
-// ---------------------------------------------------------------------------
 
 /// Use-site walker (Step B) for `<<access.private/protected>>`.
 /// Walks every `ElementId` reference inside each non-bootstrap
@@ -1549,10 +1509,6 @@ fn is_same_or_sub_package(model: &PureModel, use_site: PackageId, target: Packag
     }
     false
 }
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

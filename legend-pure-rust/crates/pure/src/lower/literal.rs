@@ -27,10 +27,6 @@ use crate::types::{DateValue, ExprKind, ValueSpec};
 
 use super::untyped;
 
-// ---------------------------------------------------------------------------
-// Literal lowering
-// ---------------------------------------------------------------------------
-
 /// Lowers an AST literal to a `ValueSpec`.
 pub(super) fn lower_literal(lit: &ast_expr::Literal) -> Option<ValueSpec> {
     match lit {
@@ -72,10 +68,6 @@ pub(super) fn lower_literal(lit: &ast_expr::Literal) -> Option<ValueSpec> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Variable lowering
-// ---------------------------------------------------------------------------
-
 /// Lowers a variable reference `$name`.
 pub(super) fn lower_variable(var: &ast_expr::Variable) -> ValueSpec {
     untyped(
@@ -85,10 +77,6 @@ pub(super) fn lower_variable(var: &ast_expr::Variable) -> ValueSpec {
         var.source_info.clone(),
     )
 }
-
-// ---------------------------------------------------------------------------
-// Date / time literal parsing
-// ---------------------------------------------------------------------------
 
 /// Parses `"2024-01-15"`, `"2024-01"`, `"2024"`, or `"%latest"` →
 /// `DateValue::StrictDate` with appropriate precision (`month` / `day`
@@ -234,10 +222,6 @@ fn parse_subsecond_parts(frac: &str) -> (i32, u8) {
     }
     (padded.parse().unwrap_or(0), digits)
 }
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

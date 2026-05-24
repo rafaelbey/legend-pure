@@ -22,10 +22,6 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-// ---------------------------------------------------------------------------
-// ElementId — the universal element reference
-// ---------------------------------------------------------------------------
-
 /// A reference to any element in the Pure model graph.
 ///
 /// In M3, `Package extends PackageableElement` — packages are elements.
@@ -90,10 +86,6 @@ impl ElementId {
     }
 }
 
-// ---------------------------------------------------------------------------
-// PackageId — index into the global package tree
-// ---------------------------------------------------------------------------
-
 /// An index into the global package arena on [`PureModel`](crate::model::PureModel).
 ///
 /// Unlike [`ElementId`], packages are not chunked — they live in a single
@@ -107,10 +99,6 @@ impl fmt::Display for PackageId {
     }
 }
 
-// ---------------------------------------------------------------------------
-// RelationId — index into the structural type interner (Phase 5)
-// ---------------------------------------------------------------------------
-
 /// An index into the relation type interner on `PureModel`.
 ///
 /// Relation types are anonymous structural types (column bags) that are
@@ -123,10 +111,6 @@ impl fmt::Display for RelationId {
         write!(f, "rel:{}", self.0)
     }
 }
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

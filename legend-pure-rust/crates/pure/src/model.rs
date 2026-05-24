@@ -44,10 +44,6 @@ use crate::nodes::profile::Profile;
 use crate::nodes::unit::Unit;
 use crate::types::PrimitiveType;
 
-// ---------------------------------------------------------------------------
-// ElementNode — common metadata for all elements
-// ---------------------------------------------------------------------------
-
 /// Common metadata shared by all elements in the graph.
 ///
 /// This is the equivalent of Java's `PackageableElement` — it provides
@@ -77,10 +73,6 @@ pub struct ElementNode {
     /// The package this element belongs to.
     pub parent_package: PackageId,
 }
-
-// ---------------------------------------------------------------------------
-// Element — the typed payload enum
-// ---------------------------------------------------------------------------
 
 /// A compiled Pure element with all references resolved to IDs.
 ///
@@ -146,10 +138,6 @@ pub enum Element {
     DSLInstance(DSLInstance),
 }
 
-// ---------------------------------------------------------------------------
-// DSLInstance — opaque-bytes payload for DSL-defined elements
-// ---------------------------------------------------------------------------
-
 /// A DSL-defined instance carried opaquely in `Element::DSLInstance`.
 ///
 /// The Pure crate doesn't deserialise `data` — that's the contributing
@@ -173,10 +161,6 @@ pub struct DSLInstance {
     pub data: Vec<u8>,
 }
 
-// ---------------------------------------------------------------------------
-// Package — node in the global package tree
-// ---------------------------------------------------------------------------
-
 /// A node in the global package tree.
 ///
 /// Packages span across chunks — `meta::pure` may contain elements from
@@ -192,10 +176,6 @@ pub struct Package {
     /// Elements in this package (across all chunks).
     pub children_elements: Vec<ElementId>,
 }
-
-// ---------------------------------------------------------------------------
-// ModelChunk — a batch of elements from one source file
-// ---------------------------------------------------------------------------
 
 /// A batch of elements, typically from one parsed source file.
 ///
@@ -241,10 +221,6 @@ impl ModelChunk {
     }
 }
 
-// ---------------------------------------------------------------------------
-// DerivedIndexes — computed post-freeze reverse lookups
-// ---------------------------------------------------------------------------
-
 /// Inverted indexes computed post-freeze in a single O(N) scan.
 ///
 /// Never serialized (`#[serde(skip)]`). Rebuilt after deserialization
@@ -259,10 +235,6 @@ pub struct DerivedIndexes {
     /// reference to the property within the Association's `properties` vec.
     pub association_properties: HashMap<ElementId, Vec<(ElementId, usize)>>,
 }
-
-// ---------------------------------------------------------------------------
-// PureModel — the top-level compiled model
-// ---------------------------------------------------------------------------
 
 /// The compiled Pure semantic graph — equivalent to Java's `PureModel`.
 ///
@@ -435,8 +407,6 @@ impl PureModel {
     pub fn get_package(&self, id: PackageId) -> &Package {
         self.global_packages.get(id.0)
     }
-
-    // -- Derived Index Methods -----------------------------------------------
 
     /// Rebuilds all derived indexes by scanning every element in every chunk.
     ///
@@ -795,10 +765,6 @@ impl Default for PureModel {
         Self::new()
     }
 }
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

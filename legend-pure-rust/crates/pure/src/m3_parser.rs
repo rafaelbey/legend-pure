@@ -48,10 +48,6 @@ use crate::nodes::enumeration::{EnumValue, Enumeration};
 use crate::nodes::profile::Profile;
 use crate::types::Multiplicity;
 
-// ---------------------------------------------------------------------------
-// Public API
-// ---------------------------------------------------------------------------
-
 /// Registration info for one M3 element that was parsed and allocated.
 ///
 /// The caller uses this to wire the element into the package tree
@@ -84,10 +80,6 @@ pub fn parse_m3_into_chunk(
     parser.registrations
 }
 
-// ---------------------------------------------------------------------------
-// Tokens
-// ---------------------------------------------------------------------------
-
 #[derive(Debug, Clone, PartialEq)]
 enum Token {
     Caret,  // ^
@@ -104,10 +96,6 @@ enum Token {
     IntLit(i64),
     Eof,
 }
-
-// ---------------------------------------------------------------------------
-// Tokenizer
-// ---------------------------------------------------------------------------
 
 struct Tokenizer {
     chars: Vec<char>,
@@ -224,10 +212,6 @@ impl Tokenizer {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Parser
-// ---------------------------------------------------------------------------
-
 /// Synthetic source info for bootstrap elements (no real file position).
 fn synthetic_source() -> SourceInfo {
     SourceInfo {
@@ -318,10 +302,6 @@ impl<'a> M3Parser<'a> {
         );
     }
 
-    // -----------------------------------------------------------------------
-    // Top-level file parsing
-    // -----------------------------------------------------------------------
-
     fn parse_file(&mut self) {
         loop {
             match self.peek() {
@@ -334,10 +314,6 @@ impl<'a> M3Parser<'a> {
             }
         }
     }
-
-    // -----------------------------------------------------------------------
-    // Instance declaration: ^ classifier_path name (@ parent_path)? body?
-    // -----------------------------------------------------------------------
 
     fn parse_top_level_instance(&mut self) {
         self.expect(&Token::Caret);
@@ -471,10 +447,6 @@ impl<'a> M3Parser<'a> {
         segments
     }
 
-    // -----------------------------------------------------------------------
-    // Allocator helpers
-    // -----------------------------------------------------------------------
-
     fn alloc_element(
         &mut self,
         name: &SmolStr,
@@ -502,10 +474,6 @@ impl<'a> M3Parser<'a> {
 
         element_id
     }
-
-    // -----------------------------------------------------------------------
-    // Class parsing
-    // -----------------------------------------------------------------------
 
     fn parse_class_body(&mut self, name: &SmolStr, package_segments: &[SmolStr]) {
         use crate::nodes::class::TypeParameter;
@@ -1500,10 +1468,6 @@ impl<'a> M3Parser<'a> {
         }
     }
 
-    // -----------------------------------------------------------------------
-    // Enumeration parsing
-    // -----------------------------------------------------------------------
-
     fn parse_enumeration_body(&mut self, name: &SmolStr, package_segments: &[SmolStr]) {
         let mut values = Vec::new();
 
@@ -1593,10 +1557,6 @@ impl<'a> M3Parser<'a> {
 
         values
     }
-
-    // -----------------------------------------------------------------------
-    // Profile parsing
-    // -----------------------------------------------------------------------
 
     fn parse_profile_body(&mut self, name: &SmolStr, package_segments: &[SmolStr]) {
         let mut stereotypes = Vec::new();
@@ -1698,10 +1658,6 @@ impl<'a> M3Parser<'a> {
         names
     }
 
-    // -----------------------------------------------------------------------
-    // PackageableMultiplicity parsing
-    // -----------------------------------------------------------------------
-
     fn parse_multiplicity_body(&mut self, name: &SmolStr, package_segments: &[SmolStr]) {
         // Map well-known multiplicity names to Multiplicity variants
         let mult = match name.as_str() {
@@ -1726,10 +1682,6 @@ impl<'a> M3Parser<'a> {
             Element::PackageableMultiplicity(mult),
         );
     }
-
-    // -----------------------------------------------------------------------
-    // Utility: path & reference parsing
-    // -----------------------------------------------------------------------
 
     /// Parses a property-assignment path like
     /// `Root.children[...].children[Class].properties[properties]`
@@ -1771,10 +1723,6 @@ impl<'a> M3Parser<'a> {
 
         tail
     }
-
-    // -----------------------------------------------------------------------
-    // Skip helpers
-    // -----------------------------------------------------------------------
 
     /// Skips a balanced `{ ... }` block.
     fn skip_balanced_braces(&mut self) {
@@ -1874,10 +1822,6 @@ impl<'a> M3Parser<'a> {
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

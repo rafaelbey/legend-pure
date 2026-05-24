@@ -33,10 +33,6 @@ use crate::ids::ElementId;
 use crate::model::{Element, PureModel};
 use crate::types::{ConstValue, FunctionCallData, Multiplicity, TypeExpr};
 
-// ---------------------------------------------------------------------------
-// Import Scope — uses the AST Package type directly
-// ---------------------------------------------------------------------------
-
 /// An import package scope entry for resolution.
 ///
 /// Wraps the AST `Package` directly so the resolver can walk the already-
@@ -76,10 +72,6 @@ impl ImportScope {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Resolve Cache — per-section memoization
-// ---------------------------------------------------------------------------
-
 /// Cached result of an unqualified name resolution within a section scope.
 #[derive(Debug, Clone)]
 pub(crate) enum ResolveResult {
@@ -89,10 +81,6 @@ pub(crate) enum ResolveResult {
     /// so subsequent lookups re-emit the correct error kind.
     Failed(CompilationError),
 }
-
-// ---------------------------------------------------------------------------
-// Type Resolution Context
-// ---------------------------------------------------------------------------
 
 /// Everything needed to resolve an AST type reference to a `TypeExpr`.
 ///
@@ -151,10 +139,6 @@ pub(crate) struct ResolutionContext<'a> {
     /// expression lowering not yet implemented" diagnostic).
     pub island_lowerers: &'a [Box<dyn crate::island_lower::IslandLowerer>],
 }
-
-// ---------------------------------------------------------------------------
-// Type Reference Resolution
-// ---------------------------------------------------------------------------
 
 /// Resolves an AST `TypeReference` to a Pure `TypeExpr`.
 ///
@@ -573,10 +557,6 @@ fn resolve_relation_columns(
         .collect()
 }
 
-// ---------------------------------------------------------------------------
-// Core Name Resolution (Import-Aware, Memoized)
-// ---------------------------------------------------------------------------
-
 /// Memoized unqualified name resolution.
 ///
 /// Checks the per-section cache first. On a cache miss, delegates to
@@ -751,10 +731,6 @@ fn resolve_unqualified(
     }
 }
 
-// ---------------------------------------------------------------------------
-// Multiplicity Lowering
-// ---------------------------------------------------------------------------
-
 /// Converts an AST `Multiplicity` to the Pure `Multiplicity`.
 ///
 /// This is a direct 1:1 mapping — the AST and Pure enums are structurally
@@ -804,10 +780,6 @@ pub(crate) fn resolve_multiplicity_with_validation(
     result
 }
 
-// ---------------------------------------------------------------------------
-// Const Value Lowering
-// ---------------------------------------------------------------------------
-
 /// Converts an AST `TypeVariableValue` to a Pure `ConstValue`.
 pub(crate) fn lower_const_value(v: &ast_type::TypeVariableValue) -> ConstValue {
     match v {
@@ -815,10 +787,6 @@ pub(crate) fn lower_const_value(v: &ast_type::TypeVariableValue) -> ConstValue {
         ast_type::TypeVariableValue::String(s, _) => ConstValue::String(s.clone()),
     }
 }
-
-// ---------------------------------------------------------------------------
-// Annotation Resolution
-// ---------------------------------------------------------------------------
 
 /// Resolves AST `StereotypePtr` references to Pure `StereotypeRef`s.
 ///
@@ -1307,10 +1275,6 @@ fn collect_unresolved_param_reads(
         _ => {}
     }
 }
-
-// ---------------------------------------------------------------------------
-// Type-based dispatch helpers
-// ---------------------------------------------------------------------------
 
 /// Infers a type `ElementId` from a lowered `ValueSpec` by examining
 /// its `ExprKind` structure. Returns `None` for expressions whose type
@@ -2524,10 +2488,6 @@ pub(crate) fn infer_multiplicity_from_valuespec(
         _ => None,
     }
 }
-
-// ---------------------------------------------------------------------------
-// Generic substitution (type variables + multiplicity variables)
-// ---------------------------------------------------------------------------
 
 // `GenericBindings` lives in `crate::inference::context`. The
 // re-export here keeps the existing `crate::resolve::GenericBindings`
@@ -4102,10 +4062,6 @@ fn any_arg_reads_unresolved(args: &[crate::types::ValueSpec], var_types: &VarTyp
     }
     false
 }
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

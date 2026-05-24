@@ -38,10 +38,6 @@ use crate::types::{
     ValueSpec,
 };
 
-// ---------------------------------------------------------------------------
-// Scope — variable type tracking
-// ---------------------------------------------------------------------------
-
 /// A lexical scope for variable bindings during type inference.
 ///
 /// Function parameters initialize the root scope. `let` bindings and
@@ -84,10 +80,6 @@ impl Scope {
         self.bindings.push((name, inferred));
     }
 }
-
-// ---------------------------------------------------------------------------
-// Inference context
-// ---------------------------------------------------------------------------
 
 /// Accumulates inferred types and errors during a single function's inference.
 struct InferCtx<'a> {
@@ -137,10 +129,6 @@ impl InferCtx<'_> {
         self.scopes.pop();
     }
 }
-
-// ---------------------------------------------------------------------------
-// Public API
-// ---------------------------------------------------------------------------
 
 /// Infers types for all expressions in a function body.
 ///
@@ -268,16 +256,11 @@ fn walk_type_for_generics(
     }
 }
 
-// ---------------------------------------------------------------------------
-// Bottom-up inference
-// ---------------------------------------------------------------------------
-
 /// Infers the type of a single expression, setting its `type_info` and
 /// returning a clone of the resolved type.
 #[allow(clippy::too_many_lines)]
 fn infer_expr(ctx: &mut InferCtx<'_>, expr: &mut ValueSpec) -> Option<ResolvedType> {
     let result = match &mut *expr.kind {
-        // -- Literals -------------------------------------------------------
         ExprKind::IntegerLiteral(_) => Some(primitive(bootstrap::INTEGER_ID)),
         ExprKind::FloatLiteral(_) => Some(primitive(bootstrap::FLOAT_ID)),
         ExprKind::DecimalLiteral(_) => Some(primitive(bootstrap::DECIMAL_ID)),
@@ -285,7 +268,6 @@ fn infer_expr(ctx: &mut InferCtx<'_>, expr: &mut ValueSpec) -> Option<ResolvedTy
         ExprKind::BooleanLiteral(_) => Some(primitive(bootstrap::BOOLEAN_ID)),
         ExprKind::DateLiteral(dv) => Some(date_literal_type(dv)),
 
-        // -- Variable -------------------------------------------------------
         ExprKind::Variable { name } => {
             let resolved = ctx.lookup_var(name).cloned();
             if resolved.is_none() {
@@ -308,7 +290,6 @@ fn infer_expr(ctx: &mut InferCtx<'_>, expr: &mut ValueSpec) -> Option<ResolvedTy
             resolved
         }
 
-        // -- Function call --------------------------------------------------
         //
         // Overload-by-signature dispatch via `infer_function_call`.
         ExprKind::FunctionCall(FunctionCallData {
@@ -345,7 +326,6 @@ fn infer_expr(ctx: &mut InferCtx<'_>, expr: &mut ValueSpec) -> Option<ResolvedTy
             return set_and_return(expr, result);
         }
 
-        // -- Property / qualified-property call ----------------------------
         //
         // `arguments[0]` is the receiver; for QP, `arguments[1..]` are
         // the QP arguments. Resolution is class-property lookup, not
@@ -366,7 +346,6 @@ fn infer_expr(ctx: &mut InferCtx<'_>, expr: &mut ValueSpec) -> Option<ResolvedTy
             return infer_property_or_qp_call(ctx, expr);
         }
 
-        // -- Enum value -----------------------------------------------------
         ExprKind::EnumValue { enum_element, .. } => Some(ResolvedType {
             type_expr: TypeExpr::Named {
                 element: *enum_element,
@@ -378,7 +357,6 @@ fn infer_expr(ctx: &mut InferCtx<'_>, expr: &mut ValueSpec) -> Option<ResolvedTy
             multiplicity: Multiplicity::PureOne,
         }),
 
-        // -- Lambda ---------------------------------------------------------
         ExprKind::Lambda { parameters, body } => {
             // Push a child scope with lambda parameters
             ctx.push_scope(Scope::from_params(parameters));
@@ -423,7 +401,6 @@ fn infer_expr(ctx: &mut InferCtx<'_>, expr: &mut ValueSpec) -> Option<ResolvedTy
             })
         }
 
-        // -- Collection -----------------------------------------------------
         ExprKind::Collection { elements } => {
             let elem_types: Vec<Option<ResolvedType>> =
                 elements.iter_mut().map(|e| infer_expr(ctx, e)).collect();
@@ -502,13 +479,11 @@ fn infer_expr(ctx: &mut InferCtx<'_>, expr: &mut ValueSpec) -> Option<ResolvedTy
             })
         }
 
-        // -- Type reference -------------------------------------------------
         ExprKind::TypeReference { type_expr: te } => Some(ResolvedType {
             type_expr: te.clone(),
             multiplicity: Multiplicity::PureOne,
         }),
 
-        // -- Multiplicity reference -----------------------------------------
         // `@[m]` already has eager `type_info = Any[m]` set at lowering
         // time (`lower_multiplicity_reference`); pass through whatever
         // the lowering pinned. Fallback for safety only.
@@ -523,7 +498,6 @@ fn infer_expr(ctx: &mut InferCtx<'_>, expr: &mut ValueSpec) -> Option<ResolvedTy
             multiplicity: multiplicity.clone(),
         }),
 
-        // -- Element reference ----------------------------------------------
         //
         // A bare element reference's *type* is its M3 metatype, not
         // the element itself. `Class<Foo>` referenced as a value has
@@ -557,7 +531,6 @@ fn infer_expr(ctx: &mut InferCtx<'_>, expr: &mut ValueSpec) -> Option<ResolvedTy
             })
         }
 
-        // -- Relation literals ----------------------------------------------
         // Mirror the lowering-time `type_info` so dispatch builds the right
         // mangled FQN regardless of whether the literal is consumed before
         // or after Pass 2.5.
@@ -631,7 +604,6 @@ fn infer_expr(ctx: &mut InferCtx<'_>, expr: &mut ValueSpec) -> Option<ResolvedTy
                 })
         }
 
-        // -- Path literal ---------------------------------------------------
         // Stage 3 minimum: type as a bare `Path` instance. Full
         // `Path<U,V|m>` parametric inference (chain return type +
         // multiplicity product) is deferred — would require walking
@@ -680,10 +652,6 @@ fn set_and_return(expr: &mut ValueSpec, result: Option<ResolvedType>) -> Option<
     }
     result
 }
-
-// ---------------------------------------------------------------------------
-// Function call type inference
-// ---------------------------------------------------------------------------
 
 /// Infers the return type of a function call.
 /// Flattens the `InferCtx` scope chain (innermost-last winner) into a
@@ -1063,10 +1031,6 @@ fn infer_builtin_return_type(
         _ => None,
     }
 }
-
-// ---------------------------------------------------------------------------
-// Property access type inference
-// ---------------------------------------------------------------------------
 
 /// Outcome of resolving `target.property` against the type model.
 enum PropertyLookup {
@@ -2007,10 +1971,6 @@ fn render_multiplicity(m: &Multiplicity) -> String {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
 /// Creates a `ResolvedType` for a primitive type with multiplicity `[1]`.
 fn primitive(element_id: crate::ids::ElementId) -> ResolvedType {
     ResolvedType {
@@ -2197,10 +2157,6 @@ fn date_literal_type(dv: &DateValue) -> ResolvedType {
         DateValue::Latest => primitive(bootstrap::DATE_ID),
     }
 }
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

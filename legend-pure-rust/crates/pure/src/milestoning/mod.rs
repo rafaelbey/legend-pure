@@ -205,10 +205,6 @@ impl MilestoningStereotype {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Name helpers
-// ---------------------------------------------------------------------------
-
 /// Edge-point property name for a milestoned-target property: `p` →
 /// `pAllVersions`. Java parity:
 /// `MilestoningFunctions.getEdgePointPropertyName`.
@@ -237,10 +233,6 @@ pub fn reserved_property_names_for(s: MilestoningStereotype) -> Vec<&'static str
     out.extend_from_slice(s.milestoning_property_names());
     out
 }
-
-// ---------------------------------------------------------------------------
-// Stereotype-lookup helpers
-// ---------------------------------------------------------------------------
 
 /// Resolve the FQN of the `temporal` profile in this model. Returns `None`
 /// when the platform isn't loaded yet (e.g. the bootstrap chunk on its own
@@ -310,10 +302,6 @@ pub fn inherited_temporal_stereotype(
     }
     None
 }
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

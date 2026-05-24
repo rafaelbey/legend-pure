@@ -27,10 +27,6 @@ use std::sync::Arc;
 use crate::annotations::{StereotypeRef, TaggedValueRef};
 use crate::types::{Expression, Multiplicity, Parameter, TypeExpr};
 
-// ---------------------------------------------------------------------------
-// Variance
-// ---------------------------------------------------------------------------
-
 /// Variance of a class type-parameter slot. Mirrors Java's
 /// `TypeParameter.contravariant` flag (the metamodel-level form) and
 /// the surface syntax `<-T>` / `<+T>` (the class-level form). Default
@@ -59,10 +55,6 @@ pub enum Variance {
     /// `NewPropertyRouteNodeFunctionDefinition`.
     Contravariant,
 }
-
-// ---------------------------------------------------------------------------
-// TypeParameter
-// ---------------------------------------------------------------------------
 
 /// A single type-parameter slot on a parametric class.
 ///
@@ -110,10 +102,6 @@ impl TypeParameter {
         Self { name, variance }
     }
 }
-
-// ---------------------------------------------------------------------------
-// Class
-// ---------------------------------------------------------------------------
 
 /// A compiled class definition.
 ///
@@ -185,10 +173,6 @@ impl Class {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Property
-// ---------------------------------------------------------------------------
-
 /// Aggregation kind for properties.
 ///
 /// Mirrors `ast::AggregationKind`. Most properties have no aggregation.
@@ -225,10 +209,6 @@ pub struct Property {
     pub tagged_values: Vec<TaggedValueRef>,
 }
 
-// ---------------------------------------------------------------------------
-// QualifiedProperty
-// ---------------------------------------------------------------------------
-
 /// A compiled qualified (derived) property.
 ///
 /// Reused by both Class and Association.
@@ -256,10 +236,6 @@ pub struct QualifiedProperty {
     /// Tagged values on this qualified property.
     pub tagged_values: Vec<TaggedValueRef>,
 }
-
-// ---------------------------------------------------------------------------
-// Constraint
-// ---------------------------------------------------------------------------
 
 /// A compiled class constraint.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

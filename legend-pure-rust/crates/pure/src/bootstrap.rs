@@ -47,10 +47,6 @@ use crate::model::{Element, ElementNode, ModelChunk};
 use crate::nodes::class::Class;
 use crate::types::PrimitiveType;
 
-// ---------------------------------------------------------------------------
-// Well-known ElementIds (deterministic, compile-time constants)
-// ---------------------------------------------------------------------------
-
 /// The bootstrap chunk ID.
 pub const BOOTSTRAP_CHUNK_ID: u16 = 0;
 
@@ -130,10 +126,6 @@ pub const DATE_TIME_ID: ElementId = ElementId::InstanceId {
     chunk_id: 0,
     local_idx: 12,
 };
-
-// ---------------------------------------------------------------------------
-// Bootstrap types — ordered lists for chunk construction
-// ---------------------------------------------------------------------------
 
 /// The well-known primitive types with their inheritance edges.
 ///
@@ -286,10 +278,6 @@ fn build_template() -> BootstrapTemplate {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Bootstrap chunk construction
-// ---------------------------------------------------------------------------
-
 /// Creates the bootstrap `ModelChunk` (`chunk_id` = 0) containing all
 /// well-known types: `Any` (top class), `Nil` (bottom class), the
 /// 11 primitive types, and M3 metamodel elements parsed from `m3.pure`.
@@ -328,10 +316,6 @@ pub fn create_bootstrap_chunk(root_package: PackageId) -> (ModelChunk, Vec<M3Reg
         template.registrations.clone(),
     )
 }
-
-// ---------------------------------------------------------------------------
-// Metatype lookup
-// ---------------------------------------------------------------------------
 
 /// Returns the M3 metatype element for a compiled element.
 ///
@@ -413,10 +397,6 @@ pub fn register_m3_packages(model: &mut crate::model::PureModel, registrations: 
         model.register_element(package_id, element_id);
     }
 }
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

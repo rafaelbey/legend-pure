@@ -148,10 +148,6 @@ fn element_stereotypes(element: &Element) -> &[StereotypeRef] {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Descriptor rendering
-// ---------------------------------------------------------------------------
-
 /// Render the Java-shape descriptor used in the `"X is not accessible in
 /// Y"` diagnostic. For functions this is
 /// `pkg::name(Type[mult], …):Return[mult]`; for everything else it's the

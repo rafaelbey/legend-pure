@@ -56,10 +56,6 @@ use crate::nodes::unit::Unit;
 use crate::resolve::{self, ResolutionContext};
 use crate::types::{Multiplicity, Parameter, PrimitiveType, TypeExpr};
 
-// ---------------------------------------------------------------------------
-// Public API
-// ---------------------------------------------------------------------------
-
 /// A partial compilation result: the best-effort model plus accumulated errors.
 ///
 /// Returned in the `Err` variant of [`compile()`] when errors occur. Unlike
@@ -468,10 +464,6 @@ pub fn finalize_model(
     errors
 }
 
-// ---------------------------------------------------------------------------
-// Incremental recompile (T-20260513-01 Phase 1)
-// ---------------------------------------------------------------------------
-
 /// Result of an incremental recompile: the mutated model, accumulated
 /// errors across the rebuilt chunks, and the chunk-ids that re-ran
 /// (sorted for test determinism).
@@ -729,10 +721,6 @@ macro_rules! compile {
     };
 }
 
-// ---------------------------------------------------------------------------
-// Declaration — a record of what was declared
-// ---------------------------------------------------------------------------
-
 /// A single declared element, linking its AST source to its assigned ID.
 #[derive(Debug, Clone)]
 struct Declaration {
@@ -754,10 +742,6 @@ struct UnitMapping {
     /// Non-canonical unit `ElementId`s, in order.
     non_canonical: Vec<ElementId>,
 }
-
-// ---------------------------------------------------------------------------
-// Pass 1: Declaration
-// ---------------------------------------------------------------------------
 
 /// Pass 1 — assigns `ElementId`s, allocates element shells, and builds the
 /// package tree.
@@ -1296,10 +1280,6 @@ fn allocate_unit_shells(
     }
 }
 
-// ---------------------------------------------------------------------------
-// Pass 1.5: Topological Sort (Hard Dependencies)
-// ---------------------------------------------------------------------------
-
 /// Pass 1.5 — builds a dependency DAG from supertypes and sorts via Kahn's algorithm.
 ///
 /// Returns an ordered list of element IDs safe for definition.
@@ -1406,10 +1386,6 @@ fn extract_hard_dependencies(
         _ => vec![],
     }
 }
-
-// ---------------------------------------------------------------------------
-// Pass 2: Definition
-// ---------------------------------------------------------------------------
 
 /// Pass 2a — hydrates shells in topological order, resolving everything
 /// EXCEPT function expression bodies. Returns the lookup maps and caches
@@ -1856,10 +1832,6 @@ fn build_import_scope(
 
     scope
 }
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 
 /// Creates an empty shell for an AST element.
 #[allow(clippy::too_many_lines)] // dispatch table over every Element variant
@@ -2332,10 +2304,6 @@ fn hydrate_element_signature(
     }
 }
 
-// ---------------------------------------------------------------------------
-// Property Lowering Helpers
-// ---------------------------------------------------------------------------
-
 /// Lowers AST properties to Pure properties — **signatures only**.
 ///
 /// Default-value expressions are body-shape and need every native function
@@ -2756,10 +2724,6 @@ fn get_ast_element<'a>(source_files: &'a [SourceFile], decl: &Declaration) -> &'
     &source_files[decl.file_idx].sections[decl.section_idx].elements[decl.element_idx]
 }
 
-// ---------------------------------------------------------------------------
-// Pass 2.5 — Type Inference
-// ---------------------------------------------------------------------------
-
 /// Runs bottom-up type inference over all function and qualified property bodies.
 ///
 /// For each function, infers types for every expression in the body and sets
@@ -2988,10 +2952,6 @@ fn pass_infer(
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
