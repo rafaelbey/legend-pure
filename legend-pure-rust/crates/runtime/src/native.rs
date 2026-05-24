@@ -61,10 +61,6 @@ use crate::error::{PureException, PureRuntimeError};
 use crate::heap::RuntimeHeap;
 use crate::value::Value;
 
-// ---------------------------------------------------------------------------
-// Evaluated — forced-expression carrier
-// ---------------------------------------------------------------------------
-
 /// The result of forcing a Pure `ValueSpec`.
 ///
 /// `Evaluated` wraps a runtime [`Value`] and carves out a place for the
@@ -148,10 +144,6 @@ impl From<Value> for Evaluated {
         Self { value }
     }
 }
-
-// ---------------------------------------------------------------------------
-// EvalContextTrait — expression activator
-// ---------------------------------------------------------------------------
 
 /// Type-erased handle to the evaluator, passed to native functions.
 ///
@@ -292,10 +284,6 @@ pub trait EvalContextTrait {
     }
 }
 
-// ---------------------------------------------------------------------------
-// NativeFunction trait
-// ---------------------------------------------------------------------------
-
 /// A native (built-in) Pure function implemented in Rust.
 ///
 /// Each native is a zero-sized struct implementing this trait. The evaluator
@@ -325,10 +313,6 @@ pub trait NativeFunction: fmt::Debug {
         ctx: &mut dyn EvalContextTrait,
     ) -> Result<Evaluated, PureException>;
 }
-
-// ---------------------------------------------------------------------------
-// NativeRegistry
-// ---------------------------------------------------------------------------
 
 /// Registry of native functions, keyed by mangled function FQN.
 ///
@@ -438,10 +422,6 @@ impl fmt::Debug for NativeRegistry {
             .finish()
     }
 }
-
-// ---------------------------------------------------------------------------
-// RuntimeExtension — plugin SPI for downstream native packages
-// ---------------------------------------------------------------------------
 
 /// Plugin contract for registering additional native functions into a
 /// [`NativeRegistry`].
@@ -592,10 +572,6 @@ impl NativeRegistry {
     }
 }
 
-// ---------------------------------------------------------------------------
-// RUNTIME_EXTENSIONS — distributed slice for self-registering extensions
-// ---------------------------------------------------------------------------
-
 /// Distributed slice into which each [`RuntimeExtension`]-providing
 /// crate registers its top-level extension instance.
 ///
@@ -620,10 +596,6 @@ impl NativeRegistry {
 /// the [`crate::extensions::ExtensionStateStore`] per-evaluator.
 #[distributed_slice]
 pub static RUNTIME_EXTENSIONS: [&'static (dyn RuntimeExtension + Sync)] = [..];
-
-// ---------------------------------------------------------------------------
-// Argument validation helpers
-// ---------------------------------------------------------------------------
 
 /// Validate that exactly `n` arguments were provided.
 ///
@@ -708,10 +680,6 @@ pub fn force_thunk(
     ctx.evaluate(spec)
 }
 
-// ===========================================================================
-// Native function modules
-// ===========================================================================
-
 /// Arithmetic native functions: `plus`, `minus`, `times`, `divide`, etc.
 pub mod arithmetic;
 
@@ -755,10 +723,6 @@ pub mod datetime;
 /// Relation natives: `addColumns` and (future) related operators on
 /// `RelationType` / `Column` / `ColSpecArray` heap shapes.
 pub mod relation;
-
-// ---------------------------------------------------------------------------
-// Test helpers — literal ValueSpec builders + MockCtx
-// ---------------------------------------------------------------------------
 
 /// Construct a [`ValueSpec`] wrapping an [`IntegerLiteral`](ExprKind::IntegerLiteral).
 #[cfg(test)]
@@ -905,10 +869,6 @@ impl EvalContextTrait for MockCtx {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -966,8 +926,6 @@ mod tests {
         assert!(expect_min_args("test", &args, 1).is_ok());
         assert!(expect_min_args("test", &args, 2).is_err());
     }
-
-    // -- discovered() + merge_extensions() ------------------------------
 
     #[derive(Debug)]
     struct ExtA;

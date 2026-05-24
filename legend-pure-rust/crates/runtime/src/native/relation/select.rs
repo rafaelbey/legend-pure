@@ -77,10 +77,6 @@ impl NativeFunction for SelectColSpecArray {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Name extraction
-// ---------------------------------------------------------------------------
-
 #[allow(clippy::result_large_err)]
 fn read_col_spec_name(
     args: &[ValueSpec],
@@ -137,10 +133,6 @@ fn read_col_spec_array_names(
     }
     Ok(out)
 }
-
-// ---------------------------------------------------------------------------
-// Projection (shared)
-// ---------------------------------------------------------------------------
 
 #[allow(clippy::result_large_err)]
 fn project_tds(

@@ -26,10 +26,6 @@ use crate::native::{
 };
 use crate::value::{MapState, Value, ValueKey};
 
-// ---------------------------------------------------------------------------
-// size
-// ---------------------------------------------------------------------------
-
 /// Pure `size(Any[*]): Integer[1]` — number of elements in a collection.
 #[derive(Debug)]
 pub struct Size;
@@ -48,10 +44,6 @@ impl NativeFunction for Size {
     }
 }
 
-// ---------------------------------------------------------------------------
-// isEmpty
-// ---------------------------------------------------------------------------
-
 /// Pure `isEmpty(Any[*]): Boolean[1]`
 #[derive(Debug)]
 pub struct IsEmpty;
@@ -67,10 +59,6 @@ impl NativeFunction for IsEmpty {
         Ok(Evaluated::new(Value::Boolean(values[0].is_empty())))
     }
 }
-
-// ---------------------------------------------------------------------------
-// at
-// ---------------------------------------------------------------------------
 
 /// Pure `at(Any[*], Integer[1]): Any[1]` — element at index.
 ///
@@ -109,10 +97,6 @@ impl NativeFunction for At {
         })
     }
 }
-
-// ---------------------------------------------------------------------------
-// first / last
-// ---------------------------------------------------------------------------
 
 /// Pure `first(Any[*]): Any[0..1]` — first element or Unit.
 #[derive(Debug)]
@@ -192,10 +176,6 @@ impl NativeFunction for Init {
     }
 }
 
-// ---------------------------------------------------------------------------
-// tail
-// ---------------------------------------------------------------------------
-
 /// Pure `tail<T>(set:T[*]):T[*]`
 ///
 /// Returns everything but the first element. Mirror of [`Init`] (which
@@ -228,10 +208,6 @@ impl NativeFunction for Tail {
         Ok(Evaluated::new(result))
     }
 }
-
-// ---------------------------------------------------------------------------
-// zip
-// ---------------------------------------------------------------------------
 
 /// Pure `zip<T,U>(set1:T[*], set2:U[*]):Pair<T,U>[*]`
 ///
@@ -275,10 +251,6 @@ fn collection_as_vec(v: &Value) -> Vec<Value> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// values (Map)
-// ---------------------------------------------------------------------------
-
 /// Pure `values<U,V>(m:Map<U,V>[1]):V[*]`
 ///
 /// Returns the values stored in the map as a flat collection. Iteration
@@ -305,10 +277,6 @@ impl NativeFunction for Values {
         Ok(Evaluated::new(Value::from_vec(snapshot)))
     }
 }
-
-// ---------------------------------------------------------------------------
-// range
-// ---------------------------------------------------------------------------
 
 /// Pure `range(Integer[1], Integer[1], Integer[1]): Integer[*]`
 /// Pure `range(Integer[1], Integer[1]): Integer[*]` — step defaults to 1
@@ -366,10 +334,6 @@ impl NativeFunction for Range {
     }
 }
 
-// ---------------------------------------------------------------------------
-// take / drop
-// ---------------------------------------------------------------------------
-
 /// Pure `take(Any[*], Integer[1]): Any[*]` — first N elements.
 #[derive(Debug)]
 pub struct Take;
@@ -410,10 +374,6 @@ impl NativeFunction for Drop {
     }
 }
 
-// ---------------------------------------------------------------------------
-// concatenate
-// ---------------------------------------------------------------------------
-
 /// Pure `concatenate(Any[*], Any[*]): Any[*]` — concatenate two collections.
 #[derive(Debug)]
 pub struct Concatenate;
@@ -432,10 +392,6 @@ impl NativeFunction for Concatenate {
         Ok(Evaluated::new(Value::Collection(Box::new(a))))
     }
 }
-
-// ---------------------------------------------------------------------------
-// map (lambda-dependent)
-// ---------------------------------------------------------------------------
 
 /// Pure `map(T[*], Function<{T[1]->V[1]}>[1]): V[*]`
 ///
@@ -475,10 +431,6 @@ impl NativeFunction for Map {
     }
 }
 
-// ---------------------------------------------------------------------------
-// filter (lambda-dependent)
-// ---------------------------------------------------------------------------
-
 /// Pure `filter(T[*], Function<{T[1]->Boolean[1]}>[1]): T[*]`
 ///
 /// Filters a collection using a boolean predicate.
@@ -507,10 +459,6 @@ impl NativeFunction for Filter {
     }
 }
 
-// ---------------------------------------------------------------------------
-// fold (lambda-dependent)
-// ---------------------------------------------------------------------------
-
 /// Pure `fold(T[*], Function<{T[1],V[m]->V[m]}>[1], V[m]): V[m]`
 ///
 /// Accumulates a collection into a single value using a binary function.
@@ -535,10 +483,6 @@ impl NativeFunction for Fold {
         Ok(Evaluated::new(accumulator))
     }
 }
-
-// ---------------------------------------------------------------------------
-// exists (lambda-dependent)
-// ---------------------------------------------------------------------------
 
 /// Pure `exists<T>(value:T[*], func:Function<{T[1]->Boolean[1]}>[1]):Boolean[1]`
 ///
@@ -568,10 +512,6 @@ impl NativeFunction for Exists {
     }
 }
 
-// ---------------------------------------------------------------------------
-// forAll (lambda-dependent)
-// ---------------------------------------------------------------------------
-
 /// Pure `forAll<T>(value:T[*], func:Function<{T[1]->Boolean[1]}>[1]):Boolean[1]`
 ///
 /// Returns `true` iff every element satisfies the predicate. For an empty
@@ -599,10 +539,6 @@ impl NativeFunction for ForAll {
         Ok(Evaluated::new(Value::Boolean(true)))
     }
 }
-
-// ---------------------------------------------------------------------------
-// removeDuplicates (non-lambda variant)
-// ---------------------------------------------------------------------------
 
 /// Pure `removeDuplicates<T,V>(col:T[*], key:Function<{T[1]->V[1]}>[0..1],
 /// eql:Function<{V[1],V[1]->Boolean[1]}>[0..1]):T[*]`.
@@ -696,10 +632,6 @@ fn is_empty_optional(v: &Value) -> bool {
     }
 }
 
-// ---------------------------------------------------------------------------
-// toOne
-// ---------------------------------------------------------------------------
-
 /// Pure `toOne<T>(values:T[*]):T[1]` / `toOne<T>(values:T[0..1]):T[1]`
 ///
 /// Asserts the collection contains exactly one element and returns that
@@ -728,10 +660,6 @@ impl NativeFunction for ToOne {
         Ok(Evaluated::new(values[0].to_one()?.clone()))
     }
 }
-
-// ---------------------------------------------------------------------------
-// toOneMany
-// ---------------------------------------------------------------------------
 
 /// Pure `toOneMany<T>(values:T[*]):T[1..*]` /
 /// `toOneMany<T>(values:T[*], message:String[1]):T[1..*]`
@@ -770,10 +698,6 @@ impl NativeFunction for ToOneMany {
         Ok(Evaluated::new(values[0].clone()))
     }
 }
-
-// ---------------------------------------------------------------------------
-// toMultiplicity
-// ---------------------------------------------------------------------------
 
 /// Pure `toMultiplicity<T|z>(source:T[*], object:Any[z]):T[z]`
 ///
@@ -874,10 +798,6 @@ fn expect_args_spec(name: &str, args: &[ValueSpec], expected: usize) -> Result<(
     }
 }
 
-// ---------------------------------------------------------------------------
-// isNotEmpty
-// ---------------------------------------------------------------------------
-
 /// Pure `isNotEmpty(Any[*]):Boolean[1]`
 ///
 /// Counterpart of `isEmpty` — returns `true` when the collection has at least
@@ -896,10 +816,6 @@ impl NativeFunction for IsNotEmpty {
         Ok(Evaluated::new(Value::Boolean(!values[0].is_empty())))
     }
 }
-
-// ---------------------------------------------------------------------------
-// contains (collection)
-// ---------------------------------------------------------------------------
 
 /// Pure `contains<T>(T[*], Any[1]): Boolean[1]`
 ///
@@ -926,10 +842,6 @@ impl NativeFunction for Contains {
     }
 }
 
-// ---------------------------------------------------------------------------
-// reverse
-// ---------------------------------------------------------------------------
-
 /// Pure `reverse<T|m>(T[m]): T[m]`
 ///
 /// Returns the input collection in reverse order. A scalar input is
@@ -951,10 +863,6 @@ impl NativeFunction for Reverse {
         Ok(Evaluated::new(Value::from_vec(reversed)))
     }
 }
-
-// ---------------------------------------------------------------------------
-// indexOf
-// ---------------------------------------------------------------------------
 
 /// Pure `indexOf<T>(T[*], T[1]): Integer[1]`
 ///
@@ -986,10 +894,6 @@ impl NativeFunction for IndexOf {
     }
 }
 
-// ---------------------------------------------------------------------------
-// find (lambda-dependent)
-// ---------------------------------------------------------------------------
-
 /// Pure `find<T>(T[*], Function<{T[1]->Boolean[1]}>[1]): T[0..1]`
 ///
 /// Returns the first element for which the predicate returns `true`, or
@@ -1017,10 +921,6 @@ impl NativeFunction for Find {
         Ok(Evaluated::new(Value::Unit))
     }
 }
-
-// ---------------------------------------------------------------------------
-// add (append / insert)
-// ---------------------------------------------------------------------------
 
 /// Pure `add<T|m>(T[m], T[1]): T[$1_MANY$]`
 /// Pure `add<T|m>(T[m], Integer[1], T[1]): T[$1_MANY$]`
@@ -1062,10 +962,6 @@ impl NativeFunction for Add {
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// slice
-// ---------------------------------------------------------------------------
 
 /// Pure `slice<T>(T[*], Integer[1], Integer[1]): T[*]`
 ///
@@ -1122,10 +1018,6 @@ impl NativeFunction for Slice {
         Ok(Evaluated::new(Value::from_vec(out)))
     }
 }
-
-// ---------------------------------------------------------------------------
-// sort
-// ---------------------------------------------------------------------------
 
 /// Default comparator used by [`Sort`] when no user-supplied comparator
 /// is provided. Routes through [`crate::native::comparison::compare_values`]
@@ -1224,10 +1116,6 @@ fn lambda_or_none(v: &Value) -> Option<&Value> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// removeAllOptimized
-// ---------------------------------------------------------------------------
-
 /// Pure `removeAllOptimized<T>(T[*], T[*]): T[*]`
 ///
 /// Returns a new collection containing the elements of the first argument
@@ -1261,10 +1149,6 @@ impl NativeFunction for RemoveAllOptimized {
         Ok(Evaluated::new(Value::from_vec(out)))
     }
 }
-
-// ---------------------------------------------------------------------------
-// Map primitives: newMap / get / keys
-// ---------------------------------------------------------------------------
 
 /// Coerce a runtime [`Value`] into a hashable [`ValueKey`].
 ///
@@ -1844,10 +1728,6 @@ fn pair_first_second(
     Ok((k.clone(), v.clone()))
 }
 
-// ---------------------------------------------------------------------------
-// replaceTreeNode
-// ---------------------------------------------------------------------------
-
 /// Pure `replaceTreeNode(root:TreeNode[1], target:TreeNode[1], value:TreeNode[1]):TreeNode[1]`.
 ///
 /// Walks the `root` tree (via `TreeNode.childrenData`) and produces a
@@ -1995,10 +1875,6 @@ fn clone_tree_node(
     Ok((new_node, true))
 }
 
-// ---------------------------------------------------------------------------
-// Registration
-// ---------------------------------------------------------------------------
-
 /// Register all collection native functions.
 pub fn register(registry: &mut NativeRegistry) {
     // Non-lambda collection operations
@@ -2091,10 +1967,6 @@ pub fn register(registry: &mut NativeRegistry) {
     registry.register("groupBy_X_MANY__Function_1__Map_1_", GroupBy);
     registry.register("getMapStats_Map_1__MapStats_$0_1$_", GetMapStats);
 }
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
@@ -2408,10 +2280,6 @@ mod tests {
         assert_eq!(result, int_collection(&[1, 2]));
     }
 
-    // -----------------------------------------------------------------------
-    // contains
-    // -----------------------------------------------------------------------
-
     #[test]
     fn contains_finds_element() {
         assert_eq!(
@@ -2449,10 +2317,6 @@ mod tests {
     fn contains_wrong_arg_count() {
         assert!(Contains.execute(&[int_spec(&[1])], &mut MockCtx).is_err());
     }
-
-    // -----------------------------------------------------------------------
-    // reverse
-    // -----------------------------------------------------------------------
 
     #[test]
     fn reverse_multi_element() {
@@ -2492,10 +2356,6 @@ mod tests {
         assert!(Reverse.execute(&[], &mut MockCtx).is_err());
     }
 
-    // -----------------------------------------------------------------------
-    // indexOf
-    // -----------------------------------------------------------------------
-
     #[test]
     fn index_of_found() {
         assert_eq!(
@@ -2534,10 +2394,6 @@ mod tests {
         assert!(IndexOf.execute(&[lit_int(1)], &mut MockCtx).is_err());
     }
 
-    // -----------------------------------------------------------------------
-    // find (lambda-dependent)
-    // -----------------------------------------------------------------------
-
     // Happy-path `find` exercises the lambda-capable context; covered by
     // `eval_find_returns_first_match` in `tests/eval_tests.rs`.
 
@@ -2545,10 +2401,6 @@ mod tests {
     fn find_wrong_arg_count() {
         assert!(Find.execute(&[int_spec(&[1])], &mut MockCtx).is_err());
     }
-
-    // -----------------------------------------------------------------------
-    // add (append)
-    // -----------------------------------------------------------------------
 
     #[test]
     fn add_appends_to_collection() {
@@ -2584,10 +2436,6 @@ mod tests {
     fn add_wrong_arg_count() {
         assert!(Add.execute(&[lit_int(1)], &mut MockCtx).is_err());
     }
-
-    // -----------------------------------------------------------------------
-    // slice
-    // -----------------------------------------------------------------------
 
     #[test]
     fn slice_basic_range() {
@@ -2651,10 +2499,6 @@ mod tests {
                 .is_err()
         );
     }
-
-    // -----------------------------------------------------------------------
-    // sort
-    // -----------------------------------------------------------------------
 
     #[test]
     fn sort_integers_ascending() {
@@ -2734,10 +2578,6 @@ mod tests {
     fn sort_wrong_arg_count() {
         assert!(Sort.execute(&[], &mut MockCtx).is_err());
     }
-
-    // -----------------------------------------------------------------------
-    // removeAllOptimized
-    // -----------------------------------------------------------------------
 
     #[test]
     fn remove_all_optimized_removes_matching_elements() {

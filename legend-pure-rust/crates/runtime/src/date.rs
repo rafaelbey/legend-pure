@@ -45,10 +45,6 @@ use std::fmt;
 
 use crate::error::PureRuntimeError;
 
-// ---------------------------------------------------------------------------
-// TimePrecision — how much of the time part is "active"
-// ---------------------------------------------------------------------------
-
 /// The precision level of the time component in a [`PureDate`].
 ///
 /// Pure dates have variable time precision: a value can have just the
@@ -67,10 +63,6 @@ pub enum TimePrecision {
     /// serialization fidelity: `"100"` (3 digits) vs `"1"` (1 digit).
     Subsecond(u8),
 }
-
-// ---------------------------------------------------------------------------
-// PureDate — the core variable-precision date enum
-// ---------------------------------------------------------------------------
 
 /// A Pure temporal value with variable precision.
 ///
@@ -118,8 +110,6 @@ pub enum DatePrecision {
 }
 
 impl PureDate {
-    // -- Constructors --
-
     /// Create a year-only date.
     ///
     /// # Errors
@@ -213,8 +203,6 @@ impl PureDate {
             precision,
         }
     }
-
-    // -- Accessors --
 
     /// Get the year.
     #[must_use]
@@ -333,8 +321,6 @@ impl PureDate {
             ))
         }
     }
-
-    // -- Arithmetic --
 
     /// Add years (works at all precision levels).
     ///
@@ -519,10 +505,6 @@ impl PureDate {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Ordering — compare by components, respecting precision
-// ---------------------------------------------------------------------------
-
 impl PartialOrd for PureDate {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
@@ -534,10 +516,6 @@ impl Ord for PureDate {
         self.inner.cmp(&other.inner)
     }
 }
-
-// ---------------------------------------------------------------------------
-// Display — format as Pure date literal
-// ---------------------------------------------------------------------------
 
 impl fmt::Display for PureDate {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -582,10 +560,6 @@ impl fmt::Display for PureDate {
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// StrictTime — time of day without date
-// ---------------------------------------------------------------------------
 
 /// Pure `StrictTime` — time of day without a date component.
 ///
@@ -652,10 +626,6 @@ impl fmt::Display for StrictTime {
         Ok(())
     }
 }
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

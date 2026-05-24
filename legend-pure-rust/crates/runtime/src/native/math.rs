@@ -34,14 +34,6 @@ use crate::native::{
 };
 use crate::value::Value;
 
-// ---------------------------------------------------------------------------
-// Shared helper — force all argument specs to concrete Values
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// Shared helper — promote any numeric Value (including Decimal) to f64
-// ---------------------------------------------------------------------------
-
 /// Coerce a numeric `Value` (Integer, Float, or Decimal) to `f64`.
 ///
 /// `Value::as_float` handles Integer→Float already but rejects `Decimal`.
@@ -88,10 +80,6 @@ pub(crate) fn java_number_string(v: &Value) -> String {
     }
 }
 
-// ---------------------------------------------------------------------------
-// floor
-// ---------------------------------------------------------------------------
-
 /// Pure `floor(Number[1]):Integer[1]` — largest integer ≤ x.
 #[derive(Debug)]
 pub struct Floor;
@@ -112,10 +100,6 @@ impl NativeFunction for Floor {
     }
 }
 
-// ---------------------------------------------------------------------------
-// ceiling
-// ---------------------------------------------------------------------------
-
 /// Pure `ceiling(Number[1]):Integer[1]` — smallest integer ≥ x.
 #[derive(Debug)]
 pub struct Ceiling;
@@ -133,10 +117,6 @@ impl NativeFunction for Ceiling {
         Ok(Evaluated::new(Value::Integer(x.ceil() as i64)))
     }
 }
-
-// ---------------------------------------------------------------------------
-// round
-// ---------------------------------------------------------------------------
 
 /// Pure `round(Number[1]):Integer[1]`
 /// Pure `round(Decimal[1], scale:Integer[1]):Decimal[1]`
@@ -218,10 +198,6 @@ fn scale_arg(v: &Value) -> Result<u32, PureException> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// sign
-// ---------------------------------------------------------------------------
-
 /// Pure `sign(Number[1]):Integer[1]` — returns -1, 0, or 1.
 #[derive(Debug)]
 pub struct Sign;
@@ -245,10 +221,6 @@ impl NativeFunction for Sign {
         Ok(Evaluated::new(Value::Integer(s)))
     }
 }
-
-// ---------------------------------------------------------------------------
-// sqrt
-// ---------------------------------------------------------------------------
 
 /// Pure `sqrt(Number[1]):Float[1]` — square root.
 ///
@@ -281,10 +253,6 @@ impl NativeFunction for Sqrt {
     }
 }
 
-// ---------------------------------------------------------------------------
-// cbrt
-// ---------------------------------------------------------------------------
-
 /// Pure `cbrt(Number[1]):Float[1]` — cube root.
 #[derive(Debug)]
 pub struct Cbrt;
@@ -302,10 +270,6 @@ impl NativeFunction for Cbrt {
     }
 }
 
-// ---------------------------------------------------------------------------
-// exp
-// ---------------------------------------------------------------------------
-
 /// Pure `exp(Number[1]):Float[1]` — natural exponential, `e^x`.
 #[derive(Debug)]
 pub struct Exp;
@@ -322,10 +286,6 @@ impl NativeFunction for Exp {
         Ok(Evaluated::new(Value::Float(x.exp())))
     }
 }
-
-// ---------------------------------------------------------------------------
-// log (natural log)
-// ---------------------------------------------------------------------------
 
 /// Pure `log(Number[1]):Float[1]` — natural logarithm (base `e`).
 ///
@@ -346,10 +306,6 @@ impl NativeFunction for Log {
     }
 }
 
-// ---------------------------------------------------------------------------
-// log10
-// ---------------------------------------------------------------------------
-
 /// Pure `log10(Number[1]):Float[1]` — base-10 logarithm.
 #[derive(Debug)]
 pub struct Log10;
@@ -366,10 +322,6 @@ impl NativeFunction for Log10 {
         Ok(Evaluated::new(Value::Float(x.log10())))
     }
 }
-
-// ---------------------------------------------------------------------------
-// pow
-// ---------------------------------------------------------------------------
 
 /// Pure `pow(Number[1], Number[1]):Float[1]` — `base^exponent`.
 #[derive(Debug)]
@@ -388,10 +340,6 @@ impl NativeFunction for Pow {
         Ok(Evaluated::new(Value::Float(base.powf(exp))))
     }
 }
-
-// ---------------------------------------------------------------------------
-// sin / cos / tan / cot
-// ---------------------------------------------------------------------------
 
 /// Pure `sin(Number[1]):Float[1]` — sine of `x` in radians.
 #[derive(Debug)]
@@ -460,10 +408,6 @@ impl NativeFunction for Cot {
         Ok(Evaluated::new(Value::Float(1.0 / x.tan())))
     }
 }
-
-// ---------------------------------------------------------------------------
-// asin / acos / atan / atan2
-// ---------------------------------------------------------------------------
 
 /// Pure `asin(Number[1]):Float[1]` — inverse sine (radians). Inputs
 /// outside `[-1, 1]` throw `"Unable to compute asin of <input>"`,
@@ -555,10 +499,6 @@ impl NativeFunction for Atan2 {
     }
 }
 
-// ---------------------------------------------------------------------------
-// toFloat / toDecimal
-// ---------------------------------------------------------------------------
-
 /// Pure `toFloat(Number[1]):Float[1]` — numeric → Float coercion.
 #[derive(Debug)]
 pub struct ToFloat;
@@ -616,10 +556,6 @@ impl NativeFunction for ToDecimal {
         Ok(Evaluated::new(v))
     }
 }
-
-// ---------------------------------------------------------------------------
-// parseInteger / parseFloat / parseBoolean
-// ---------------------------------------------------------------------------
 
 /// Pure `parseInteger(String[1]):Integer[1]` — decimal string → `Integer`.
 ///
@@ -720,10 +656,6 @@ impl NativeFunction for ParseBoolean {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Registration
-// ---------------------------------------------------------------------------
-
 /// Register all math native functions into the registry under their
 /// mangled Pure FQNs.
 pub fn register(registry: &mut NativeRegistry) {
@@ -768,10 +700,6 @@ pub fn register(registry: &mut NativeRegistry) {
     registry.register("parseBoolean_String_1__Boolean_1_", ParseBoolean);
 }
 
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
-
 #[cfg(test)]
 mod tests {
     use std::str::FromStr;
@@ -791,10 +719,6 @@ mod tests {
     fn ld(d: Decimal) -> legend_pure_parser_pure::types::ValueSpec {
         lit_decimal(d)
     }
-
-    // -----------------------------------------------------------------------
-    // floor
-    // -----------------------------------------------------------------------
 
     #[test]
     fn floor_positive_float() {
@@ -836,10 +760,6 @@ mod tests {
         assert!(Floor.execute(&[lit_str("hi")], &mut MockCtx).is_err());
     }
 
-    // -----------------------------------------------------------------------
-    // ceiling
-    // -----------------------------------------------------------------------
-
     #[test]
     fn ceiling_positive_float() {
         let r = Ceiling.execute(&[lit_float(3.2)], &mut MockCtx).unwrap();
@@ -861,10 +781,6 @@ mod tests {
     fn ceiling_type_mismatch() {
         assert!(Ceiling.execute(&[lit_bool(true)], &mut MockCtx).is_err());
     }
-
-    // -----------------------------------------------------------------------
-    // round
-    // -----------------------------------------------------------------------
 
     #[test]
     fn round_half_to_even() {
@@ -927,10 +843,6 @@ mod tests {
         assert!(Round.execute(&[lit_str("x")], &mut MockCtx).is_err());
     }
 
-    // -----------------------------------------------------------------------
-    // sign
-    // -----------------------------------------------------------------------
-
     #[test]
     fn sign_positive() {
         assert_eq!(
@@ -971,10 +883,6 @@ mod tests {
         assert!(Sign.execute(&[lit_str("x")], &mut MockCtx).is_err());
     }
 
-    // -----------------------------------------------------------------------
-    // sqrt
-    // -----------------------------------------------------------------------
-
     #[test]
     fn sqrt_positive() {
         let r = Sqrt.execute(&[lit_int(16)], &mut MockCtx).unwrap();
@@ -1010,10 +918,6 @@ mod tests {
         assert!(Sqrt.execute(&[lit_str("x")], &mut MockCtx).is_err());
     }
 
-    // -----------------------------------------------------------------------
-    // cbrt
-    // -----------------------------------------------------------------------
-
     #[test]
     fn cbrt_positive() {
         let r = Cbrt.execute(&[lit_float(27.0)], &mut MockCtx).unwrap();
@@ -1041,10 +945,6 @@ mod tests {
     fn cbrt_type_mismatch() {
         assert!(Cbrt.execute(&[lit_bool(false)], &mut MockCtx).is_err());
     }
-
-    // -----------------------------------------------------------------------
-    // exp / log / log10 / pow
-    // -----------------------------------------------------------------------
 
     #[test]
     fn exp_zero() {
@@ -1173,10 +1073,6 @@ mod tests {
         );
     }
 
-    // -----------------------------------------------------------------------
-    // sin / cos / tan / cot
-    // -----------------------------------------------------------------------
-
     #[test]
     fn sin_zero() {
         let r = Sin.execute(&[lit_float(0.0)], &mut MockCtx).unwrap();
@@ -1297,10 +1193,6 @@ mod tests {
     fn cot_type_mismatch() {
         assert!(Cot.execute(&[lit_bool(true)], &mut MockCtx).is_err());
     }
-
-    // -----------------------------------------------------------------------
-    // asin / acos / atan / atan2
-    // -----------------------------------------------------------------------
 
     #[test]
     fn asin_zero() {
@@ -1436,10 +1328,6 @@ mod tests {
         );
     }
 
-    // -----------------------------------------------------------------------
-    // toFloat / toDecimal
-    // -----------------------------------------------------------------------
-
     #[test]
     fn to_float_from_integer() {
         let r = ToFloat.execute(&[lit_int(7)], &mut MockCtx).unwrap();
@@ -1503,10 +1391,6 @@ mod tests {
     fn to_decimal_type_mismatch() {
         assert!(ToDecimal.execute(&[lit_str("x")], &mut MockCtx).is_err());
     }
-
-    // -----------------------------------------------------------------------
-    // parseInteger / parseFloat / parseBoolean
-    // -----------------------------------------------------------------------
 
     #[test]
     fn parse_integer_positive() {
@@ -1643,10 +1527,6 @@ mod tests {
         );
     }
 
-    // -----------------------------------------------------------------------
-    // random
-    // -----------------------------------------------------------------------
-
     #[test]
     fn random_returns_float_in_unit_range() {
         // 10 draws — every result must be a Float in `[0, 1)`. The
@@ -1666,10 +1546,6 @@ mod tests {
     fn random_rejects_extra_args() {
         assert!(Random.execute(&[lit_int(1)], &mut MockCtx).is_err());
     }
-
-    // -----------------------------------------------------------------------
-    // Registration sanity check
-    // -----------------------------------------------------------------------
 
     #[test]
     fn register_adds_all_natives() {

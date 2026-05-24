@@ -38,10 +38,6 @@ use crate::native::{
 };
 use crate::value::Value;
 
-// ---------------------------------------------------------------------------
-// letFunction
-// ---------------------------------------------------------------------------
-
 /// Pure `letFunction(String[1], T[m]): T[m]`
 ///
 /// The compiler desugars `let x = expr` → `FunctionCall("letFunction", [name, value])`.
@@ -64,10 +60,6 @@ impl NativeFunction for LetFunction {
         Ok(Evaluated::new(value))
     }
 }
-
-// ---------------------------------------------------------------------------
-// if
-// ---------------------------------------------------------------------------
 
 /// Pure `if(Boolean[1], Function<{->T[m]}>[1], Function<{->T[m]}>[1]): T[m]`
 ///
@@ -92,10 +84,6 @@ impl NativeFunction for If {
         crate::native::force_thunk(branch, ctx)
     }
 }
-
-// ---------------------------------------------------------------------------
-// eval — call a function value with 0-7 arguments
-// ---------------------------------------------------------------------------
 
 /// Pure `eval(func:Function<{...->V[m]}>[1], ...params):V[m]`
 ///
@@ -123,10 +111,6 @@ impl NativeFunction for Eval {
         Ok(Evaluated::new(ctx.call_function(func, params)?))
     }
 }
-
-// ---------------------------------------------------------------------------
-// evaluate — call a function with parameters wrapped in List<Any> objects
-// ---------------------------------------------------------------------------
 
 /// Pure `evaluate(func:Function<Any>[1], params:List<Any>[*]):Any[*]`
 ///
@@ -207,10 +191,6 @@ fn push_list_values(
     }
 }
 
-// ---------------------------------------------------------------------------
-// print — write a value to stdout (used by println)
-// ---------------------------------------------------------------------------
-
 /// Pure `print(param:Any[*], max:Integer[1]):Nil[0]`
 ///
 /// Writes each argument's [`Display`](std::fmt::Display) form to stdout,
@@ -252,10 +232,6 @@ fn render_for_print(v: &Value) -> String {
         other => format!("{other}"),
     }
 }
-
-// ---------------------------------------------------------------------------
-// new — object construction
-// ---------------------------------------------------------------------------
 
 /// Pure `new<T>(class:Class<T>[1], id:String[1], keyExpressions:KeyExpression[*]):T[1]`
 ///
@@ -956,10 +932,6 @@ fn apply_property_defaults(
     }
     Ok(())
 }
-
-// ---------------------------------------------------------------------------
-// copy — structural update of an existing instance
-// ---------------------------------------------------------------------------
 
 /// Pure `copy<T>(source:T[1], keyExpressions:KeyExpression[*]):T[1]`
 ///
@@ -2145,10 +2117,6 @@ fn class_fqn(model: &PureModel, id: ElementId) -> String {
         .join("::")
 }
 
-// ---------------------------------------------------------------------------
-// getAll
-// ---------------------------------------------------------------------------
-
 /// Pure `getAll<T>(class:Class<T>[1]):T[*]`
 ///
 /// Returns every heap-resident instance whose classifier matches the given
@@ -2284,10 +2252,6 @@ pub(crate) fn gather_all_instances(
 
     Ok(projected)
 }
-
-// ---------------------------------------------------------------------------
-// getAllVersions(Class) — no-date "all versions" accessor
-// ---------------------------------------------------------------------------
 
 /// Pure `getAllVersions<T>(Class<T>[1]): T[*]` — returns every instance
 /// of the class regardless of milestoning date. Equivalent to `getAll`
@@ -2465,10 +2429,6 @@ impl NativeFunction for GetAllVersionsInRange {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Milestoning native helpers
-// ---------------------------------------------------------------------------
-
 fn require_date(value: &Value, native: &'static str) -> Result<Value, PureException> {
     match value {
         // Accept both concrete dates and the `%latest` sentinel — the
@@ -2546,10 +2506,6 @@ pub(crate) fn instance_property_date_in_range(
     }
 }
 
-// ---------------------------------------------------------------------------
-// removeOverride
-// ---------------------------------------------------------------------------
-
 /// Pure `removeOverride<T>(instance:T[1]):T[1]`.
 ///
 /// Clears the `elementOverride` slot on the instance and returns the
@@ -2582,10 +2538,6 @@ impl NativeFunction for RemoveOverride {
         Ok(Evaluated::new(values[0].clone()))
     }
 }
-
-// ---------------------------------------------------------------------------
-// rawEvalProperty
-// ---------------------------------------------------------------------------
 
 /// Pure `rawEvalProperty<V|m>(p:Property<Nil,V|m>[1], a:Any[1]):V[m]`.
 ///
@@ -2653,10 +2605,6 @@ impl NativeFunction for RawEvalProperty {
         Ok(Evaluated::new(Value::from_vec(collected)))
     }
 }
-
-// ---------------------------------------------------------------------------
-// Registration
-// ---------------------------------------------------------------------------
 
 /// Register core language native functions.
 pub fn register(registry: &mut NativeRegistry) {

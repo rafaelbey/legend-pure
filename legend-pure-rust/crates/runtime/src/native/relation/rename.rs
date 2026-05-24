@@ -61,12 +61,10 @@ impl NativeFunction for Rename {
         expect_args("rename (Relation, ColSpec, ColSpec)", args, 3)?;
         let instance_value_id = m3_paths::resolve(ctx.model(), m3_paths::INSTANCE_VALUE);
 
-        // -- Receiver: TDS -----------------------------------------------
         let rel_value = ctx.evaluate(&args[0])?.into_value();
         let tds_obj = unwrap_instance_value(&rel_value, instance_value_id, ctx)?;
         let parsed = read_parsed_tds("rename", &tds_obj, ctx)?;
 
-        // -- ColSpec args: read the `name` slot directly -----------------
         let from_value = ctx.evaluate(&args[1])?.into_value();
         let from_obj = unwrap_instance_value(&from_value, instance_value_id, ctx)?;
         let from_name = read_col_spec_name("rename (old)", &from_obj, ctx)?;
@@ -75,7 +73,6 @@ impl NativeFunction for Rename {
         let to_obj = unwrap_instance_value(&to_value, instance_value_id, ctx)?;
         let to_name = read_col_spec_name("rename (new)", &to_obj, ctx)?;
 
-        // -- Locate source column ---------------------------------------
         let source_idx = parsed
             .columns
             .iter()
@@ -86,7 +83,6 @@ impl NativeFunction for Rename {
                 )))
             })?;
 
-        // -- Reject collision with another column -----------------------
         if from_name != to_name
             && parsed
                 .columns
@@ -99,11 +95,9 @@ impl NativeFunction for Rename {
             )));
         }
 
-        // -- Mutate the column entry in place ---------------------------
         let mut updated_columns: Vec<ParsedColumn> = parsed.columns.clone();
         updated_columns[source_idx].name = to_name;
 
-        // -- Render and allocate fresh TDS ------------------------------
         let csv = render_csv_from_columns_and_rows(&updated_columns, &parsed.rows);
         let tds_handle = ctx.heap_mut().alloc_dynamic(m3_paths::TDS);
         ctx.heap_mut()

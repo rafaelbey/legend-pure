@@ -226,10 +226,6 @@ pub fn try_eval_synthesized_qp(
     )))
 }
 
-// ---------------------------------------------------------------------------
-// QP shape decoding
-// ---------------------------------------------------------------------------
-
 enum QpShape {
     /// `<orig>(td: Date[1])` — single-date variant; `date_idx = 0`. For
     /// businesstemporal targets `date_property == businessDate`, for
@@ -308,10 +304,6 @@ fn decode_shape(qp_name: &str, arity: usize, target: MilestoningStereotype) -> O
     }
 }
 
-// ---------------------------------------------------------------------------
-// Filtering helpers
-// ---------------------------------------------------------------------------
-
 fn filter_by_date_equals(
     edge_values: &im_rc::Vector<Value>,
     date_property: &str,
@@ -379,10 +371,6 @@ fn narrow_to_multiplicity(items: Vec<Value>, mult: &Multiplicity, qp_name: &str)
         _ => Value::from_vec(items),
     }
 }
-
-// ---------------------------------------------------------------------------
-// Errors
-// ---------------------------------------------------------------------------
 
 fn milestoning_error(msg: String) -> PureException {
     PureException::from(PureRuntimeError::EvaluationError(msg))

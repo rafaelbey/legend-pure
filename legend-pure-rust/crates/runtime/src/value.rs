@@ -395,10 +395,6 @@ impl std::hash::Hash for ValueKey {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Value — equality
-// ---------------------------------------------------------------------------
-
 impl PartialEq for Value {
     #[allow(clippy::match_same_arms)] // Arms kept separate for clarity — each variant is semantically distinct
     fn eq(&self, other: &Self) -> bool {
@@ -456,10 +452,6 @@ impl PartialEq for Value {
 }
 
 impl Eq for Value {}
-
-// ---------------------------------------------------------------------------
-// Value — conversion helpers
-// ---------------------------------------------------------------------------
 
 impl Value {
     /// Extract a boolean, or return a type error.
@@ -607,10 +599,6 @@ impl Value {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Value — multiplicity coercion
-// ---------------------------------------------------------------------------
-
 impl Value {
     /// Coerce a value to a scalar (for functions expecting `[1]`).
     ///
@@ -752,10 +740,6 @@ impl Value {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Value — iterative Clone
-// ---------------------------------------------------------------------------
-
 impl Clone for Value {
     /// Iterative clone for `Value`, scaling with heap allocations
     /// instead of Rust thread-stack frames.
@@ -860,10 +844,7 @@ fn deep_clone_iter(root: &Value) -> Value {
 /// Clone every non-recursive `Value` variant. Recursive variants
 /// (`Collection`, `UnitInstance`) are not handled here — they go
 /// through `deep_clone_iter`'s work-stack instead and never reach
-/// this function. The structure mirrors the derived `Clone` we
-/// removed; each variant just copies its fields (with the standard
-/// `Rc`/`SmolStr`/`Box<FunctionValue>` `.clone()`s those types
-/// implement).
+/// this function.
 fn clone_leaf(v: &Value) -> Value {
     match v {
         Value::Boolean(b) => Value::Boolean(*b),
@@ -890,10 +871,6 @@ fn clone_leaf(v: &Value) -> Value {
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// Value — iterative Drop
-// ---------------------------------------------------------------------------
 
 impl Drop for Value {
     /// Iterative drop for `Value`, scaling with heap allocations instead
@@ -967,10 +944,6 @@ impl Drop for Value {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Value — Display
-// ---------------------------------------------------------------------------
-
 impl fmt::Display for Value {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -1024,10 +997,6 @@ impl fmt::Display for Value {
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
@@ -1147,10 +1116,6 @@ mod tests {
         assert_eq!(a, b);
     }
 
-    // -----------------------------------------------------------------------
-    // Multiplicity coercion tests
-    // -----------------------------------------------------------------------
-
     #[test]
     fn to_one_scalar() {
         let v = Value::Integer(42);
@@ -1267,10 +1232,6 @@ mod tests {
         pv.push_back(Value::Integer(1));
         assert!(!Value::Collection(Box::new(pv)).is_empty());
     }
-
-    // -----------------------------------------------------------------------
-    // Deeply-nested Collection drop — pins the iterative Drop contract
-    // -----------------------------------------------------------------------
 
     /// Build `Collection(Collection(... Integer(0) ...))` `depth` levels
     /// deep. Returns the outermost value.

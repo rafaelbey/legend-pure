@@ -43,10 +43,6 @@ use smol_str::SmolStr;
 use crate::error::PureRuntimeError;
 use crate::value::Value;
 
-// ---------------------------------------------------------------------------
-// ObjectHandle — strong Rc into a RefCell<HeapEntry>
-// ---------------------------------------------------------------------------
-
 /// A strong reference to a heap entry.
 ///
 /// `Rc<RefCell<HeapEntry>>` clones share the same underlying entry — identity
@@ -54,10 +50,6 @@ use crate::value::Value;
 /// re-entrant borrow conflicts at runtime, so callers must keep borrow scopes
 /// short and never hold a borrow across a recursive `eval()` call.
 pub type ObjectHandle = Rc<RefCell<HeapEntry>>;
-
-// ---------------------------------------------------------------------------
-// RuntimeObject — dynamic property storage
-// ---------------------------------------------------------------------------
 
 /// An object instance with dynamic property storage.
 #[derive(Debug)]
@@ -94,10 +86,6 @@ impl RuntimeObject {
     }
 }
 
-// ---------------------------------------------------------------------------
-// TypedObject — trait for generated struct access (hybrid compilation)
-// ---------------------------------------------------------------------------
-
 /// Trait implemented by generated Rust structs for Pure classes.
 pub trait TypedObject: 'static {
     /// The Pure class path (e.g., `"my::trading::Trade"`).
@@ -118,10 +106,6 @@ pub trait TypedObject: 'static {
     /// Mutable downcast for mutation from compiled code.
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
 }
-
-// ---------------------------------------------------------------------------
-// HeapEntry — unified storage for dynamic + typed objects
-// ---------------------------------------------------------------------------
 
 /// The storage representation for a single heap object.
 pub enum HeapEntry {
@@ -287,10 +271,6 @@ impl HeapEntry {
     }
 }
 
-// ---------------------------------------------------------------------------
-// RuntimeHeap — metamodel arena
-// ---------------------------------------------------------------------------
-
 /// Per-evaluator metamodel storage.
 ///
 /// `RuntimeHeap` is a strong-reference arena for the bootstrap metamodel rows
@@ -332,8 +312,6 @@ impl RuntimeHeap {
     pub fn element_for_object(handle: &ObjectHandle) -> Option<ElementId> {
         handle.borrow().bootstrap_element()
     }
-
-    // -- Allocation --
 
     /// Allocate a fresh dynamic handle.
     #[must_use]
@@ -413,8 +391,6 @@ impl RuntimeHeap {
         self.element_to_object.is_empty()
     }
 
-    // -- Convenience methods that forward to HeapEntry through a handle --
-
     /// Get a single property value from the entry behind `handle`.
     ///
     /// # Errors
@@ -487,10 +463,6 @@ impl Default for RuntimeHeap {
         Self::new()
     }
 }
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

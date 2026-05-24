@@ -39,10 +39,6 @@ use crate::native::{
 };
 use crate::value::{FunctionValue, Value};
 
-// ---------------------------------------------------------------------------
-// pathToElement
-// ---------------------------------------------------------------------------
-
 /// Pure `pathToElement(path:String[1], separator:String[1]):PackageableElement[1]`
 ///
 /// Resolves a package-qualified path string (e.g., `"meta::pure::functions"`)
@@ -71,10 +67,6 @@ impl NativeFunction for PathToElement {
     }
 }
 
-// ---------------------------------------------------------------------------
-// lenientPathToElement
-// ---------------------------------------------------------------------------
-
 /// Pure `lenientPathToElement(path:String[1], separator:String[1]):PackageableElement[0..1]`
 ///
 /// Like [`PathToElement`], but returns an empty value (`Unit`) when the path
@@ -98,10 +90,6 @@ impl NativeFunction for LenientPathToElement {
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// elementToPath
-// ---------------------------------------------------------------------------
 
 /// Pure `elementToPath(element:PackageableElement[1], separator:String[1], includeRoot:Boolean[1]):String[1]`
 ///
@@ -140,10 +128,6 @@ impl NativeFunction for ElementToPath {
         Ok(Evaluated::new(Value::String(SmolStr::new(path))))
     }
 }
-
-// ---------------------------------------------------------------------------
-// sourceInformation
-// ---------------------------------------------------------------------------
 
 /// Pure `sourceInformation(node:Any[1]):SourceInformation[0..1]`
 ///
@@ -230,10 +214,6 @@ impl NativeFunction for SourceInformation {
     }
 }
 
-// ---------------------------------------------------------------------------
-// instanceOf
-// ---------------------------------------------------------------------------
-
 /// Pure `instanceOf(Any[1], Type[1]):Boolean[1]`
 ///
 /// Checks whether a value is an instance of the given metamodel type.
@@ -259,10 +239,6 @@ impl NativeFunction for InstanceOf {
         ))))
     }
 }
-
-// ---------------------------------------------------------------------------
-// cast
-// ---------------------------------------------------------------------------
 
 /// Pure `cast<V|m>(p:Any[m], typ:V[1]):V[m]`
 ///
@@ -464,10 +440,6 @@ fn evaluate_primitive_constraints(
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// match
-// ---------------------------------------------------------------------------
-
 /// Pure `match<T|m,n>(var:Any[*], functions:Function<{Nil[n]->T[m]}>[1..*]):T[m]`
 ///
 /// Type-based pattern matching: finds the first lambda in `functions` whose
@@ -591,10 +563,6 @@ fn mult_bounds(m: &legend_pure_parser_pure::types::Multiplicity) -> (u32, Option
     }
 }
 
-// ---------------------------------------------------------------------------
-// id
-// ---------------------------------------------------------------------------
-
 /// Pure `id(Any[1]):String[1]`
 ///
 /// Returns an identity string for any value. Heap objects are identified by
@@ -618,10 +586,6 @@ impl NativeFunction for Id {
     }
 }
 
-// ---------------------------------------------------------------------------
-// type
-// ---------------------------------------------------------------------------
-
 /// Pure `type(Any[1]):Type[1]`
 ///
 /// Returns the metamodel [`Type`] element describing `value`'s runtime class.
@@ -644,10 +608,6 @@ impl NativeFunction for TypeOf {
         Ok(Evaluated::new(Value::Element(type_id)))
     }
 }
-
-// ---------------------------------------------------------------------------
-// genericType
-// ---------------------------------------------------------------------------
 
 /// Pure `genericType(Any[1]):GenericType[1]`
 ///
@@ -899,10 +859,6 @@ pub(crate) fn build_multiplicity_wrapper(
     Ok(obj)
 }
 
-// ---------------------------------------------------------------------------
-// rawType
-// ---------------------------------------------------------------------------
-
 /// Pure `rawType(GenericType[1]):Type[0..1]`
 ///
 /// Reads the `rawType` property from a `GenericType` heap object. Returns
@@ -930,10 +886,6 @@ impl NativeFunction for RawType {
     }
 }
 
-// ---------------------------------------------------------------------------
-// enumName
-// ---------------------------------------------------------------------------
-
 /// Pure `enumName(Enumeration<Any>[1]):String[1]`
 ///
 /// Returns the simple name of an enumeration element reference. The input is
@@ -960,10 +912,6 @@ impl NativeFunction for EnumName {
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// enumValues
-// ---------------------------------------------------------------------------
 
 /// Pure `enumValues<T>(Enumeration<T>[1]):T[*]`
 ///
@@ -998,10 +946,6 @@ impl NativeFunction for EnumValues {
     }
 }
 
-// ---------------------------------------------------------------------------
-// toRepresentation
-// ---------------------------------------------------------------------------
-
 /// Pure `toRepresentation(Any[1]):String[1]`
 ///
 /// Renders a value as a round-trippable Pure source snippet: strings are
@@ -1025,10 +969,6 @@ impl NativeFunction for ToRepresentation {
         Ok(Evaluated::new(Value::String(SmolStr::new(s))))
     }
 }
-
-// ---------------------------------------------------------------------------
-// subTypeOf
-// ---------------------------------------------------------------------------
 
 /// Pure `subTypeOf(Type[1], Type[1]):Boolean[1]`
 ///
@@ -1058,10 +998,6 @@ impl NativeFunction for SubTypeOf {
         ))))
     }
 }
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 
 /// Extract an `ElementId` from a [`Value::Element`].
 pub(crate) fn as_element_id(v: &Value) -> Result<ElementId, PureException> {
@@ -1810,10 +1746,6 @@ fn is_sub_type_of(child: ElementId, parent: ElementId, model: &PureModel) -> boo
     }
 }
 
-// ---------------------------------------------------------------------------
-// generalizations (function form)
-// ---------------------------------------------------------------------------
-
 /// Pure `generalizations(class:Type[1]):Type[1..*]`
 ///
 /// Returns the transitive supertype chain of a Type — the class itself plus
@@ -1838,10 +1770,6 @@ impl NativeFunction for Generalizations {
         )))
     }
 }
-
-// ---------------------------------------------------------------------------
-// extractEnumValue
-// ---------------------------------------------------------------------------
 
 /// Pure `extractEnumValue<T>(enumeration:Enumeration<T>[1], value:String[1]):T[1]`
 ///
@@ -1880,10 +1808,6 @@ impl NativeFunction for ExtractEnumValue {
     }
 }
 
-// ---------------------------------------------------------------------------
-// canReactivateDynamically
-// ---------------------------------------------------------------------------
-
 /// Pure `canReactivateDynamically(vs:ValueSpecification[1]):Boolean[1]`
 ///
 /// Returns `true` when the deactivated AST node `vs` can be safely
@@ -1919,10 +1843,6 @@ impl NativeFunction for CanReactivateDynamically {
         Ok(Evaluated::new(Value::Boolean(true)))
     }
 }
-
-// ---------------------------------------------------------------------------
-// evaluateAndDeactivate / deactivate — round-trip identities
-// ---------------------------------------------------------------------------
 
 /// Pure `evaluateAndDeactivate<T|m>(var:T[m]):T[m]`
 ///
@@ -3121,10 +3041,6 @@ fn find_function_by_simple_name(
     exact.or(any)
 }
 
-// ---------------------------------------------------------------------------
-// Unit primitives
-// ---------------------------------------------------------------------------
-
 /// Pure `newUnit(type:Unit[1], value:Number[1]):Any[1]`
 ///
 /// Tags a numeric value with a unit-of-measurement, producing a
@@ -3192,10 +3108,6 @@ impl NativeFunction for GetUnitValue {
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// Registration
-// ---------------------------------------------------------------------------
 
 /// Register meta-model native functions with the given registry.
 pub fn register(registry: &mut NativeRegistry) {
@@ -3271,10 +3183,6 @@ pub fn register(registry: &mut NativeRegistry) {
     );
     registry.register("tag_Profile_1__String_1__Tag_1_", TagLookup);
 }
-
-// ---------------------------------------------------------------------------
-// Profile annotation reflection: `stereotype` / `tag`
-// ---------------------------------------------------------------------------
 
 /// Pure `stereotype(profile:Profile[1], str:String[1]):Stereotype[1]`.
 ///
@@ -3384,10 +3292,6 @@ fn expect_profile_arg(
     }
     Ok((id, build_element_path(model, id, "::", false)))
 }
-
-// ---------------------------------------------------------------------------
-// Tests — render_representation iterative-depth contract
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod render_tests {

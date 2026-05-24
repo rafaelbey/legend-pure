@@ -34,10 +34,6 @@ use thiserror::Error;
 
 use crate::value::Value;
 
-// ---------------------------------------------------------------------------
-// PureRuntimeError — the "what went wrong" layer (no location)
-// ---------------------------------------------------------------------------
-
 /// Errors that can occur during Pure expression evaluation.
 ///
 /// These are low-level error kinds without source location context.
@@ -111,10 +107,6 @@ impl PureRuntimeError {
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// PureException — the user-facing layer (with location + call stack)
-// ---------------------------------------------------------------------------
 
 /// A frame in the Pure-level call stack.
 ///
@@ -339,10 +331,6 @@ impl fmt::Display for PureException {
 
 impl std::error::Error for PureException {}
 
-// ---------------------------------------------------------------------------
-// Conversion: PureRuntimeError → PureException (without location)
-// ---------------------------------------------------------------------------
-
 impl From<PureRuntimeError> for PureException {
     /// Convert a `PureRuntimeError` into a `PureException` without location.
     ///
@@ -367,10 +355,6 @@ impl From<PureRuntimeError> for PureException {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Display for ConstraintKind
-// ---------------------------------------------------------------------------
-
 impl fmt::Display for ConstraintKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -380,10 +364,6 @@ impl fmt::Display for ConstraintKind {
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

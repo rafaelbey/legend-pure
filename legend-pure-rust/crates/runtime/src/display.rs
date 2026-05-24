@@ -70,10 +70,6 @@ use crate::heap::{HeapEntry, RuntimeHeap};
 use crate::native::EvalContextTrait;
 use crate::value::{FunctionValue, MapState, Value, ValueKey};
 
-// ---------------------------------------------------------------------------
-// Public types
-// ---------------------------------------------------------------------------
-
 /// One node in the rendered tree.
 ///
 /// `child_ref == 0` denotes a leaf — the consumer should not issue a
@@ -162,10 +158,6 @@ const GENERIC_TYPE_FQN: &str = "meta::pure::functions::meta::genericType";
 /// Pure-canonical property walk (own + association + inherited).
 const PROPERTIES_FQN: &str = "meta::pure::functions::meta::properties";
 
-// ---------------------------------------------------------------------------
-// Entry point
-// ---------------------------------------------------------------------------
-
 /// Render a snapshot of `(name, value)` bindings to a navigable tree.
 ///
 /// The result owns every string — once returned, the caller can move it
@@ -209,10 +201,6 @@ where
     tree
 }
 
-// ---------------------------------------------------------------------------
-// Renderer state
-// ---------------------------------------------------------------------------
-
 struct Renderer<'a, 'b> {
     ctx: &'a mut dyn EvalContextTrait,
     tree: &'b mut DisplayTree,
@@ -252,8 +240,6 @@ impl Renderer<'_, '_> {
         }
     }
 
-    // ---- leaves ------------------------------------------------------------
-
     fn render_leaf(&mut self, name: &str, value: &Value) -> DisplayNode {
         DisplayNode {
             name: name.to_string(),
@@ -287,8 +273,6 @@ impl Renderer<'_, '_> {
     fn resolve_to_repr(&mut self) -> Option<Value> {
         self.resolve_cached(TO_REPRESENTATION_FQN, |r| &mut r.to_repr_fn)
     }
-
-    // ---- objects -----------------------------------------------------------
 
     fn render_object(
         &mut self,
@@ -440,8 +424,6 @@ impl Renderer<'_, '_> {
         Some(v)
     }
 
-    // ---- collections -------------------------------------------------------
-
     fn render_collection(
         &mut self,
         name: &str,
@@ -491,8 +473,6 @@ impl Renderer<'_, '_> {
             },
         }
     }
-
-    // ---- maps --------------------------------------------------------------
 
     fn render_map(
         &mut self,
@@ -547,10 +527,6 @@ impl Renderer<'_, '_> {
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// Type label helpers
-// ---------------------------------------------------------------------------
 
 fn type_label_for(model: &PureModel, _heap: &RuntimeHeap, value: &Value) -> Option<String> {
     let base = match value {
@@ -636,10 +612,6 @@ fn simple_type_tag(value: &Value) -> Option<&'static str> {
     })
 }
 
-// ---------------------------------------------------------------------------
-// Inline summary helpers
-// ---------------------------------------------------------------------------
-
 fn build_object_inline(class: &str, children: &[DisplayNode], cap: usize) -> String {
     if children.is_empty() {
         return format!("^{class}()");
@@ -687,10 +659,6 @@ fn build_map_inline(children: &[DisplayNode], cap: usize) -> String {
         format!("{{... {} entries ...}}", children.len())
     }
 }
-
-// ---------------------------------------------------------------------------
-// Heap helpers
-// ---------------------------------------------------------------------------
 
 fn read_heap_property(handle: &crate::heap::ObjectHandle, name: &str) -> Vec<Value> {
     handle
@@ -756,10 +724,6 @@ fn fallback_render(value: &Value) -> String {
         _ => "<unrendered>".to_string(),
     }
 }
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

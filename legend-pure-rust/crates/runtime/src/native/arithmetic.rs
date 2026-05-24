@@ -28,10 +28,6 @@ use crate::native::{
 };
 use crate::value::Value;
 
-// ---------------------------------------------------------------------------
-// Numeric promotion lattice — shared across plus/minus/times/divide/rem
-// ---------------------------------------------------------------------------
-
 /// Promote two numeric values to the wider common type.
 ///
 /// Lattice: `Integer < Float < Decimal`. Mixed pairs both convert to
@@ -69,10 +65,6 @@ fn promote_pair(a: &Value, b: &Value) -> Option<(Value, Value)> {
         _ => None,
     }
 }
-
-// ---------------------------------------------------------------------------
-// plus — polymorphic addition (Integer, Float, Decimal, String)
-// ---------------------------------------------------------------------------
 
 /// Pure `plus(Number[1], Number[1]): Number[1]` — addition.
 ///
@@ -133,10 +125,6 @@ fn plus_fold(values: Vec<Value>) -> Result<Value, PureRuntimeError> {
     };
     iter.try_fold(first, |acc, next| plus_pair(&acc, &next))
 }
-
-// ---------------------------------------------------------------------------
-// minus
-// ---------------------------------------------------------------------------
 
 /// Pure `minus(Number[1], Number[1]): Number[1]` — subtraction.
 #[derive(Debug)]
@@ -215,10 +203,6 @@ fn minus_fold(values: Vec<Value>) -> Result<Value, PureRuntimeError> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// times
-// ---------------------------------------------------------------------------
-
 /// Pure `times(Number[1], Number[1]): Number[1]` — multiplication.
 #[derive(Debug)]
 pub struct Times;
@@ -266,10 +250,6 @@ fn times_fold(values: Vec<Value>) -> Result<Value, PureRuntimeError> {
     };
     iter.try_fold(first, |acc, next| times_pair(&acc, &next))
 }
-
-// ---------------------------------------------------------------------------
-// divide
-// ---------------------------------------------------------------------------
 
 /// Pure `divide(Number[1], Number[1]): Float[1]` and
 /// `divide(Decimal[1], Decimal[1], scale:Integer[1]): Decimal[1]` —
@@ -357,10 +337,6 @@ impl NativeFunction for Divide {
     }
 }
 
-// ---------------------------------------------------------------------------
-// abs
-// ---------------------------------------------------------------------------
-
 /// Pure `abs(Number[1]): Number[1]` — absolute value.
 #[derive(Debug)]
 pub struct Abs;
@@ -382,10 +358,6 @@ impl NativeFunction for Abs {
         Ok(Evaluated::new(v))
     }
 }
-
-// ---------------------------------------------------------------------------
-// mod / rem
-// ---------------------------------------------------------------------------
 
 /// Pure `mod(Integer[1], Integer[1]): Integer[1]` — modulus (always non-negative).
 #[derive(Debug)]
@@ -466,10 +438,6 @@ impl NativeFunction for Rem {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Registration
-// ---------------------------------------------------------------------------
-
 /// Register all arithmetic native functions into the registry.
 pub fn register(registry: &mut NativeRegistry) {
     // plus — one shared implementation handles all numeric types
@@ -506,10 +474,6 @@ pub fn register(registry: &mut NativeRegistry) {
     // rem
     registry.register("rem_Number_1__Number_1__Number_1_", Rem);
 }
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

@@ -27,10 +27,6 @@ use crate::native::{
 };
 use crate::value::Value;
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
 /// Compare two numeric values, returning an `Ordering`.
 /// Promotes Integer→Float when mixed.
 #[allow(clippy::cast_precision_loss)]
@@ -57,10 +53,6 @@ fn numeric_cmp(a: &Value, b: &Value) -> Result<std::cmp::Ordering, PureRuntimeEr
         ))),
     }
 }
-
-// ---------------------------------------------------------------------------
-// equal
-// ---------------------------------------------------------------------------
 
 /// Pure `eq(Any[1], Any[1]): Boolean[1]` — identity / primitive equality.
 ///
@@ -105,10 +97,6 @@ impl NativeFunction for Equal {
         Ok(Evaluated::new(Value::Boolean(result)))
     }
 }
-
-// ---------------------------------------------------------------------------
-// lessThan / lessThanEqual / greaterThan / greaterThanEqual
-// ---------------------------------------------------------------------------
 
 /// Pure `lessThan(Number[1], Number[1]): Boolean[1]`
 #[derive(Debug)]
@@ -163,10 +151,6 @@ impl NativeFunction for GreaterThan {
         )))
     }
 }
-
-// ---------------------------------------------------------------------------
-// compare
-// ---------------------------------------------------------------------------
 
 /// Total order between two `Value`s, returning -1, 0, or 1.
 ///
@@ -335,10 +319,6 @@ impl NativeFunction for GreaterThanEqual {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Registration
-// ---------------------------------------------------------------------------
-
 /// Register all comparison native functions.
 pub fn register(registry: &mut NativeRegistry) {
     registry.register("eq_Any_1__Any_1__Boolean_1_", Eq);
@@ -358,10 +338,6 @@ pub fn register(registry: &mut NativeRegistry) {
     );
     registry.register("compare_T_1__T_1__Integer_1_", Compare);
 }
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

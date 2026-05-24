@@ -285,10 +285,6 @@ pub fn is_equality_key_stereotype(stereo: &StereotypeRef, equality_profile: Elem
     stereo.profile == equality_profile && stereo.value.as_str() == "Key"
 }
 
-// ---------------------------------------------------------------------------
-// Tests — iterative depth + cycle behaviour
-// ---------------------------------------------------------------------------
-
 #[cfg(test)]
 mod tests {
     use super::*;

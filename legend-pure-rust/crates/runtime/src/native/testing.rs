@@ -26,10 +26,6 @@ use crate::error::{PureException, PureExceptionKind, PureRuntimeError};
 use crate::native::{EvalContextTrait, Evaluated, NativeFunction, NativeRegistry, expect_args};
 use crate::value::{FunctionValue, Value};
 
-// ---------------------------------------------------------------------------
-// assert
-// ---------------------------------------------------------------------------
-
 /// Pure `assert(Boolean[1], Function<{->String[1]}>[1]): Boolean[1]`
 ///
 /// Asserts a boolean condition. If false, evaluates the message expression
@@ -63,10 +59,6 @@ impl NativeFunction for Assert {
     }
 }
 
-// ---------------------------------------------------------------------------
-// executeTest
-// ---------------------------------------------------------------------------
-
 /// Pure `executeTest(testFn:Function<{->Any[*]}>[1]): TestResult[1]`
 ///
 /// Executes a zero-arg test function in a sandbox, catches exceptions,
@@ -99,10 +91,6 @@ impl NativeFunction for ExecuteTest {
         build_test_result(ctx, fqn, status, elapsed, message)
     }
 }
-
-// ---------------------------------------------------------------------------
-// executePCTTest
-// ---------------------------------------------------------------------------
 
 /// Pure `executePCTTest(testFn:Function<Any>[1], adapter:Function<Any>[1], exclusions:Map<Function<Any>,String>[1]): TestResult[1]`
 ///
@@ -213,10 +201,6 @@ fn apply_exclusion(
         _ => (status, message),
     }
 }
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 
 /// Status enum values in the same `"EnumSimpleName.VALUE"` form produced by
 /// [`Evaluator::eval_enum_value`](crate::eval::Evaluator) and the enum-value
@@ -342,10 +326,6 @@ fn build_test_result(
     Ok(Evaluated::new(Value::Object(id)))
 }
 
-// ---------------------------------------------------------------------------
-// assertError
-// ---------------------------------------------------------------------------
-
 /// Pure `assertError(f:Function<{->Any[*]}>[1], message:String[1],
 ///                    line:Integer[0..1], column:Integer[0..1]):Boolean[1]`
 ///
@@ -435,10 +415,6 @@ impl NativeFunction for AssertError {
     }
 }
 
-// ---------------------------------------------------------------------------
-// PCT adapter discovery
-// ---------------------------------------------------------------------------
-
 /// Find a PCT adapter Function by its `PCT.adapterName` tag.
 ///
 /// An adapter is any Function carrying:
@@ -490,10 +466,6 @@ pub fn find_pct_adapter(
     }
     None
 }
-
-// ---------------------------------------------------------------------------
-// loadPCTManifest
-// ---------------------------------------------------------------------------
 
 /// Pure `loadPCTManifest(manifestPath:String[1]):PCTManifest[1]`
 ///
@@ -636,10 +608,6 @@ fn build_pct_manifest(
     Ok(Evaluated::new(Value::Object(id)))
 }
 
-// ---------------------------------------------------------------------------
-// Registration
-// ---------------------------------------------------------------------------
-
 /// Register test-support native functions.
 pub fn register(registry: &mut NativeRegistry) {
     registry.register("assert_Boolean_1__Function_1__Boolean_1_", Assert);
@@ -654,10 +622,6 @@ pub fn register(registry: &mut NativeRegistry) {
     );
     registry.register("loadPCTManifest_String_1__PCTManifest_1_", LoadPCTManifest);
 }
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

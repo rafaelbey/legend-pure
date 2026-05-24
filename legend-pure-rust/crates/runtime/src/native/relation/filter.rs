@@ -71,15 +71,12 @@ impl NativeFunction for Filter {
         expect_args("filter (Relation)", args, 2)?;
         let instance_value_id = m3_paths::resolve(ctx.model(), m3_paths::INSTANCE_VALUE);
 
-        // -- Source TDS --------------------------------------------------
         let rel_value = ctx.evaluate(&args[0])?.into_value();
         let tds_obj = unwrap_instance_value(&rel_value, instance_value_id, ctx)?;
         let parsed = read_parsed_tds("filter", &tds_obj, ctx)?;
 
-        // -- Predicate lambda --------------------------------------------
         let lambda_val = ctx.evaluate(&args[1])?.into_value();
 
-        // -- Per-row evaluation ------------------------------------------
         let mut survivors: Vec<usize> = Vec::with_capacity(parsed.rows.len());
         for (row_idx, row) in parsed.rows.iter().enumerate() {
             let row_tuple = build_row_tuple(&parsed.columns, row, ctx)?;
@@ -89,10 +86,8 @@ impl NativeFunction for Filter {
             }
         }
 
-        // -- Reconstruct CSV by line-slicing -----------------------------
         let new_csv = slice_csv_by_rows(parsed.csv.as_str(), &survivors);
 
-        // -- Allocate the fresh TDS --------------------------------------
         let new_tds = ctx.heap_mut().alloc_dynamic(m3_paths::TDS);
         ctx.heap_mut()
             .mutate_add(&new_tds, "csv", &[Value::String(new_csv.into())])

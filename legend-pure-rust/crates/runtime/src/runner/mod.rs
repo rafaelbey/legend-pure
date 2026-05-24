@@ -122,10 +122,6 @@ impl EvalHooks for CapturingHooks {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Entry points
-// ---------------------------------------------------------------------------
-
 /// Call a function by FQN with no arguments and return its rendered
 /// value.
 ///
@@ -286,10 +282,6 @@ pub fn list_pct_adapters(model: &PureModel) -> Result<Vec<PctAdapterInfo>, Runne
     }
     Ok(adapters)
 }
-
-// ---------------------------------------------------------------------------
-// Internals
-// ---------------------------------------------------------------------------
 
 fn run_function_inner<H>(evaluator: &mut Evaluator<'_, H>, fqn: &str) -> RunResult
 where

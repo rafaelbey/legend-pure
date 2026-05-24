@@ -58,12 +58,10 @@ impl NativeFunction for Sort {
         expect_args("sort (Relation, SortInfo[*])", args, 2)?;
         let instance_value_id = m3_paths::resolve(ctx.model(), m3_paths::INSTANCE_VALUE);
 
-        // -- Source TDS --------------------------------------------------
         let rel_value = ctx.evaluate(&args[0])?.into_value();
         let tds_obj = unwrap_instance_value(&rel_value, instance_value_id, ctx)?;
         let parsed = read_parsed_tds("sort", &tds_obj, ctx)?;
 
-        // -- SortInfo[*] -------------------------------------------------
         let sort_info_value = ctx.evaluate(&args[1])?.into_value();
         let sort_info_objs = collect_sort_info(&sort_info_value, instance_value_id, ctx)?;
 
@@ -79,14 +77,11 @@ impl NativeFunction for Sort {
             keys.push(key);
         }
 
-        // -- Stable multi-key sort ---------------------------------------
         let mut sorted = parsed.rows.clone();
         sorted.sort_by(|a, b| compare_rows(a, b, &keys));
 
-        // -- Reconstruct CSV --------------------------------------------
         let new_csv = render_csv_from_columns_and_rows(&parsed.columns, &sorted);
 
-        // -- Allocate the fresh TDS --------------------------------------
         let tds_handle = ctx.heap_mut().alloc_dynamic(m3_paths::TDS);
         ctx.heap_mut()
             .mutate_add(&tds_handle, "csv", &[Value::String(new_csv.into())])

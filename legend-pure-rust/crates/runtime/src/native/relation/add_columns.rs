@@ -69,7 +69,6 @@ impl NativeFunction for AddColumns {
             })?;
         let instance_value_id = m3_paths::resolve(ctx.model(), m3_paths::INSTANCE_VALUE);
 
-        // -- Source: RelationType — read its columns ---------------------
         let source_value = ctx.evaluate(&args[0])?.into_value();
         let source_obj = unwrap_instance_value(&source_value, instance_value_id, ctx)?;
         let source_classifier_id = ctx
@@ -94,7 +93,6 @@ impl NativeFunction for AddColumns {
             .map_err(PureException::from)?;
         let mut merged: Vec<Value> = source_cols.iter().cloned().collect();
 
-        // -- ColSpec: navigate classifierGenericType chain ---------------
         let cs_value = ctx.evaluate(&args[1])?.into_value();
         let cs_obj = unwrap_instance_value(&cs_value, instance_value_id, ctx)?;
         let cs_classifier_id = ctx
@@ -116,7 +114,6 @@ impl NativeFunction for AddColumns {
         let inner_cols = read_col_spec_array_columns(cs_obj, ctx)?;
         merged.extend(inner_cols);
 
-        // -- Allocate the fresh RelationType ----------------------------
         let new_rt = ctx.heap_mut().alloc_dynamic(m3_paths::RELATION_TYPE);
         if !merged.is_empty() {
             ctx.heap_mut()

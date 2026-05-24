@@ -41,10 +41,6 @@ use crate::m3_paths;
 use crate::native::EvalContextTrait;
 use crate::value::Value;
 
-// ---------------------------------------------------------------------------
-// Heap-walking utilities
-// ---------------------------------------------------------------------------
-
 /// Walk `csa.classifierGenericType.typeArguments[0].rawType.columns` and
 /// return the column values. Mirrors Java's
 /// `((ColSpecArrayInstance)…)._classifierGenericType()._typeArguments()
@@ -137,10 +133,6 @@ pub(super) fn unwrap_instance_value(
     Ok(obj)
 }
 
-// ---------------------------------------------------------------------------
-// TDS row access
-// ---------------------------------------------------------------------------
-
 /// Read the canonical CSV from a `TDS` heap object and re-parse it
 /// into a [`ParsedTDS`] (columns + typed rows).
 ///
@@ -183,10 +175,6 @@ pub(super) fn read_parsed_tds(
         )))
     })
 }
-
-// ---------------------------------------------------------------------------
-// Canonical CSV reconstruction (TypedCell → source-form text)
-// ---------------------------------------------------------------------------
 
 /// Convenience wrapper: render an entire [`ParsedTDS`] back to canonical
 /// CSV form by feeding its `columns` + `rows` through
@@ -260,10 +248,6 @@ fn render_cell(cell: Option<&TypedCell>) -> String {
         Some(TypedCell::DateTime(s)) => s.to_string(),
     }
 }
-
-// ---------------------------------------------------------------------------
-// Row tuple binding (lambda-per-row natives: filter, extend, sort, …)
-// ---------------------------------------------------------------------------
 
 /// Allocate a synthetic heap object representing one TDS row, with one
 /// slot per non-empty cell named after its column. Classifier is

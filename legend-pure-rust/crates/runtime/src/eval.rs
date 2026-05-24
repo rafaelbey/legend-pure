@@ -140,9 +140,7 @@ pub struct Evaluator<'model, H: EvalHooks = NoOpHooks> {
     ///
     /// Per-evaluator instead of process-wide because concurrent
     /// evaluators may target different tenants / connection strings /
-    /// credentials and must stay isolated. Restores test isolation that
-    /// the `store-relational-runtime::set_extension_configs` `OnceLock`
-    /// previously sacrificed (deleted in this commit).
+    /// credentials and must stay isolated.
     extension_configs: HashMap<String, HashMap<String, toml::Value>>,
 
     /// Instrumentation hooks (zero-cost for `NoOpHooks`).
@@ -448,10 +446,6 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
         self.hooks
     }
 
-    // -----------------------------------------------------------------------
-    // Core evaluation
-    // -----------------------------------------------------------------------
-
     /// Evaluate a compiled expression, producing a runtime value.
     ///
     /// This is the core recursive evaluator. It dispatches on `ExprKind`
@@ -476,7 +470,6 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
         }
 
         let result = match &*expr.kind {
-            // -- Literals -------------------------------------------------
             ExprKind::IntegerLiteral(n) => Ok(Value::Integer(*n)),
             ExprKind::FloatLiteral(n) => Ok(Value::Float(*n)),
             ExprKind::DecimalLiteral(d) => Ok(Value::Decimal(*d)),
@@ -484,14 +477,12 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
             ExprKind::BooleanLiteral(b) => Ok(Value::Boolean(*b)),
             ExprKind::DateLiteral(dv) => self.eval_date_literal(dv),
 
-            // -- Variable reference ---------------------------------------
             ExprKind::Variable { name } => self
                 .context
                 .require(name)
                 .cloned()
                 .map_err(PureException::from),
 
-            // -- Function call (the most complex case) --------------------
             //
             // Dispatches on `kind`:
             //   `Function`           — overload-resolved call; existing
@@ -520,7 +511,6 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
                 expr.type_info.as_deref(),
             ),
 
-            // -- Property call (`$x.name`) -------------------------------
             ExprKind::PropertyCall(FunctionCallData {
                 function_name,
                 arguments,
@@ -533,7 +523,6 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
                 self.eval_property_access(&arguments[0], function_name)
             }
 
-            // -- Qualified property call (`$x.qp(args)`) -----------------
             ExprKind::QualifiedPropertyCall(FunctionCallData {
                 function_name,
                 arguments,
@@ -549,21 +538,17 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
                 self.eval_qualified_property(receiver, function_name, qp_args)
             }
 
-            // -- Enum value -----------------------------------------------
             ExprKind::EnumValue {
                 enum_element,
                 value,
             } => Ok(Self::eval_enum_value(*enum_element, value)),
 
-            // -- Lambda ---------------------------------------------------
             ExprKind::Lambda { parameters, body } => {
                 Ok(self.eval_lambda_creation(parameters, body))
             }
 
-            // -- Collection literal ---------------------------------------
             ExprKind::Collection { elements } => self.eval_collection(elements),
 
-            // -- Type reference -------------------------------------------
             // `@MyClass` / `@ConcreteFunctionDefinition<Any>` needs to survive into
             // runtime values so `cast`, `instanceOf`, and `match` can inspect the
             // target class. A bare structural reference (function type, generic
@@ -575,7 +560,6 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
                 _ => Ok(Value::Unit),
             },
 
-            // -- Multiplicity reference -----------------------------------
             // `@[m]` materialises a `meta::pure::metamodel::multiplicity::Multiplicity`
             // heap wrapper carrying `lowerBound`/`upperBound`. Consumers
             // (reflection like `->lowerBound`, the `toMultiplicity` native
@@ -587,7 +571,6 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
                     crate::native::meta::build_multiplicity_wrapper(&mut self.heap, multiplicity)?;
                 Ok(Value::Object(handle))
             }
-            // -- Relation literals -------------------------------------
             // `@(cols)` and `~[cols]` materialise heap shapes whose
             // structure mirrors Java's `_RelationType.build` /
             // `_Column.getColumnInstance`. The `addColumns` native and
@@ -610,7 +593,6 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
                     .map(Value::Object)
             }
 
-            // -- Navigation path literal -----------------------------------
             // Materialises a callable `Function<{U[1]→V[m]}>` value that
             // walks the path on invocation (see `eval_path_value`). Free
             // variables referenced from step parameters are captured via
@@ -646,7 +628,6 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
                 ))))
             }
 
-            // -- Bare element reference -----------------------------------
             // Produce a first-class Element handle so meta-model natives
             // (pathToElement, elementToPath, match) can inspect it. Using
             // the raw ElementId avoids the panic that get_node hits on
@@ -760,10 +741,6 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
         self.call_user_function(element_id, args, &name, None)
     }
 
-    // -----------------------------------------------------------------------
-    // Date literal evaluation
-    // -----------------------------------------------------------------------
-
     #[allow(clippy::result_large_err, clippy::unused_self)]
     fn eval_date_literal(&self, dv: &DateValue) -> Result<Value, PureException> {
         match dv {
@@ -868,10 +845,6 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
         }
     }
 
-    // -----------------------------------------------------------------------
-    // Function call dispatch
-    // -----------------------------------------------------------------------
-
     /// Dispatch a function call — the most complex evaluation case.
     ///
     /// Strategy (mirrors Java's `FunctionExpressionExecutor`):
@@ -956,10 +929,6 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
             lookup_key.into(),
         )))
     }
-
-    // -----------------------------------------------------------------------
-    // Native function dispatch
-    // -----------------------------------------------------------------------
 
     /// Dispatch a native function using the expression-activator model.
     ///
@@ -1080,10 +1049,6 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
         Ok(())
     }
 
-    // -----------------------------------------------------------------------
-    // User function evaluation
-    // -----------------------------------------------------------------------
-
     /// Evaluate a user-defined function from the compiled model.
     #[allow(clippy::result_large_err)]
     fn call_user_function(
@@ -1134,10 +1099,6 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
             })
         })
     }
-
-    // -----------------------------------------------------------------------
-    // Property access
-    // -----------------------------------------------------------------------
 
     #[allow(clippy::result_large_err)]
     fn eval_property_access(
@@ -1468,10 +1429,6 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
             ))),
         }
     }
-
-    // -----------------------------------------------------------------------
-    // Element property access
-    // -----------------------------------------------------------------------
 
     /// Read a property of a model-element reference (`Value::Element`).
     ///
@@ -1931,10 +1888,6 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
         Ok(result)
     }
 
-    // -----------------------------------------------------------------------
-    // Qualified property access
-    // -----------------------------------------------------------------------
-
     #[allow(clippy::result_large_err)]
     fn eval_qualified_property(
         &mut self,
@@ -2022,20 +1975,12 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
         )))
     }
 
-    // -----------------------------------------------------------------------
-    // Enum value
-    // -----------------------------------------------------------------------
-
     fn eval_enum_value(enum_element: ElementId, value: &str) -> Value {
         Value::EnumValue {
             enum_id: enum_element,
             member: SmolStr::new(value),
         }
     }
-
-    // -----------------------------------------------------------------------
-    // Lambda creation
-    // -----------------------------------------------------------------------
 
     fn eval_lambda_creation(
         &self,
@@ -2060,10 +2005,6 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
             captures,
         })))
     }
-
-    // -----------------------------------------------------------------------
-    // Collection literal
-    // -----------------------------------------------------------------------
 
     #[allow(clippy::result_large_err)]
     fn eval_collection(&mut self, elements: &[ValueSpec]) -> Result<Value, PureException> {
@@ -2094,10 +2035,6 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
             Ok(Value::Collection(Box::new(values)))
         }
     }
-
-    // -----------------------------------------------------------------------
-    // Lambda evaluation (called by native functions via EvalContext)
-    // -----------------------------------------------------------------------
 
     /// Evaluate a lambda closure with the given arguments.
     ///
@@ -2556,10 +2493,6 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// EvalContext — handle passed to native functions
-// ---------------------------------------------------------------------------
-
 /// Evaluation context passed to native functions.
 ///
 /// Provides native functions with access to the evaluator's capabilities:
@@ -3011,10 +2944,6 @@ pub(crate) enum WrapperKind {
     /// `$qp->evaluate(^List<Any>(values=$instance), …)`.
     QualifiedProperty,
 }
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

@@ -36,10 +36,6 @@ use crate::native::{
 };
 use crate::value::Value;
 
-// ---------------------------------------------------------------------------
-// DurationUnit — the unit argument for adjust/dateDiff
-// ---------------------------------------------------------------------------
-
 /// The time-granularity unit accepted by `adjust` and `dateDiff`.
 ///
 /// Pure's `DurationUnit` enum values reach the runtime as
@@ -110,18 +106,10 @@ fn duration_unit(v: &Value) -> Result<DurationUnit, PureRuntimeError> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Small i64 → i8/i16/i32 helper
-// ---------------------------------------------------------------------------
-
 fn i64_to_i16_arg(name: &str, n: i64) -> Result<i16, PureRuntimeError> {
     i16::try_from(n)
         .map_err(|_| PureRuntimeError::EvaluationError(format!("{name}: year {n} out of range")))
 }
-
-// ---------------------------------------------------------------------------
-// now / today
-// ---------------------------------------------------------------------------
 
 /// Pure `now(): DateTime[1]` — current instant, to-second precision, UTC.
 #[derive(Debug)]
@@ -176,10 +164,6 @@ impl NativeFunction for Today {
         Ok(Evaluated::new(result))
     }
 }
-
-// ---------------------------------------------------------------------------
-// Component accessors
-// ---------------------------------------------------------------------------
 
 /// Pure `year(Date[1]): Integer[1]`.
 #[derive(Debug)]
@@ -318,10 +302,6 @@ impl NativeFunction for Second {
     }
 }
 
-// ---------------------------------------------------------------------------
-// datePart
-// ---------------------------------------------------------------------------
-
 /// Pure `datePart(Date[1]): StrictDate[1]` — drop the time component.
 ///
 /// Per the platform comment on `datePart` (`essential/date/extract/
@@ -412,10 +392,6 @@ fn sunday_boundaries_between(a: jiff::civil::Date, b: jiff::civil::Date, days: i
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// dateDiff
-// ---------------------------------------------------------------------------
 
 /// Pure `dateDiff(Date[1], Date[1], DurationUnit[1]): Integer[1]`.
 ///
@@ -519,10 +495,6 @@ impl NativeFunction for DateDiff {
     }
 }
 
-// ---------------------------------------------------------------------------
-// adjust
-// ---------------------------------------------------------------------------
-
 /// Pure `adjust(Date[1], Integer[1], DurationUnit[1]): Date[1]`.
 ///
 /// Sub-second units (milli/micro/nano) are not supported by `PureDate`'s
@@ -559,10 +531,6 @@ impl NativeFunction for Adjust {
         Ok(Evaluated::new(Value::Date(new_date)))
     }
 }
-
-// ---------------------------------------------------------------------------
-// Precision probes
-// ---------------------------------------------------------------------------
 
 fn has_precision_at_least(d: &PureDate, at: DatePrecision) -> bool {
     match (d.precision(), at) {
@@ -721,10 +689,6 @@ impl NativeFunction for HasSubsecondWithAtLeastPrecision {
         Ok(Evaluated::new(Value::Boolean(have >= required)))
     }
 }
-
-// ---------------------------------------------------------------------------
-// parseDate
-// ---------------------------------------------------------------------------
 
 /// Pure `parseDate(String[1]): Date[1]`.
 ///
@@ -1015,10 +979,6 @@ fn parse_subsecond_lenient(frac: &str) -> (i32, u8) {
     (padded.parse().unwrap_or(0), digits)
 }
 
-// ---------------------------------------------------------------------------
-// date(...) — six Integer-arity overloads sharing one implementation
-// ---------------------------------------------------------------------------
-
 /// Pure `date(Integer[1], ...): Date[1]` — construct a date from 1–6
 /// Integer components (year; year+month; year+month+day; …; +hour; +min;
 /// +sec). Arity selects precision.
@@ -1124,10 +1084,6 @@ impl NativeFunction for DateConstruct {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Registration
-// ---------------------------------------------------------------------------
-
 /// Register all datetime native functions into the registry under their
 /// fully qualified mangled names.
 ///
@@ -1225,10 +1181,6 @@ pub fn register(registry: &mut NativeRegistry) {
         DateConstruct,
     );
 }
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

@@ -27,10 +27,6 @@ use crate::native::{
 };
 use crate::value::Value;
 
-// ---------------------------------------------------------------------------
-// plus (string concatenation)
-// ---------------------------------------------------------------------------
-
 /// Pure `plus(String[*]): String[1]` — string concatenation over a
 /// collection of strings. Single signature mirroring Java Pure's
 /// `StringPlus.execute`, which reads `params.get(0).values` and
@@ -59,10 +55,6 @@ impl NativeFunction for StringPlus {
     }
 }
 
-// ---------------------------------------------------------------------------
-// length
-// ---------------------------------------------------------------------------
-
 /// Pure `length(String[1]): Integer[1]`
 #[derive(Debug)]
 pub struct Length;
@@ -80,10 +72,6 @@ impl NativeFunction for Length {
         Ok(Evaluated::new(Value::Integer(s.len() as i64)))
     }
 }
-
-// ---------------------------------------------------------------------------
-// substring
-// ---------------------------------------------------------------------------
 
 /// Pure `substring(String[1], Integer[1], Integer[1]): String[1]`
 ///
@@ -127,10 +115,6 @@ impl NativeFunction for Substring {
         Ok(Evaluated::new(Value::String(SmolStr::new(&s[start..end]))))
     }
 }
-
-// ---------------------------------------------------------------------------
-// contains / startsWith / endsWith / indexOf
-// ---------------------------------------------------------------------------
 
 /// Pure `contains(String[1], String[1]): Boolean[1]`
 #[derive(Debug)]
@@ -230,10 +214,6 @@ impl NativeFunction for IndexOf {
     }
 }
 
-// ---------------------------------------------------------------------------
-// toLower / toUpper / trim
-// ---------------------------------------------------------------------------
-
 /// Pure `toLower(String[1]): String[1]`
 #[derive(Debug)]
 pub struct ToLower;
@@ -288,10 +268,6 @@ impl NativeFunction for Trim {
         Ok(Evaluated::new(Value::String(SmolStr::new(s.trim()))))
     }
 }
-
-// ---------------------------------------------------------------------------
-// toString
-// ---------------------------------------------------------------------------
 
 /// Pure `toString(Any[1]): String[1]` — convert any value to its
 /// human-readable Pure string form. Distinct from `Value::Display`
@@ -505,10 +481,6 @@ fn pure_to_string_leaf(value: &Value, ctx: &dyn EvalContextTrait) -> String {
         ),
     }
 }
-
-// ---------------------------------------------------------------------------
-// format
-// ---------------------------------------------------------------------------
 
 /// Produce a repr string for `%r` / `toRepresentation`: strings are
 /// quoted with backslash + single-quote escaped (Pure source form);
@@ -873,10 +845,6 @@ fn format_date_pattern(d: &crate::date::PureDate, pat: &str) -> String {
     out
 }
 
-// ---------------------------------------------------------------------------
-// ltrim / rtrim
-// ---------------------------------------------------------------------------
-
 /// Pure `ltrim(String[1]): String[1]` — remove leading whitespace.
 #[derive(Debug)]
 pub struct Ltrim;
@@ -911,10 +879,6 @@ impl NativeFunction for Rtrim {
     }
 }
 
-// ---------------------------------------------------------------------------
-// reverseString
-// ---------------------------------------------------------------------------
-
 /// Pure `reverseString(String[1]): String[1]` — reverse the characters of
 /// a string. Reversal is per Unicode scalar (`char`), not per byte, so
 /// multi-byte characters are preserved intact.
@@ -934,10 +898,6 @@ impl NativeFunction for ReverseString {
         Ok(Evaluated::new(Value::String(SmolStr::new(reversed))))
     }
 }
-
-// ---------------------------------------------------------------------------
-// replace
-// ---------------------------------------------------------------------------
 
 /// Pure `replace(String[1], String[1], String[1]): String[1]` — replace all
 /// occurrences of `target` in `source` with `replacement`.
@@ -961,10 +921,6 @@ impl NativeFunction for Replace {
         Ok(Evaluated::new(Value::String(SmolStr::new(out))))
     }
 }
-
-// ---------------------------------------------------------------------------
-// joinStrings (2-arg and 4-arg)
-// ---------------------------------------------------------------------------
 
 /// Pure `joinStrings` — concatenate a collection of strings with a separator.
 ///
@@ -1027,10 +983,6 @@ impl NativeFunction for JoinStrings {
     }
 }
 
-// ---------------------------------------------------------------------------
-// split
-// ---------------------------------------------------------------------------
-
 /// Pure `split(str:String[1], token:String[1]):String[*]`
 ///
 /// Splits `str` at every occurrence of `token`. When `token` is absent,
@@ -1057,10 +1009,6 @@ impl NativeFunction for Split {
         Ok(Evaluated::new(Value::from_vec(parts)))
     }
 }
-
-// ---------------------------------------------------------------------------
-// parseDecimal
-// ---------------------------------------------------------------------------
 
 /// Pure `parseDecimal(string:String[1]):Decimal[1]`
 /// Pure `parseDecimal(string:String[1], precision:Integer[1], scale:Integer[1]):Decimal[1]`
@@ -1141,10 +1089,6 @@ fn i64_arg(v: &Value, ctx: &str) -> Result<i64, PureException> {
         .into()),
     }
 }
-
-// ---------------------------------------------------------------------------
-// Registration
-// ---------------------------------------------------------------------------
 
 /// Register all string native functions.
 pub fn register(registry: &mut NativeRegistry) {
@@ -1671,10 +1615,6 @@ mod tests {
                 .is_err()
         );
     }
-
-    // -----------------------------------------------------------------------
-    // pure_to_string iterative-depth contract
-    // -----------------------------------------------------------------------
 
     /// Build `Collection(Collection(... Integer(0) ...))` `depth`
     /// levels deep. Primitive leaves keep the renderer off any code

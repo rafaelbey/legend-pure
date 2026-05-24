@@ -25,10 +25,6 @@ use legend_pure_parser_pure::ids::ElementId;
 use legend_pure_parser_pure::model::{Element, PureModel};
 use smol_str::SmolStr;
 
-// ---------------------------------------------------------------------------
-// element_simple_name
-// ---------------------------------------------------------------------------
-
 /// The element's simple, human-friendly name.
 ///
 /// - `Element::Function` → the unmangled `function_name` (so overloads
@@ -42,10 +38,6 @@ pub fn element_simple_name(model: &PureModel, id: ElementId) -> &SmolStr {
     }
     model.element_name(id)
 }
-
-// ---------------------------------------------------------------------------
-// build_element_path
-// ---------------------------------------------------------------------------
 
 /// Build the `separator`-joined qualified path for an element.
 ///
@@ -114,10 +106,6 @@ pub fn build_element_path(
         .collect::<Vec<_>>()
         .join(separator)
 }
-
-// ---------------------------------------------------------------------------
-// resolve_path
-// ---------------------------------------------------------------------------
 
 /// Resolve a `separator`-qualified path to an [`ElementId`].
 ///

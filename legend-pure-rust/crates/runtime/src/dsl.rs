@@ -156,10 +156,6 @@ pub fn run_populators(model: &PureModel, heap: &mut RuntimeHeap, populators: &[&
     }
 }
 
-// ---------------------------------------------------------------------------
-// DSL_POPULATORS — distributed slice for self-registering populators
-// ---------------------------------------------------------------------------
-
 /// Distributed slice into which each [`DSLPopulator`]-providing crate
 /// registers its populator instances.
 ///
