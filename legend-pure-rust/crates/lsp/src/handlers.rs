@@ -304,30 +304,30 @@ fn resolve_value_spec_target(vs: &legend_pure_parser_pure::types::ValueSpec) -> 
 /// Two-tier cursor resolution:
 ///   1. **Reference-site hit** — the cursor is on an existing
 ///      reference (e.g. `extends Foo`, `String[1]` in a parameter
-///      type). The reference's `target_element` is the symbol the
+///      type, `$x.foo` member access). The reference's
+///      `target_element` (or `target_property`) is the symbol the
 ///      user is asking about.
-///   2. **Definition-site hit** — the cursor sits on an element's
-///      own name span (the user clicked the declaration). Use that
-///      element's `ElementId`.
-///
-/// V1 limitation: cursor on a property identifier (`$x.propA`),
-/// qualified-property call, or local variable returns an empty
-/// `Vec` — those reference kinds carry `target_element: None` in
-/// today's index, so the reverse-index has no entry to return. A
-/// future change to richer reference targets (property +
-/// qualified-property granularity) will populate the V1
-/// no-op cases.
+///   2. **Definition-site hit** — the cursor sits on the declaration
+///      span of an element name, property declaration, or
+///      qualified-property declaration. Use the located node to
+///      build the reverse-index key.
 ///
 /// `include_declaration` honours the LSP `ReferenceContext` flag:
-/// when `true`, the declaration's own `name_source_info` is
-/// appended to the result. Per LSP 3.17, the declaration is
-/// considered one of the references.
+/// when `true`, the declaration's own `name_source_info` (or
+/// property declaration span) is appended to the result. Per LSP
+/// 3.17, the declaration is considered one of the references.
 ///
 /// `uri_for_canonical` resolves canonical compiler paths to
 /// on-disk URLs. Reference sites whose canonical path doesn't
 /// resolve are silently skipped — they may live in repos with no
 /// on-disk source (embedded / `.purem`), and an LSP client can't
 /// navigate to a file that doesn't exist.
+///
+/// V1 limitation that remains: local variables bound by `let` carry
+/// no reverse-index entry. Parameters work (cursor on
+/// `$paramName` → goto-def to the parameter) but find-usages of
+/// parameters is not yet populated. Property and qualified-property
+/// references **are** now reversed.
 #[must_use]
 pub fn references_for_position(
     model: &PureModel,
@@ -340,28 +340,11 @@ pub fn references_for_position(
 ) -> Vec<Location> {
     let (line, column) = convert::position_to_1indexed(position);
 
-    // Resolve cursor → target ElementId.
-    let target_id = references
-        .and_then(|idx| idx.find_at(canonical_path, line, column))
-        .and_then(|r| r.target_element)
-        .or_else(|| {
-            let located = model.locate(canonical_path, line, column)?;
-            if !matches!(located.kind, LocatedKind::Element) {
-                return None;
-            }
-            let node = model.get_node(located.element);
-            // Inclusive-end semantics — `name_source_info` from the
-            // compiler is **inclusive** at end_column (matches
-            // `refs::contains`), unlike the LSP `Range` convention.
-            // For a 1-char element name like `Class abc::A`, the
-            // span is `c13-c13`; an exclusive-end check would reject
-            // every cursor.
-            if !cursor_in_source_info_inclusive(&node.name_source_info, line, column) {
-                return None;
-            }
-            Some(located.element)
-        });
-    let Some(target_id) = target_id else {
+    // Resolve cursor → reverse-index target. The target is either an
+    // element (function, class, profile, …) or a property keyed by
+    // (declaring_class_id, name).
+    let target = resolve_reference_target(model, references, canonical_path, line, column);
+    let Some(target) = target else {
         return Vec::new();
     };
 
@@ -370,8 +353,11 @@ pub fn references_for_position(
     // happens for embedded/.purem-backed repos that have no on-disk
     // source. Dropping is correct: the LSP client can't navigate
     // there anyway.
-    let mut out: Vec<Location> = references
-        .and_then(|idx| idx.usages_of(target_id))
+    let usages = references.and_then(|idx| match &target {
+        RefTarget::Element(id) => idx.usages_of(*id),
+        RefTarget::Property(owner, name) => idx.usages_of_property(*owner, name.as_str()),
+    });
+    let mut out: Vec<Location> = usages
         .map(|locs| {
             locs.iter()
                 .filter_map(|loc| {
@@ -389,11 +375,107 @@ pub fn references_for_position(
         .unwrap_or_default();
 
     if include_declaration
-        && let Some(decl_loc) = element_location(model, target_id, file_uri, uri_for_canonical)
+        && let Some(decl_loc) = match &target {
+            RefTarget::Element(id) => element_location(model, *id, file_uri, uri_for_canonical),
+            RefTarget::Property(owner, name) => {
+                legend_pure_ide::property_decl_span_on_class(model, *owner, name.as_str())
+                    .and_then(|span| location_for_span(&span, file_uri, uri_for_canonical))
+            }
+        }
     {
         out.push(decl_loc);
     }
     out
+}
+
+/// What the cursor resolves to: either a first-class element or a
+/// property on a class. Drives the `usages_of` /
+/// `usages_of_property` dispatch in [`references_for_position`].
+#[derive(Debug)]
+enum RefTarget {
+    Element(ElementId),
+    Property(ElementId, smol_str::SmolStr),
+}
+
+fn resolve_reference_target(
+    model: &PureModel,
+    references: Option<&ReferenceIndex>,
+    canonical_path: &str,
+    line: u32,
+    column: u32,
+) -> Option<RefTarget> {
+    // Tier 1: the index already classifies every reference site. A
+    // PropertyCall / QualifiedPropertyCall ref carries
+    // `target_property`; everything else carries `target_element`.
+    if let Some(idx) = references
+        && let Some(r) = idx.find_at(canonical_path, line, column)
+    {
+        if let Some(id) = r.target_element {
+            return Some(RefTarget::Element(id));
+        }
+        if let Some((owner, name)) = r.target_property.clone() {
+            return Some(RefTarget::Property(owner, name));
+        }
+    }
+
+    // Tier 2: cursor on a declaration name. `model.locate` already
+    // narrows to Property / QualifiedProperty / Element, so we just
+    // map those variants to a reverse-index key.
+    let located = model.locate(canonical_path, line, column)?;
+    match located.kind {
+        LocatedKind::Element => {
+            let node = model.get_node(located.element);
+            // Inclusive-end semantics — `name_source_info` is
+            // **inclusive** at end_column (matches `refs::contains`),
+            // unlike the LSP `Range` convention. For a 1-char name
+            // (`Class abc::A`), the span is `c13-c13`; an
+            // exclusive-end check would reject every cursor.
+            if cursor_in_source_info_inclusive(&node.name_source_info, line, column) {
+                Some(RefTarget::Element(located.element))
+            } else {
+                None
+            }
+        }
+        LocatedKind::Property(p) => {
+            // `located.element` is the class that **declares** the
+            // property (locate descends into the class's own
+            // `properties` list — inherited properties aren't a
+            // Tier-2 hit on a subclass declaration). That matches the
+            // reverse-index key the walker emits.
+            if cursor_in_source_info_inclusive(&p.source_info, line, column) {
+                Some(RefTarget::Property(located.element, p.name.clone()))
+            } else {
+                None
+            }
+        }
+        LocatedKind::QualifiedProperty(qp) => {
+            if cursor_in_source_info_inclusive(&qp.source_info, line, column) {
+                Some(RefTarget::Property(located.element, qp.name.clone()))
+            } else {
+                None
+            }
+        }
+        // Parameter / Constraint / ValueSpec headers — find-usages
+        // doesn't apply (parameter find-usages is a future gap;
+        // constraints + ValueSpecs aren't named targets).
+        _ => None,
+    }
+}
+
+/// Build a [`Location`] from a [`SourceInfo`]. Same shape as the
+/// closing branch of [`element_location`] but takes a span
+/// directly — used for property declarations which don't have an
+/// `ElementId` to feed `element_location`.
+fn location_for_span(
+    span: &legend_pure_parser_ast::SourceInfo,
+    file_uri: &Uri,
+    uri_for_canonical: &dyn Fn(&str) -> Option<Uri>,
+) -> Option<Location> {
+    let uri = uri_for_canonical_or_click(span.source.as_str(), file_uri, uri_for_canonical)?;
+    Some(Location {
+        uri,
+        range: range_from_source_info(span),
+    })
 }
 
 /// Choose the click URI when the target lives in the same file as
@@ -1991,11 +2073,12 @@ Class test::B extends test::A {}
     }
 
     #[test]
-    fn references_empty_on_property_call_v1_limitation() {
-        // V1 scope: PropertyCall references carry target_element=None
-        // and are NOT exposed via `usages_of`. Pin this so a future
-        // change to richer reference targets doesn't silently flip
-        // the result and surprise callers.
+    fn references_property_returns_use_site() {
+        // PropertyCall references now carry
+        // `target_property: Some((declaring_class_id, name))` and the
+        // reverse index exposes them via `usages_of_property`. Cursor
+        // on the property name inside `$p.name` returns the call
+        // site's `name` span.
         let src = "\
 Class test::Person
 {
@@ -2022,9 +2105,191 @@ function test::nameOf(p: test::Person[1]): String[1]
             &uri,
             no_cross_file,
         );
+        assert_eq!(
+            locs.len(),
+            1,
+            "expected one use site for Person.name; got: {locs:?}"
+        );
+        // Use site lives in the body — line index 7 in 0-indexed LSP.
+        assert_eq!(locs[0].range.start.line, 7);
+    }
+
+    #[test]
+    fn references_property_inherited_returns_use_site() {
+        // `$emp.name` resolves via the supertype chain to Person.name.
+        // The walker keys on the **declaring** class (Person), so a
+        // cursor on the use site returns it under that key.
+        let src = "\
+Class test::Person
+{
+  name: String[1];
+}
+
+Class test::Employee extends test::Person
+{
+  empId: String[1];
+}
+
+function test::nameOf(e: test::Employee[1]): String[1]
+{
+  $e.name
+}
+";
+        let model = compile_fixture("fixture.pure", src);
+        let index = refs_for(&model);
+        let uri = "file:///fixture.pure".parse::<Uri>().unwrap();
+        let no_cross_file: &dyn Fn(&str) -> Option<Uri> = &|_| None;
+        // Cursor inside `$e.name` — `name` lives on line 13 col 6
+        // (1-indexed) → 0-indexed (12, 5).
+        let locs = references_for_position(
+            &model,
+            Some(&index),
+            "fixture.pure",
+            pos(12, 5),
+            false,
+            &uri,
+            no_cross_file,
+        );
+        assert_eq!(
+            locs.len(),
+            1,
+            "inherited property cursor should return the use site; got: {locs:?}"
+        );
+        assert_eq!(locs[0].range.start.line, 12);
+    }
+
+    #[test]
+    fn references_property_cursor_on_declaration_returns_use_site() {
+        // Cursor on the property's own declaration (`name: String[1]`
+        // line in Class Person) should return the use site in
+        // `nameOf`. Exercises the Tier-2 (`model.locate`) branch with
+        // `LocatedKind::Property`.
+        let src = "\
+Class test::Person
+{
+  name: String[1];
+}
+
+function test::nameOf(p: test::Person[1]): String[1]
+{
+  $p.name
+}
+";
+        let model = compile_fixture("fixture.pure", src);
+        let index = refs_for(&model);
+        let uri = "file:///fixture.pure".parse::<Uri>().unwrap();
+        let no_cross_file: &dyn Fn(&str) -> Option<Uri> = &|_| None;
+        // Cursor on `name` in `name: String[1];` — line 3 col 3
+        // (1-indexed) → 0-indexed (2, 2).
+        let locs = references_for_position(
+            &model,
+            Some(&index),
+            "fixture.pure",
+            pos(2, 2),
+            false,
+            &uri,
+            no_cross_file,
+        );
+        assert_eq!(
+            locs.len(),
+            1,
+            "cursor on property declaration should return the use site; got: {locs:?}"
+        );
+        assert_eq!(locs[0].range.start.line, 7);
+    }
+
+    #[test]
+    fn references_property_include_declaration_appends_decl() {
+        // include_declaration on a property cursor appends the
+        // property's declaration span (not an element name span).
+        // Exercises `property_decl_span_on_class` + `location_for_span`.
+        let src = "\
+Class test::Person
+{
+  name: String[1];
+}
+
+function test::nameOf(p: test::Person[1]): String[1]
+{
+  $p.name
+}
+";
+        let model = compile_fixture("fixture.pure", src);
+        let index = refs_for(&model);
+        let uri = "file:///fixture.pure".parse::<Uri>().unwrap();
+        let no_cross_file: &dyn Fn(&str) -> Option<Uri> = &|_| None;
+        // Cursor on `$p.name`'s `name` (line 8 col 6 1-indexed → 7,5).
+        let without = references_for_position(
+            &model,
+            Some(&index),
+            "fixture.pure",
+            pos(7, 5),
+            false,
+            &uri,
+            no_cross_file,
+        );
+        let with = references_for_position(
+            &model,
+            Some(&index),
+            "fixture.pure",
+            pos(7, 5),
+            true,
+            &uri,
+            no_cross_file,
+        );
+        assert_eq!(
+            with.len(),
+            without.len() + 1,
+            "include_declaration=true must add exactly one Location; got: {with:?}"
+        );
+        // The decl span is `name: String[1];` on line 3 (1-indexed)
+        // → 0-indexed line 2.
+        let decl_range = with.last().expect("decl present").range;
+        assert_eq!(
+            decl_range.start.line, 2,
+            "decl location should point at the property declaration line; got: {decl_range:?}"
+        );
+    }
+
+    #[test]
+    fn references_qualified_property_returns_use_site() {
+        // Qualified-property usages reverse-index too: `$p.greet()`
+        // resolves to the QP on the receiver's class.
+        let src = "\
+Class test::Person
+{
+  name: String[1];
+  greet() { 'hello ' + $this.name }: String[1];
+}
+
+function test::g(p: test::Person[1]): String[1]
+{
+  $p.greet()
+}
+";
+        let model = compile_fixture("fixture.pure", src);
+        let index = refs_for(&model);
+        let uri = "file:///fixture.pure".parse::<Uri>().unwrap();
+        let no_cross_file: &dyn Fn(&str) -> Option<Uri> = &|_| None;
+        // Cursor inside `$p.greet()` — `greet` starts at line 9 col 6
+        // (1-indexed) → 0-indexed (8, 5).
+        let locs = references_for_position(
+            &model,
+            Some(&index),
+            "fixture.pure",
+            pos(8, 5),
+            false,
+            &uri,
+            no_cross_file,
+        );
         assert!(
-            locs.is_empty(),
-            "V1 scope: property cursors must return empty; got: {locs:?}"
+            !locs.is_empty(),
+            "qualified-property cursor should return its use site(s); got empty"
+        );
+        // At least one location should point at line 8 (the QP call).
+        assert!(
+            locs.iter().any(|l| l.range.start.line == 8),
+            "expected a use site on line 8; got: {locs:?}"
         );
     }
 
@@ -2091,6 +2356,7 @@ function test::nameOf(p: test::Person[1]): String[1]
             range: use_site_si.clone(),
             kind: RefKind::TypeRef,
             target_element: Some(class_id),
+            target_property: None,
             target: class_name_si.clone(),
         });
         index.finalize();

@@ -578,7 +578,7 @@ impl LegendMcpServer {
 
     /// List every source location that references a given element.
     #[tool(
-        description = "Find all source locations that reference a Legend Pure element by FQN. Returns one row per reference site (function calls, type uses, stereotype refs, etc.) sorted by source + line. Use this to scope a refactor before renaming or changing a signature. V1 limitation: property access on instances and let-bound locals do not appear yet."
+        description = "Find all source locations that reference a Legend Pure element by FQN. Returns one row per reference site (function calls, type uses, property accesses, stereotype refs, etc.) sorted by source + line. Use this to scope a refactor before renaming or changing a signature. Class properties address with a dot suffix on the class FQN: `pkg::Person.name`. V1 limitations: association-injected properties and let-bound local variables are not yet indexed — an empty array for those targets means \"not yet supported\", not \"definitely zero usages\"."
     )]
     pub async fn find_references(
         &self,
@@ -876,10 +876,42 @@ fn find_references_impl(
     // up as a 400-style McpError so the agent learns the FQN was bad.
     // `Some(vec![])` = element exists but isn't referenced anywhere —
     // a valid empty result, surfaced as `[]`.
-    let id = model.resolve_fqn_str(fqn)?;
-    let mut out: Vec<ReferenceLocation> = references
-        .usages_of(id)
-        .unwrap_or(&[])
+    //
+    // A `.` in the FQN routes to property lookup: `pkg::Class.prop`.
+    // Pure packages use `::`, so `.` unambiguously separates the
+    // class FQN from the property name. Split on the **last** `.`
+    // so dotted property names (`Profile.tagName`-style) still
+    // round-trip correctly should the addressing convention ever
+    // expand.
+    let usages: Vec<legend_pure_ide::RefLocation> = if let Some(dot_idx) = fqn.rfind('.') {
+        let (class_fqn, prop_name) = (&fqn[..dot_idx], &fqn[dot_idx + 1..]);
+        if prop_name.is_empty() {
+            return None;
+        }
+        let class_id = model.resolve_fqn_str(class_fqn)?;
+        // Only Class / Association declare properties.
+        match model.try_get_element(class_id) {
+            Some(legend_pure_parser_pure::model::Element::Class(_))
+            | Some(legend_pure_parser_pure::model::Element::Association(_)) => {}
+            _ => return None,
+        }
+        // Verify the property actually exists on the class chain
+        // before deciding "no usages" vs. "doesn't exist".
+        if !legend_pure_parser_pure::resolve::class_has_property_in_hierarchy(
+            model, class_id, prop_name,
+        ) {
+            return None;
+        }
+        references
+            .usages_of_property(class_id, prop_name)
+            .unwrap_or(&[])
+            .to_vec()
+    } else {
+        let id = model.resolve_fqn_str(fqn)?;
+        references.usages_of(id).unwrap_or(&[]).to_vec()
+    };
+
+    let mut out: Vec<ReferenceLocation> = usages
         .iter()
         .map(|loc| ReferenceLocation {
             source: loc.canonical_path.to_string(),

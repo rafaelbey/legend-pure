@@ -878,6 +878,7 @@ impl legend_pure_ide::IdeExtension for RelationalIdeExtension {
                     range: include.included.source_info.clone(),
                     kind: legend_pure_ide::RefKind::TypeRef,
                     target_element: Some(target_id),
+                    target_property: None,
                     target,
                 });
             }

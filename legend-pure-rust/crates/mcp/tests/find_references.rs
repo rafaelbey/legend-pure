@@ -205,3 +205,110 @@ async fn find_references_empty_for_unused_function() {
         "expected zero references for unused function, got {arr:#?}"
     );
 }
+
+#[tokio::test]
+async fn find_references_property_returns_callsite() {
+    // Class with a property + a function that reads it. Dot-suffix
+    // FQN `pkg::Person.name` resolves to the property and returns the
+    // use site.
+    let a = "\
+Class pkg::Person
+{
+  name: String[1];
+}
+
+function pkg::nameOf(p: pkg::Person[1]): String[1]
+{
+  $p.name
+}
+";
+    let (server, _tmp) = build_server(&[("/proj/a.pure", a)]);
+
+    let result = server
+        .find_references(Parameters(FindReferencesArgs {
+            fqn: "pkg::Person.name".to_string(),
+        }))
+        .await
+        .expect("find_references ok");
+    let json = extract_text_content(&result);
+    let parsed: serde_json::Value =
+        serde_json::from_str(&json).expect("parse find_references json");
+    let arr = parsed.as_array().expect("array");
+
+    assert_eq!(arr.len(), 1, "expected one property usage; got {arr:#?}");
+    assert_eq!(arr[0]["source"].as_str().expect("source"), "/proj/a.pure");
+    // `$p.name` lives on line 8 (1-indexed) in this fixture.
+    assert_eq!(arr[0]["line"].as_u64().expect("line"), 8);
+}
+
+#[tokio::test]
+async fn find_references_property_unknown_returns_error() {
+    let a = "\
+Class pkg::Person
+{
+  name: String[1];
+}
+";
+    let (server, _tmp) = build_server(&[("/proj/a.pure", a)]);
+
+    let err = server
+        .find_references(Parameters(FindReferencesArgs {
+            fqn: "pkg::Person.nope".to_string(),
+        }))
+        .await
+        .expect_err("unknown property should error");
+    let msg = err.message.to_string();
+    assert!(
+        msg.contains("element not found"),
+        "error message should mention missing element: {msg}"
+    );
+    assert!(
+        msg.contains("pkg::Person.nope"),
+        "error message should echo the bad FQN: {msg}"
+    );
+}
+
+#[tokio::test]
+async fn find_references_property_inherited_returns_callsite() {
+    // `$emp.name` resolves via the supertype chain to Person.name.
+    // The walker keys on the declaring class (Person), so the
+    // property FQN `pkg::Person.name` returns the use site even
+    // though the receiver type is Employee.
+    let a = "\
+Class pkg::Person
+{
+  name: String[1];
+}
+
+Class pkg::Employee extends pkg::Person
+{
+  empId: String[1];
+}
+
+function pkg::nameOf(e: pkg::Employee[1]): String[1]
+{
+  $e.name
+}
+";
+    let (server, _tmp) = build_server(&[("/proj/a.pure", a)]);
+
+    let result = server
+        .find_references(Parameters(FindReferencesArgs {
+            fqn: "pkg::Person.name".to_string(),
+        }))
+        .await
+        .expect("find_references ok");
+    let json = extract_text_content(&result);
+    let parsed: serde_json::Value =
+        serde_json::from_str(&json).expect("parse find_references json");
+    let arr = parsed.as_array().expect("array");
+
+    assert_eq!(
+        arr.len(),
+        1,
+        "expected inherited usage to be returned under the declaring class; got {arr:#?}"
+    );
+    assert_eq!(arr[0]["source"].as_str().expect("source"), "/proj/a.pure");
+    // `$e.name` lives on line 13 (1-indexed) in this fixture.
+    assert_eq!(arr[0]["line"].as_u64().expect("line"), 13);
+}

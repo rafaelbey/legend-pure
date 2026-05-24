@@ -1808,6 +1808,65 @@ pub(crate) fn find_property_with_inheritance(
     None
 }
 
+/// Whether `class_id` (or any of its supertypes / association ends)
+/// declares a property or qualified-property named `name`.
+///
+/// Cheap existence check used by IDE tooling
+/// (`find_references { fqn: "pkg::Class.prop" }`) to distinguish
+/// "property doesn't exist" (return an error) from "property exists
+/// but has no usages" (return empty).
+///
+/// Walks `super_types` BFS like the other property helpers, **and**
+/// `association_properties` (the same association-injected lookup
+/// `find_property_full_with_inheritance` does). Checks both
+/// `properties` and `qualified_properties` lists on each visited
+/// class.
+#[must_use]
+pub fn class_has_property_in_hierarchy(
+    model: &crate::model::PureModel,
+    class_id: ElementId,
+    name: &str,
+) -> bool {
+    use crate::types::TypeExpr;
+    let mut visited = std::collections::HashSet::new();
+    let mut queue = std::collections::VecDeque::new();
+    queue.push_back(class_id);
+    while let Some(current) = queue.pop_front() {
+        if !visited.insert(current) {
+            continue;
+        }
+        let Some(Element::Class(c)) = model.try_get_element(current) else {
+            continue;
+        };
+        if c.properties.iter().any(|p| p.name.as_str() == name) {
+            return true;
+        }
+        if c.qualified_properties
+            .iter()
+            .any(|q| q.name.as_str() == name)
+        {
+            return true;
+        }
+        for (assoc_id, self_idx) in model.association_properties(current) {
+            let Some(Element::Association(assoc)) = model.try_get_element(*assoc_id) else {
+                continue;
+            };
+            let other_idx = 1 - *self_idx;
+            if let Some(p) = assoc.properties.get(other_idx)
+                && p.name.as_str() == name
+            {
+                return true;
+            }
+        }
+        for st in &c.super_types {
+            if let TypeExpr::Named { element, .. } = st {
+                queue.push_back(*element);
+            }
+        }
+    }
+    false
+}
+
 /// Walks the class hierarchy looking for `property`, returning the
 /// full [`Property`][p] shell from whichever class declares it.
 ///

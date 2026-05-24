@@ -513,6 +513,7 @@ fn push_element_ref(
         range: ptr.source_info.clone(),
         kind,
         target_element: Some(target_id),
+        target_property: None,
         target,
     });
 }

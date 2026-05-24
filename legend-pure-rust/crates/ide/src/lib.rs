@@ -88,8 +88,19 @@ pub struct Reference {
     pub kind: RefKind,
     /// Target element (the thing being referenced). `None` for
     /// references whose target is purely positional, e.g. a Variable
-    /// pointing at a Parameter declaration with no element ID.
+    /// pointing at a Parameter declaration with no element ID, and
+    /// for property references (use [`Self::target_property`]).
     pub target_element: Option<ElementId>,
+    /// Target property `(declaring_class_id, property_name)` for
+    /// `PropertyCall` / `QualifiedPropertyCall` references. Coexists
+    /// with [`Self::target_element`]: at most one is `Some` per
+    /// reference. Used by the find-usages reverse index — properties
+    /// aren't first-class elements, so they need a composite key.
+    /// Walker sets the **declaring** class id (resolved by walking
+    /// the receiver's supertype chain), so usages of an inherited
+    /// property roll up under the class that actually declares it.
+    #[serde(default)]
+    pub target_property: Option<(ElementId, SmolStr)>,
     /// Where the IDE should navigate to. Often the
     /// `name_source_info` of the target element; for variables it's
     /// the parameter's source range.
@@ -110,8 +121,16 @@ pub struct ReferenceIndex {
     /// (start_line, start_column) for binary-search-friendly lookup.
     pub by_file: HashMap<SmolStr, Vec<Reference>>,
     /// References keyed by their target element. Inverted view of
-    /// `by_file`, populated lazily on first access.
+    /// `by_file` for things that have a first-class `ElementId`.
     pub by_target: HashMap<ElementId, Vec<RefLocation>>,
+    /// References keyed by `(declaring_class_id, property_name)` —
+    /// the property analogue of [`Self::by_target`]. Populated
+    /// alongside `by_file` by [`Self::push`] for any reference
+    /// carrying [`Reference::target_property`]. Properties don't
+    /// have their own `ElementId`, so this is the only path for
+    /// property find-usages.
+    #[serde(default)]
+    pub by_property: HashMap<(ElementId, SmolStr), Vec<RefLocation>>,
 }
 
 /// A reverse-index entry: where a target is referenced from.
@@ -126,7 +145,9 @@ pub struct RefLocation {
 }
 
 impl ReferenceIndex {
-    /// Add a reference to both the per-file and per-target indexes.
+    /// Add a reference to the per-file index and, when the reference
+    /// carries a target identifier, the matching reverse index
+    /// (`by_target` for elements, `by_property` for properties).
     pub fn push(&mut self, reference: Reference) {
         let canonical = reference.range.source.clone();
         if let Some(target) = reference.target_element {
@@ -135,6 +156,16 @@ impl ReferenceIndex {
                 range: reference.range.clone(),
                 kind: reference.kind,
             });
+        }
+        if let Some((owner, name)) = reference.target_property.clone() {
+            self.by_property
+                .entry((owner, name))
+                .or_default()
+                .push(RefLocation {
+                    canonical_path: canonical.clone(),
+                    range: reference.range.clone(),
+                    kind: reference.kind,
+                });
         }
         self.by_file.entry(canonical).or_default().push(reference);
     }
@@ -180,6 +211,20 @@ impl ReferenceIndex {
     #[must_use]
     pub fn usages_of(&self, target: ElementId) -> Option<&[RefLocation]> {
         self.by_target.get(&target).map(Vec::as_slice)
+    }
+
+    /// All references targeting the property `(owner, name)`, where
+    /// `owner` is the class that **declares** the property (after
+    /// supertype-chain resolution by the walker). `None` when there
+    /// are no usages.
+    #[must_use]
+    pub fn usages_of_property(&self, owner: ElementId, name: &str) -> Option<&[RefLocation]> {
+        // HashMap key is owned, but we only need a borrow to look up;
+        // build the key by reference clone. SmolStr is 24-byte inline
+        // for short names, so the clone is cheap.
+        self.by_property
+            .get(&(owner, SmolStr::new(name)))
+            .map(Vec::as_slice)
     }
 }
 
@@ -368,6 +413,7 @@ fn walk_stereotypes(
             range: range.clone(),
             kind: RefKind::StereotypeRef,
             target_element: Some(st.profile),
+            target_property: None,
             target,
         });
     }
@@ -413,6 +459,7 @@ fn walk_tagged_values(
             range: range.clone(),
             kind: RefKind::TaggedValueRef,
             target_element: Some(tv.profile),
+            target_property: None,
             target,
         });
     }
@@ -453,6 +500,7 @@ fn walk_value_spec_in_scope(
                     range,
                     kind: RefKind::FunctionCall,
                     target_element: Some(target_element),
+                    target_property: None,
                     target,
                 });
             }
@@ -475,19 +523,35 @@ fn walk_value_spec_in_scope(
             // `function_name` matches a declared value, emit a
             // Reference targeting that value's source span.
             if let Some(receiver) = d.arguments.first() {
-                let prop_target =
-                    property_decl_span(model, receiver, &d.function_name, /*qualified*/ false)
-                        .or_else(|| enum_value_decl_span(model, receiver, &d.function_name));
-                if let Some(target) = prop_target {
-                    // `vs.source_info` is the member identifier's span
-                    // (set in `lower_member_access`). That's the
-                    // navigable region — clicks elsewhere on the
-                    // receiver land on the receiver's own ref via the
-                    // argument recursion below.
+                // First try a real property lookup. Returns the
+                // declaration span AND the declaring class id, which
+                // lets us key the reverse index on the class that
+                // actually declares the property (not the receiver's
+                // possibly-derived class).
+                if let Some((target, owner)) = property_decl_target(
+                    model,
+                    receiver,
+                    &d.function_name,
+                    /*qualified*/ false,
+                ) {
                     visit(Reference {
                         range: vs.source_info.clone(),
                         kind: RefKind::PropertyCall,
                         target_element: None,
+                        target_property: Some((owner, d.function_name.clone())),
+                        target,
+                    });
+                } else if let Some(target) = enum_value_decl_span(model, receiver, &d.function_name)
+                {
+                    // Static enum-value access (`Color.RED`) — lowered as a
+                    // PropertyCall but logically an enum-value reference.
+                    // Don't pollute `by_property`: this isn't a class
+                    // property. Navigation still works via `target`.
+                    visit(Reference {
+                        range: vs.source_info.clone(),
+                        kind: RefKind::PropertyCall,
+                        target_element: None,
+                        target_property: None,
                         target,
                     });
                 }
@@ -498,13 +562,14 @@ fn walk_value_spec_in_scope(
         }
         ExprKind::QualifiedPropertyCall(d) => {
             if let Some(receiver) = d.arguments.first()
-                && let Some(qp_target) =
-                    property_decl_span(model, receiver, &d.function_name, /*qualified*/ true)
+                && let Some((qp_target, owner)) =
+                    property_decl_target(model, receiver, &d.function_name, /*qualified*/ true)
             {
                 visit(Reference {
                     range: vs.source_info.clone(),
                     kind: RefKind::QualifiedPropertyCall,
                     target_element: None,
+                    target_property: Some((owner, d.function_name.clone())),
                     target: qp_target,
                 });
             }
@@ -520,6 +585,7 @@ fn walk_value_spec_in_scope(
                         range: vs.source_info.clone(),
                         kind: RefKind::Variable,
                         target_element: None,
+                        target_property: None,
                         target: p.source_info.clone(),
                     });
                     return;
@@ -535,6 +601,7 @@ fn walk_value_spec_in_scope(
                     range: vs.source_info.clone(),
                     kind: RefKind::TypeRef,
                     target_element: Some(*element),
+                    target_property: None,
                     target,
                 });
             }
@@ -545,6 +612,7 @@ fn walk_value_spec_in_scope(
                     range: vs.source_info.clone(),
                     kind: RefKind::EnumValue,
                     target_element: Some(*enum_element),
+                    target_property: None,
                     target,
                 });
             }
@@ -557,6 +625,7 @@ fn walk_value_spec_in_scope(
                     range: vs.source_info.clone(),
                     kind: RefKind::TypeRef,
                     target_element: Some(*element),
+                    target_property: None,
                     target,
                 });
             }
@@ -653,6 +722,34 @@ fn tag_decl_span(profile_element: &Element, name: &SmolStr) -> Option<SourceInfo
     Some(decl.source_info.clone())
 }
 
+/// Look up the source span of property (or qualified-property)
+/// `name` on `class_id` or any of its supertypes. Public sibling to
+/// [`property_decl_target`] for callers that already have the
+/// declaring class id directly (LSP `references_for_position`
+/// when `include_declaration` is set, and any cursor-on-property
+/// path that doesn't run through a `ValueSpec` receiver).
+#[must_use]
+pub fn property_decl_span_on_class(
+    model: &PureModel,
+    class_id: ElementId,
+    name: &str,
+) -> Option<SourceInfo> {
+    let mut visited = std::collections::HashSet::new();
+    walk_class_chain_with_id(model, class_id, &mut visited, &mut |_id, class| {
+        if let Some(p) = class.properties.iter().find(|p| p.name.as_str() == name) {
+            return Some(p.source_info.clone());
+        }
+        if let Some(qp) = class
+            .qualified_properties
+            .iter()
+            .find(|q| q.name.as_str() == name)
+        {
+            return Some(qp.source_info.clone());
+        }
+        None
+    })
+}
+
 /// Resolve a `PropertyCall` / `QualifiedPropertyCall` to its
 /// declaring class member's source span via the receiver's
 /// `type_info`.
@@ -665,29 +762,33 @@ fn tag_decl_span(profile_element: &Element, name: &SmolStr) -> Option<SourceInfo
 ///
 /// Walks the supertype chain too — `$person.address` lands on the
 /// `address` declaration even when it's inherited.
-fn property_decl_span(
+///
+/// Returns `(declaration_span, declaring_class_id)` so the walker can
+/// both navigate (span) and build a reverse-index key (declaring
+/// class id + property name).
+fn property_decl_target(
     model: &PureModel,
     receiver: &ValueSpec,
     name: &smol_str::SmolStr,
     qualified: bool,
-) -> Option<SourceInfo> {
+) -> Option<(SourceInfo, ElementId)> {
     let receiver_ty = receiver.type_info.as_deref()?;
     let TypeExpr::Named { element, .. } = &receiver_ty.type_expr else {
         return None;
     };
     let mut visited = std::collections::HashSet::new();
-    walk_class_chain(model, *element, &mut visited, &mut |class| {
+    walk_class_chain_with_id(model, *element, &mut visited, &mut |class_id, class| {
         if !qualified && let Some(p) = class.properties.iter().find(|p| &p.name == name) {
-            return Some(p.source_info.clone());
+            return Some((p.source_info.clone(), class_id));
         }
         if let Some(qp) = class.qualified_properties.iter().find(|q| &q.name == name) {
-            return Some(qp.source_info.clone());
+            return Some((qp.source_info.clone(), class_id));
         }
         // Fallback: try the OTHER list — the parser sometimes
         // produces PropertyCall when the resolved member is a QP and
         // vice versa, depending on disambiguation order.
         if qualified && let Some(p) = class.properties.iter().find(|p| &p.name == name) {
-            return Some(p.source_info.clone());
+            return Some((p.source_info.clone(), class_id));
         }
         None
     })
@@ -730,13 +831,16 @@ fn enum_value_decl_span(
 }
 
 /// Walk the receiver class + every transitive super-class, calling
-/// `visit` on each. Returns the first `Some` result. Used by
-/// property navigation to find inherited members.
-fn walk_class_chain<R>(
+/// `visit` on each, threading the **declaring class id** so callers
+/// can build keys against whoever actually declares the inherited
+/// member. Returns the first `Some` result. Used by
+/// `property_decl_target` to find inherited members and emit the
+/// reverse-index key against the declaring class.
+fn walk_class_chain_with_id<R>(
     model: &PureModel,
     start: ElementId,
     visited: &mut std::collections::HashSet<ElementId>,
-    visit: &mut dyn FnMut(&Class) -> Option<R>,
+    visit: &mut dyn FnMut(ElementId, &Class) -> Option<R>,
 ) -> Option<R> {
     if !visited.insert(start) {
         return None;
@@ -744,12 +848,12 @@ fn walk_class_chain<R>(
     let Element::Class(class) = model.try_get_element(start)? else {
         return None;
     };
-    if let Some(hit) = visit(class) {
+    if let Some(hit) = visit(start, class) {
         return Some(hit);
     }
     for st in &class.super_types {
         if let TypeExpr::Named { element, .. } = st
-            && let Some(hit) = walk_class_chain(model, *element, visited, visit)
+            && let Some(hit) = walk_class_chain_with_id(model, *element, visited, visit)
         {
             return Some(hit);
         }
@@ -777,6 +881,7 @@ fn walk_type_expr(model: &PureModel, ty: &TypeExpr, visit: &mut dyn FnMut(Refere
                     range: range.clone(),
                     kind: RefKind::TypeRef,
                     target_element: Some(*element),
+                    target_property: None,
                     target,
                 });
             }
