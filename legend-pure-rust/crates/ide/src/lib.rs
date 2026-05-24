@@ -802,10 +802,6 @@ fn walk_type_expr(model: &PureModel, ty: &TypeExpr, visit: &mut dyn FnMut(Refere
     }
 }
 
-// ---------------------------------------------------------------------------
-// IdeExtension — standalone IDE reference contribution trait
-// ---------------------------------------------------------------------------
-
 /// Plugin contract for contributing IDE references (go-to-definition,
 /// find-usages, navigation) on top of the core walk performed by
 /// [`walk_references`].
