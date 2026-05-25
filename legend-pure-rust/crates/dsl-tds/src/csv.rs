@@ -423,17 +423,27 @@ impl RawCell {
         }
     }
 
-    /// `true` if this cell carries no value. Bare cells with no
-    /// non-whitespace text are empty; quoted cells whose content is
-    /// likewise empty (`''`, `""`) are also treated as empty so they
-    /// can mark a null in the standard CSV convention. A non-empty
+    /// `true` if this cell carries no value (a NULL / empty cell). Bare
+    /// cells with no non-whitespace text are empty; quoted cells whose
+    /// content is likewise empty (`''`, `""`) are also treated as empty so
+    /// they can mark a null in the standard CSV convention. A non-empty
     /// quoted cell (`'foo'`) is not empty.
+    ///
+    /// The bare (unquoted) token `null` is also a NULL sentinel — matching
+    /// Java's TDS literal parser, which builds its CSV reader with
+    /// `nullValueLiterals(["", "null"])` (`TDSExtension.makePureCsvSpecs`).
+    /// Case-sensitive and unquoted only: a quoted `'null'` stays the String
+    /// `"null"`, and `NULL`/`Null` are not sentinels here (the compile-time
+    /// TDS parser matches lowercase `null` exactly; the engine's runtime
+    /// `TestTDS` additionally accepts `NULL`, but the literal type-inference
+    /// path mirrored here does not).
     fn is_empty(&self) -> bool {
         if self.quoted {
             // Strip surrounding quotes and check the inner text.
             self.value().trim().is_empty()
         } else {
-            self.raw.trim().is_empty()
+            let trimmed = self.raw.trim();
+            trimmed.is_empty() || trimmed == "null"
         }
     }
 }

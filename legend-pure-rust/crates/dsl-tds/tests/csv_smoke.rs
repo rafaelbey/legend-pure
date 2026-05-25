@@ -164,6 +164,28 @@ fn all_empty_column_defaults_to_string_zero_or_one() {
 }
 
 #[test]
+fn bare_null_is_a_null_cell_not_a_string_value() {
+    // A bare (unquoted) `null` is a NULL sentinel — matching Java's TDS
+    // parser (`nullValueLiterals(["", "null"])`). It must be excluded from
+    // type classification (so `1 / null / 3` infers Integer, not String),
+    // promote the column to `[0..1]`, and materialise as an empty cell.
+    let parsed = parse_and_infer("val\n1\nnull\n3\n", &[]).expect("parse");
+    assert_eq!(parsed.columns[0].type_tag, ColumnType::Integer);
+    assert_eq!(parsed.columns[0].multiplicity, Multiplicity::ZeroOrOne);
+    assert_eq!(parsed.rows[1][0], None); // the `null` row is an empty cell
+}
+
+#[test]
+fn quoted_null_stays_a_string_value() {
+    // Only the *unquoted* token is the sentinel; a quoted `'null'` is the
+    // literal String "null" (and forces the column to String).
+    let parsed = parse_and_infer("val\n'a'\n'null'\n", &[]).expect("parse");
+    assert_eq!(parsed.columns[0].type_tag, ColumnType::String);
+    assert_eq!(parsed.columns[0].multiplicity, Multiplicity::PureOne);
+    assert_eq!(parsed.rows[1][0], Some(TypedCell::String("null".into())));
+}
+
+#[test]
 fn header_override_replaces_inferred_type() {
     let overrides = vec![ColumnOverride {
         type_tag: Some(ColumnType::Float),
