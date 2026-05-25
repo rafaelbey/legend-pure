@@ -2158,6 +2158,23 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
                 self.apply_property_to_instance(&name, &args[0])
             }
             Some(WrapperKind::QualifiedProperty) => self.apply_qualified_property(id, args),
+            Some(WrapperKind::Column) => {
+                if args.is_empty() {
+                    return Err(PureException::from(PureRuntimeError::EvaluationError(
+                        "Column invocation expects the row as its argument".into(),
+                    )));
+                }
+                // `Column<U,V|m>` extends `Function`; evaluating it against a
+                // row returns that row's cell for this column. The relation
+                // reflection chain in `eval.pure`
+                // (`…columns->toOne()->cast(@Column<Nil,Z|0..1>)->eval($row)`)
+                // lands here. The row is the per-row tuple built by
+                // `native::relation::shared::build_row_tuple` — a heap object
+                // with one slot per column name — so the cell is the column's
+                // `name` slot looked up on the row.
+                let name = self.read_wrapper_name(id)?;
+                self.apply_property_to_instance(&name, &args[0])
+            }
             None => Err(PureException::from(PureRuntimeError::EvaluationError(
                 format!("Expected Function, got Object<{classifier}>"),
             ))),
@@ -2909,6 +2926,8 @@ pub(crate) fn callable_wrapper_kind(model: &PureModel, classifier: &str) -> Opti
         Some(WrapperKind::Property)
     } else if crate::m3_paths::resolve(model, crate::m3_paths::QUALIFIED_PROPERTY) == Some(id) {
         Some(WrapperKind::QualifiedProperty)
+    } else if crate::m3_paths::resolve(model, crate::m3_paths::COLUMN) == Some(id) {
+        Some(WrapperKind::Column)
     } else {
         None
     }
@@ -2966,6 +2985,10 @@ pub(crate) enum WrapperKind {
     /// derived/qualified property reference, invoked via
     /// `$qp->evaluate(^List<Any>(values=$instance), …)`.
     QualifiedProperty,
+    /// `meta::pure::metamodel::relation::Column` — a relation column.
+    /// `Column<U,V|m>` *extends `Function`* (see `platform/pure/grammar/m3.pure`),
+    /// so `$col->eval($row)` reads the cell for this column off the row tuple.
+    Column,
 }
 
 #[cfg(test)]

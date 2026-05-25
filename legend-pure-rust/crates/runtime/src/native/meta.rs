@@ -650,6 +650,49 @@ impl NativeFunction for GenericTypeOf {
             }
         }
 
+        // A relation column-spec literal stores a synthetic single-column
+        // `RelationType` in its `classifierGenericType` (e.g.
+        // `ColSpec<RelationType<(col:T)>>`) that the `type()` + `__typeArguments`
+        // synthesis below cannot reconstruct. Java's `genericType()` reflects
+        // that stored classifierGenericType; without it
+        // `$col->genericType().typeArguments` reads back empty and breaks the
+        // relation reflection chain in `eval.pure`
+        // (`...typeArguments->at(0).rawType->cast(@RelationType<Any>)`).
+        //
+        // Scoped to the column-spec family — `ColSpec`/`ColSpecArray`/
+        // `FuncColSpec`/`Column` (resolved by `ElementId`), the metamodel types
+        // whose `crate::relation` allocators populate a parametric
+        // `classifierGenericType`. Other heap objects that happen
+        // to carry a `classifierGenericType` — function-definition copies
+        // (`^$fn()`), user instances — must stay on the synthesized path so
+        // `genericType()` agrees with the `Value::Element` form of the same
+        // value (see `lang::tests::copy::testFunctionDefinitionCopy`).
+        if let Value::Object(obj_id) = &values[0] {
+            let classifier = ctx.heap().classifier(&obj_id.clone())?.clone();
+            let classifier_id = crate::m3_paths::resolve(ctx.model(), &classifier);
+            let is_col_spec_family = classifier_id.is_some()
+                && [
+                    crate::m3_paths::COL_SPEC,
+                    crate::m3_paths::COL_SPEC_ARRAY,
+                    crate::m3_paths::FUNC_COL_SPEC,
+                    crate::m3_paths::COLUMN,
+                ]
+                .iter()
+                .any(|p| crate::m3_paths::resolve(ctx.model(), p) == classifier_id);
+            if is_col_spec_family {
+                let cgt = ctx
+                    .heap()
+                    .get_property_values(&obj_id.clone(), "classifierGenericType")?;
+                if let Some(Value::Object(cgt_id)) = cgt.iter().next() {
+                    let type_args =
+                        ctx.heap().get_property_values(&cgt_id.clone(), "typeArguments")?;
+                    if !type_args.is_empty() {
+                        return Ok(Evaluated::new(Value::Object(cgt_id.clone())));
+                    }
+                }
+            }
+        }
+
         let type_id = resolve_value_type(&values[0], ctx.model(), ctx.heap())?;
         // Heap-instance values created with `^Class<T1, T2>(…)` carry a
         // `__typeArguments` reserved slot — pull it before allocating the

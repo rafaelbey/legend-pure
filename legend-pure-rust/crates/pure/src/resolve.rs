@@ -1732,7 +1732,7 @@ fn infer_typeexpr_from_valuespec_impl(
     // `K`/`Z`/`V`. Build that shape directly from the literal here. The
     // column type is `Unresolved` — the real type comes from the relation
     // `T` during binding, and `Unresolved` short-circuits the binder's leaf.
-    if let Some(te) = colspec_binding_type(vs, model) {
+    if let Some(te) = colspec_binding_type(vs, model, var_types) {
         return Some(te);
     }
     if !fresh && let Some(rt) = vs.type_info.as_deref() {
@@ -1858,47 +1858,142 @@ fn colspec_classifier(model: &crate::model::PureModel, array: bool) -> Option<El
     ])
 }
 
-/// Binding-pass type for a *plain* `ColSpec`/`ColSpecArray` literal:
-/// `Named<ColSpec>{[Relation([{name, Unresolved, mult}, …])]}`, surfacing the
-/// column *names* so dispatch binding can pair the arg against a
-/// `(?:K)⊆T` / `Z=…⊆T` param and resolve `K`/`Z`/`V` (the `rename`/`select`
-/// shapes). Returns `None` for non-ColSpec values and for `Func`/`Agg`
-/// ColSpecs (whose `<{T->Z}, R>` shape isn't a column relation).
+/// Binding-pass type for a column-spec literal, surfacing the inner column
+/// `Relation` so dispatch binding can resolve the relation type variables.
 ///
-/// This is intentionally separate from the literal's cached `type_info`,
-/// which stays the bare classifier — see [`crate::lower::relation::lower_column`]
-/// and the dispatch-narrower note there. The column type is `Unresolved`: the
-/// real type is recovered from the relation `T` during binding, and
-/// `Unresolved` short-circuits the binder's leaf so the arg never spuriously
-/// binds `K` to a placeholder.
+/// Two shapes:
+/// - *Plain* `ColSpec`/`ColSpecArray` (`rename`/`select`): `Named<ColSpec>{[
+///   Relation([{name, Unresolved, mult}, …])]}` — column *names* only. The
+///   column type is `Unresolved` (recovered from the relation `T` during
+///   binding; `Unresolved` short-circuits the binder's leaf so the arg never
+///   spuriously binds `K`/`Z`/`V` to a placeholder), pairing against a
+///   `(?:K)⊆T` / `Z=…⊆T` param.
+/// - *Func* `FuncColSpec`/`FuncColSpecArray` (`extend`): `Named<FuncColSpec>{[
+///   Unresolved, Relation([{name, <init-lambda return type>, <mult>}, …])]}`.
+///   The second type-arg is the relation that `extend`'s `Z` binds to, so
+///   `extend<T,Z>(…):Relation<T+Z>` collapses to the augmented schema. The
+///   new column's type comes from the init lambda's last expression — mirrors
+///   Java's `FunctionExpressionProcessor.manageMagicColumnFunctions`, which
+///   writes that type onto the column's GenericType. Position 0 (the compute
+///   function) is left `Unresolved`: `T` is already bound from the source
+///   relation arg.
+///
+/// `Agg` ColSpecs return `None` (their reduce-lambda result type isn't carried
+/// on `RelationColumnLowered` yet — a pre-existing gap; they fall through to
+/// the bare classifier as before).
+///
+/// This is intentionally separate from the literal's cached `type_info`, which
+/// stays the bare classifier — see [`crate::lower::relation::lower_column`] and
+/// the dispatch-narrower note there.
 fn colspec_binding_type(
     vs: &crate::types::ValueSpec,
     model: &crate::model::PureModel,
+    var_types: &VarTypes,
 ) -> Option<crate::types::TypeExpr> {
     use crate::types::{ColSpecLiteralKind, ExprKind, RelationColumnTypeExpr, TypeExpr};
-    let col = |c: &crate::types::RelationColumnLowered| RelationColumnTypeExpr {
+    let plain_col = |c: &crate::types::RelationColumnLowered| RelationColumnTypeExpr {
         name: c.name.clone(),
         type_expr: TypeExpr::Unresolved,
         multiplicity: c.multiplicity.clone(),
     };
-    let (cols, array) = match vs.kind.as_ref() {
+    let func_col = |c: &crate::types::RelationColumnLowered| {
+        let (type_expr, multiplicity) = c
+            .init_lambda
+            .as_ref()
+            .and_then(|lam| lambda_return_type(lam, model, var_types))
+            .unwrap_or_else(|| (TypeExpr::Unresolved, c.multiplicity.clone()));
+        RelationColumnTypeExpr {
+            name: c.name.clone(),
+            type_expr,
+            multiplicity,
+        }
+    };
+    match vs.kind.as_ref() {
         ExprKind::ColSpecLiteral {
             column,
             kind: ColSpecLiteralKind::Plain,
-        } => (vec![col(column)], false),
+        } => Some(TypeExpr::Named {
+            element: colspec_classifier(model, false)?,
+            type_arguments: vec![TypeExpr::Relation(vec![plain_col(column)])],
+            multiplicity_arguments: Vec::new(),
+            value_arguments: vec![],
+            source_info: None,
+        }),
         ExprKind::ColSpecArrayLiteral {
             columns,
             kind: ColSpecLiteralKind::Plain,
-        } => (columns.iter().map(col).collect(), true),
-        _ => return None,
+        } => Some(TypeExpr::Named {
+            element: colspec_classifier(model, true)?,
+            type_arguments: vec![TypeExpr::Relation(columns.iter().map(plain_col).collect())],
+            multiplicity_arguments: Vec::new(),
+            value_arguments: vec![],
+            source_info: None,
+        }),
+        ExprKind::ColSpecLiteral {
+            column,
+            kind: ColSpecLiteralKind::Func,
+        } => func_colspec_binding_type(vec![func_col(column)], false, model),
+        ExprKind::ColSpecArrayLiteral {
+            columns,
+            kind: ColSpecLiteralKind::Func,
+        } => func_colspec_binding_type(columns.iter().map(func_col).collect(), true, model),
+        _ => None,
+    }
+}
+
+/// Build the `Named<FuncColSpec | FuncColSpecArray>{[Unresolved, Relation(cols)]}`
+/// binding type. See [`colspec_binding_type`] for why the relation sits in the
+/// second type-argument.
+fn func_colspec_binding_type(
+    cols: Vec<crate::types::RelationColumnTypeExpr>,
+    array: bool,
+    model: &crate::model::PureModel,
+) -> Option<crate::types::TypeExpr> {
+    use crate::types::TypeExpr;
+    let class_name = if array {
+        "FuncColSpecArray"
+    } else {
+        "FuncColSpec"
     };
+    let element = model.resolve_by_path(&[
+        SmolStr::new("meta"),
+        SmolStr::new("pure"),
+        SmolStr::new("metamodel"),
+        SmolStr::new("relation"),
+        SmolStr::new(class_name),
+    ])?;
     Some(TypeExpr::Named {
-        element: colspec_classifier(model, array)?,
-        type_arguments: vec![TypeExpr::Relation(cols)],
+        element,
+        type_arguments: vec![TypeExpr::Unresolved, TypeExpr::Relation(cols)],
         multiplicity_arguments: Vec::new(),
         value_arguments: vec![],
         source_info: None,
     })
+}
+
+/// Infer a lowered lambda's return type + multiplicity — the type of its last
+/// body expression, evaluated with the lambda's parameters bound on top of the
+/// enclosing scope. After [`crate::lower::relation::relower_colspec_with_row_type`]
+/// re-lowers an `extend` init lambda, its row param carries the relation row
+/// type `T`, so `$c.col` resolves structurally and the body type is concrete.
+fn lambda_return_type(
+    lam: &crate::types::ValueSpec,
+    model: &crate::model::PureModel,
+    var_types: &VarTypes,
+) -> Option<(crate::types::TypeExpr, crate::types::Multiplicity)> {
+    use crate::types::ExprKind;
+    let ExprKind::Lambda { parameters, body } = lam.kind.as_ref() else {
+        return None;
+    };
+    let last = body.last()?;
+    let mut scope = var_types.clone();
+    for p in parameters {
+        scope.insert(p.name.clone(), (p.type_expr.clone(), p.multiplicity.clone()));
+    }
+    let type_expr = infer_typeexpr_from_valuespec(last, model, &scope)?;
+    let multiplicity = infer_multiplicity_from_valuespec(last, model, &scope)
+        .unwrap_or(crate::types::Multiplicity::ZeroOrOne);
+    Some((type_expr, multiplicity))
 }
 
 /// LUB at the TypeExpr level. For two `Named` types with the same

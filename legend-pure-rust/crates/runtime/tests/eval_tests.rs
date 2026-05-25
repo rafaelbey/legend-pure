@@ -416,6 +416,28 @@ fn pair_generic_type_args_match_call_site_substitution_second() {
 }
 
 #[test]
+fn colspec_generic_type_surfaces_inner_relation_type() {
+    // B1 regression: `genericType()` on a ColSpec literal must reflect the
+    // literal's stored `classifierGenericType` — a `ColSpec<RelationType<(col)>>`
+    // built by `alloc_col_spec_literal`. The `type()` + `__typeArguments`
+    // synthesis can't reconstruct it, so without this fix
+    // `$col->genericType().typeArguments` reads back empty and the relation
+    // reflection chain in engine `eval.pure`
+    // (`...typeArguments->at(0).rawType->cast(@RelationType<Any>)`) fails at
+    // `at(0)` with a "size 0" error. Walking the same chain to the inner
+    // `RelationType`'s single column and reading its `name` locks every hop
+    // the engine `eval` body depends on (up to the `Column`).
+    let source = r"
+        function test::f(): String[1] {
+            ~mycol->genericType().typeArguments->at(0).rawType->toOne()
+                ->cast(@meta::pure::metamodel::relation::RelationType<Any>).columns->toOne().name
+        }
+    ";
+    let result = eval_pure(source, "f__String_1_");
+    assert_eq!(result, Value::String("mycol".into()));
+}
+
+#[test]
 fn passthrough_generic_function_preserves_existing_type_args() {
     // `myId<T>(x:T[1]):T[1] { $x }` returning a Pair created by
     // `pair(1,2)`: the back-fill's empty-slot guard must skip writing
