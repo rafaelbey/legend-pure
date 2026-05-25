@@ -228,6 +228,24 @@ fn lower_args_with_lambda_inference(
     for (slot_idx, ast_arg) in ast_args.iter().enumerate() {
         let target_idx = slot_idx + prepend_offset;
         if slots[target_idx].is_some() {
+            // A filled `FuncColSpec`/`AggColSpec` slot (`~name:c|…`) carries an
+            // init lambda that phase 1 lowered with an `Any`/`Unresolved` row
+            // param (the source-relation row type wasn't bound yet). If
+            // `compute_lambda_param_expectations` produced a row expectation
+            // for this slot, re-lower the init lambda(s) with it so `$c.col`
+            // resolves to the column's element type — mirroring how direct
+            // lambda args are typed.
+            if let Some(expected) = lambda_expectations
+                .get(target_idx)
+                .and_then(|o| o.as_deref())
+                && let ast_expr::Expression::Column(cb) = unwrap_group(ast_arg)
+                && let Some(filled) = slots[target_idx].clone()
+                && let Some(relowered) = super::relation::relower_colspec_with_row_type(
+                    &filled, cb, expected, ctx, errors,
+                )
+            {
+                slots[target_idx] = Some(relowered);
+            }
             continue;
         }
         let underlying = unwrap_group(ast_arg);

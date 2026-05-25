@@ -122,11 +122,24 @@ pub(crate) fn expectations_from_callee_params(
         resolve::infer_generic_bindings(&pair_params, &pair_args, ctx.model, &ctx.variable_types);
 
     // For each lambda slot, extract Function<{...}> and substitute bindings.
+    //
+    // Two slot shapes carry a lambda whose param type we infer here:
+    //   - an *empty* slot — a direct lambda arg (`coll->filter(c|…)`),
+    //     deferred from phase 1; and
+    //   - a *filled* `FuncColSpec`/`AggColSpec` slot whose lowered value
+    //     embeds an init lambda (`rel->extend(~name:c|…)`). The ColSpec is
+    //     a non-lambda arg from the call's view, so phase 1 already lowered
+    //     it (with an `Any`/`Unresolved` row param); we recompute the row
+    //     expectation here from the matched `FuncColSpec<{T[1]->…},Z>`
+    //     param (its embedded `FunctionType`'s first param is the relation
+    //     row `T`, now bound from the source-relation arg) so phase 2 can
+    //     re-lower the init lambda body with a typed `$c`.
     slots
         .iter()
         .enumerate()
         .map(|(i, slot)| {
-            if slot.is_some() {
+            let is_colspec_lambda = slot.as_ref().is_some_and(is_colspec_func_or_agg_with_init);
+            if slot.is_some() && !is_colspec_lambda {
                 return None;
             }
             let param = params.get(i)?;
@@ -167,6 +180,26 @@ pub(crate) fn expectations_from_callee_params(
             Some(expected)
         })
         .collect()
+}
+
+/// True iff `vs` is a `FuncColSpec`/`AggColSpec` literal (single `~name:c|…`
+/// or array `~[…]`) carrying at least one init lambda — i.e. a column spec
+/// whose row param needs typing from the enclosing relation call. `Plain`
+/// ColSpecs (no lambda) and all other values return false, preserving the
+/// "filled slot → no expectation" default.
+fn is_colspec_func_or_agg_with_init(vs: &ValueSpec) -> bool {
+    use crate::types::{ColSpecLiteralKind, ExprKind};
+    match vs.kind.as_ref() {
+        ExprKind::ColSpecLiteral { column, kind } => {
+            matches!(kind, ColSpecLiteralKind::Func | ColSpecLiteralKind::Agg)
+                && column.init_lambda.is_some()
+        }
+        ExprKind::ColSpecArrayLiteral { columns, kind } => {
+            matches!(kind, ColSpecLiteralKind::Func | ColSpecLiteralKind::Agg)
+                && columns.iter().any(|c| c.init_lambda.is_some())
+        }
+        _ => false,
+    }
 }
 
 /// Drill into a single lambda arg against an expected `FunctionType`

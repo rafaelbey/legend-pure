@@ -278,6 +278,93 @@ fn lower_relation_columns_from_specs(
         .collect()
 }
 
+/// Re-lower the init lambda(s) of an already-lowered `FuncColSpec`/
+/// `AggColSpec` literal `slot` using `row_expectation` (the relation row
+/// type bound from the enclosing call, e.g. `extend`'s `T`) as the lambda's
+/// row-param expectation — replacing the phase-1 lowering that used `Any`
+/// (→ `Unresolved`) because the row type wasn't yet available.
+///
+/// With the row type in scope, the init body's `$c.col` resolves to the
+/// column's element type, so a chain like `$c.val->toOne()->toString()`
+/// dispatches `toString` on the scalar column type rather than the
+/// `Relation` overload. Mirrors how direct-lambda args
+/// (`rel->filter(c|…)`) are already typed via
+/// `compute_lambda_param_expectations`.
+///
+/// Returns `None` for non-Func/Agg slots (caller keeps the phase-1 value).
+/// The reduce (`extra_function`) lambda of an `Agg` column is not stored on
+/// `RelationColumnLowered` (a separate, pre-existing gap), so only the init
+/// lambda — whose param is the row — is re-typed here.
+pub(super) fn relower_colspec_with_row_type(
+    slot: &ValueSpec,
+    ast_cb: &ast_expr::ColumnBuilderExpr,
+    row_expectation: &[Option<(TypeExpr, Multiplicity)>],
+    ctx: &mut ResolutionContext<'_>,
+    errors: &mut Vec<CompilationError>,
+) -> Option<ValueSpec> {
+    use crate::types::ColSpecLiteralKind;
+
+    let is_func_or_agg =
+        |k: &ColSpecLiteralKind| matches!(k, ColSpecLiteralKind::Func | ColSpecLiteralKind::Agg);
+
+    let new_kind = match slot.kind.as_ref() {
+        ExprKind::ColSpecLiteral { column, kind } if is_func_or_agg(kind) => {
+            let ast_col = ast_cb.columns.first()?;
+            let column = relower_one_column(column, ast_col, row_expectation, ctx, errors);
+            ExprKind::ColSpecLiteral {
+                column,
+                kind: *kind,
+            }
+        }
+        ExprKind::ColSpecArrayLiteral { columns, kind } if is_func_or_agg(kind) => {
+            let columns = columns
+                .iter()
+                .enumerate()
+                .map(|(idx, c)| match ast_cb.columns.get(idx) {
+                    Some(ast_col) => relower_one_column(c, ast_col, row_expectation, ctx, errors),
+                    None => c.clone(),
+                })
+                .collect();
+            ExprKind::ColSpecArrayLiteral {
+                columns,
+                kind: *kind,
+            }
+        }
+        _ => return None,
+    };
+
+    // Preserve the slot's outer type_info + source info; only the embedded
+    // init lambda(s) change.
+    Some(match slot.type_info.as_ref() {
+        Some(rt) => typed(new_kind, slot.source_info.clone(), (**rt).clone()),
+        None => super::untyped(new_kind, slot.source_info.clone()),
+    })
+}
+
+/// Re-lower one column's init lambda with the row-param expectation,
+/// preserving the column's name/type/multiplicity. Non-lambda columns
+/// (no `type_spec` lambda) are returned unchanged.
+fn relower_one_column(
+    old: &RelationColumnLowered,
+    ast_col: &ast_expr::ColumnSpec,
+    row_expectation: &[Option<(TypeExpr, Multiplicity)>],
+    ctx: &mut ResolutionContext<'_>,
+    errors: &mut Vec<CompilationError>,
+) -> RelationColumnLowered {
+    let init_lambda = match &ast_col.type_spec {
+        Some(ast_expr::ColumnTypeSpec::Lambda(l)) => {
+            super::lambda::lower_lambda_with_expected_types(l, Some(row_expectation), ctx, errors)
+        }
+        _ => old.init_lambda.clone(),
+    };
+    RelationColumnLowered {
+        name: old.name.clone(),
+        type_element: old.type_element,
+        multiplicity: old.multiplicity.clone(),
+        init_lambda,
+    }
+}
+
 pub(super) fn resolve_relation_type_id(
     ctx: &mut ResolutionContext<'_>,
 ) -> Option<crate::ids::ElementId> {
