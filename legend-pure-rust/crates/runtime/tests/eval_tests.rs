@@ -438,6 +438,28 @@ fn colspec_generic_type_surfaces_inner_relation_type() {
 }
 
 #[test]
+fn agg_col_spec_literal_materialises_map_and_reduce_slots() {
+    // An `Agg` ColSpec (`~name:map:reduce`) must evaluate to an `AggColSpec`
+    // heap object carrying BOTH the map (`init_lambda`) and reduce
+    // (`extra_function` → `reduce_lambda`) functions. Before this change the
+    // reduce lambda was dropped at lowering and the Agg kind fell through to
+    // the plain `ColSpec` allocator (no `reduce` slot). Reading both slots
+    // back as non-empty confirms the lowering captured the reduce lambda AND
+    // the `(Agg, Some)` eval-dispatch branch fired the AggColSpec allocator
+    // (the plain fallback has no `reduce` slot, so this would be false).
+    // Parenthesise the literal so the trailing reduce lambda (`y|2`) doesn't
+    // greedily absorb the following statements into its body.
+    let source = r"
+        function test::f(): Boolean[1] {
+            let agg = (~newCol:c|1:y|2);
+            $agg.map->isNotEmpty() && $agg.reduce->isNotEmpty();
+        }
+    ";
+    let result = eval_pure(source, "f__Boolean_1_");
+    assert_eq!(result, Value::Boolean(true));
+}
+
+#[test]
 fn passthrough_generic_function_preserves_existing_type_args() {
     // `myId<T>(x:T[1]):T[1] { $x }` returning a Pair created by
     // `pair(1,2)`: the back-fill's empty-slot guard must skip writing

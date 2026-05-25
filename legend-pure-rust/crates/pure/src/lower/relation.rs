@@ -65,10 +65,11 @@ use super::typed;
 /// `multiplicity`) at lowering time so the runtime allocator can
 /// materialise the heap shape without re-resolving names.
 ///
-/// Lambda-bearing `~name:x|$x+1` columns and the `funcColSpec*` /
-/// `aggColSpec*` shapes are not yet wired through this lowerer —
-/// those columns drop their lambda payload here. Add a follow-up if
-/// a subsequent test forces them.
+/// Lambda-bearing columns carry their payload through `RelationColumnLowered`:
+/// `~name:x|…` (Func) populates `init_lambda`, and `~name:map:reduce` (Agg)
+/// populates `init_lambda` (map) plus `reduce_lambda` — the runtime allocators
+/// (`alloc_func_col_spec_literal` / `alloc_agg_col_spec_literal`) read them to
+/// set the `function` / `map` + `reduce` heap slots.
 pub(super) fn lower_column(
     e: &ast_expr::ColumnBuilderExpr,
     ctx: &mut ResolutionContext<'_>,
@@ -135,6 +136,7 @@ pub(super) fn lower_column(
             type_element: crate::bootstrap::ANY_ID,
             multiplicity: Multiplicity::ZeroOrOne,
             init_lambda: None,
+            reduce_lambda: None,
         }
     });
     Some(typed(
@@ -206,6 +208,7 @@ pub(super) fn lower_relation_columns(
                 type_element,
                 multiplicity,
                 init_lambda: None,
+                reduce_lambda: None,
             })
         })
         .collect()
@@ -249,46 +252,79 @@ fn lower_relation_columns_from_specs(
                         type_element,
                         multiplicity,
                         init_lambda: None,
+                        reduce_lambda: None,
                     };
                 }
                 // Type didn't resolve to Named — fall through to the
                 // placeholder so the column name survives.
             }
-            // Lambda-bearing column → lower the init lambda with
-            // synthetic Any-typed parameters. The runtime binds row
-            // values dynamically via slot lookup on `$x.<col>`, so
-            // compile-time inference for the param doesn't need to be
-            // precise. Bare-name columns (no type_spec) skip the
-            // lambda branch.
+            // Lambda-bearing column → lower the init (map) lambda, and for
+            // `Agg` columns the reduce lambda (`~name:map:reduce`), with
+            // synthetic Any-typed parameters. The runtime binds row/aggregate
+            // values dynamically, so compile-time param precision isn't
+            // needed. Bare-name columns (no type_spec) skip both.
             let init_lambda = match &c.type_spec {
                 Some(ast_expr::ColumnTypeSpec::Lambda(l)) => {
-                    let any_param: (TypeExpr, Multiplicity) = (
-                        TypeExpr::Named {
-                            element: crate::bootstrap::ANY_ID,
-                            type_arguments: vec![],
-                            value_arguments: vec![],
-                            multiplicity_arguments: vec![],
-                            source_info: None,
-                        },
-                        Multiplicity::PureOne,
-                    );
-                    let expected: Vec<Option<(TypeExpr, Multiplicity)>> = l
-                        .parameters
-                        .iter()
-                        .map(|_| Some(any_param.clone()))
-                        .collect();
-                    super::lambda::lower_lambda_with_expected_types(l, Some(&expected), ctx, errors)
+                    lower_colspec_lambda_any(l, Multiplicity::PureOne, ctx, errors)
                 }
                 _ => None,
             };
+            let reduce_lambda = lower_reduce_lambda(c.extra_function.as_deref(), ctx, errors);
             RelationColumnLowered {
                 name: c.name.clone(),
                 type_element: crate::bootstrap::ANY_ID,
                 multiplicity: Multiplicity::ZeroOrOne,
                 init_lambda,
+                reduce_lambda,
             }
         })
         .collect()
+}
+
+/// Lower a column-spec lambda with a uniform `Any[param_mult]` expectation for
+/// every parameter. Shared by the init/map lambda (`Any[1]` — its param is the
+/// row) and the reduce lambda (`Any[*]` — its param is the collected map values
+/// `V[*]`). Compile-time param precision isn't required: the runtime binds the
+/// row/aggregate values dynamically.
+fn lower_colspec_lambda_any(
+    l: &ast_expr::Lambda,
+    param_mult: Multiplicity,
+    ctx: &mut ResolutionContext<'_>,
+    errors: &mut Vec<CompilationError>,
+) -> Option<ValueSpec> {
+    let any_param: (TypeExpr, Multiplicity) = (
+        TypeExpr::Named {
+            element: crate::bootstrap::ANY_ID,
+            type_arguments: vec![],
+            value_arguments: vec![],
+            multiplicity_arguments: vec![],
+            source_info: None,
+        },
+        param_mult,
+    );
+    let expected: Vec<Option<(TypeExpr, Multiplicity)>> = l
+        .parameters
+        .iter()
+        .map(|_| Some(any_param.clone()))
+        .collect();
+    super::lambda::lower_lambda_with_expected_types(l, Some(&expected), ctx, errors)
+}
+
+/// Lower an `Agg` column's reduce lambda (AST `ColumnSpec.extra_function`) with
+/// an `Any[*]` param expectation — the reduce receives the collected map values
+/// `V[*]`. Returns `None` when there is no extra function (Plain/Func columns)
+/// or it isn't a lambda.
+fn lower_reduce_lambda(
+    extra_function: Option<&ast_expr::Expression>,
+    ctx: &mut ResolutionContext<'_>,
+    errors: &mut Vec<CompilationError>,
+) -> Option<ValueSpec> {
+    match extra_function {
+        Some(ast_expr::Expression::Lambda(l)) => {
+            lower_colspec_lambda_any(l, Multiplicity::ZeroOrMany, ctx, errors)
+        }
+        _ => None,
+    }
 }
 
 /// Re-lower the init lambda(s) of an already-lowered `FuncColSpec`/
@@ -370,11 +406,22 @@ fn relower_one_column(
         }
         _ => old.init_lambda.clone(),
     };
+    // The reduce lambda's param is the collected map values (`V[*]`), not the
+    // row — re-lower it with the same `Any[*]` expectation as phase 1 (the
+    // row_expectation applies to the map lambda only). Carry the prior value
+    // when there's no extra function.
+    let reduce_lambda = match ast_col.extra_function.as_deref() {
+        Some(ast_expr::Expression::Lambda(_)) => {
+            lower_reduce_lambda(ast_col.extra_function.as_deref(), ctx, errors)
+        }
+        _ => old.reduce_lambda.clone(),
+    };
     RelationColumnLowered {
         name: old.name.clone(),
         type_element: old.type_element,
         multiplicity: old.multiplicity.clone(),
         init_lambda,
+        reduce_lambda,
     }
 }
 

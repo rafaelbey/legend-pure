@@ -589,17 +589,18 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
                     .map(Value::Object)
             }
             ExprKind::ColSpecLiteral { column, kind } => {
-                // `Func`-kind (`~name:lam`) materialises the
-                // `FuncColSpec` heap shape with the lambda evaluated
-                // against the enclosing scope so any free-variable
-                // captures survive into the `function` slot. Other
-                // kinds (`Plain` for `~name`, and the not-yet-
-                // implemented `Agg` for `~name:f:r`) fall back to the
-                // simpler `ColSpec` allocator — the column NAME still
-                // survives so downstream natives that only care about
-                // names (`select`, `rename`) work.
+                use legend_pure_parser_pure::types::ColSpecLiteralKind;
+                // `Func`-kind (`~name:lam`) materialises the `FuncColSpec`
+                // heap shape and `Agg`-kind (`~name:map:reduce`) the
+                // `AggColSpec` shape, each with its lambda(s) evaluated
+                // against the enclosing scope so free-variable captures
+                // survive into the `function` / `map` / `reduce` slots.
+                // `Plain` (`~name`) falls back to the simpler `ColSpec`
+                // allocator — the column NAME still survives so downstream
+                // natives that only care about names (`select`, `rename`)
+                // work.
                 match (kind, column.init_lambda.as_ref()) {
-                    (legend_pure_parser_pure::types::ColSpecLiteralKind::Func, Some(lambda_vs)) => {
+                    (ColSpecLiteralKind::Func, Some(lambda_vs)) => {
                         let function_value = self.eval(lambda_vs)?;
                         crate::relation::alloc_func_col_spec_literal(
                             &mut self.heap,
@@ -608,6 +609,32 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
                             function_value,
                         )
                         .map(Value::Object)
+                    }
+                    (ColSpecLiteralKind::Agg, Some(map_vs)) => {
+                        // Evaluate both halves; the reduce lambda is required
+                        // for an Agg column — without it we couldn't build a
+                        // well-formed AggColSpec, so fall back to the plain
+                        // shape (name-only) if it's somehow absent.
+                        match column.reduce_lambda.as_ref() {
+                            Some(reduce_vs) => {
+                                let map_value = self.eval(map_vs)?;
+                                let reduce_value = self.eval(reduce_vs)?;
+                                crate::relation::alloc_agg_col_spec_literal(
+                                    &mut self.heap,
+                                    self.model,
+                                    column,
+                                    map_value,
+                                    reduce_value,
+                                )
+                                .map(Value::Object)
+                            }
+                            None => crate::relation::alloc_col_spec_literal(
+                                &mut self.heap,
+                                self.model,
+                                column,
+                            )
+                            .map(Value::Object),
+                        }
                     }
                     _ => {
                         crate::relation::alloc_col_spec_literal(&mut self.heap, self.model, column)

@@ -660,9 +660,9 @@ impl NativeFunction for GenericTypeOf {
         // (`...typeArguments->at(0).rawType->cast(@RelationType<Any>)`).
         //
         // Scoped to the column-spec family — `ColSpec`/`ColSpecArray`/
-        // `FuncColSpec`/`Column` (resolved by `ElementId`), the metamodel types
-        // whose `crate::relation` allocators populate a parametric
-        // `classifierGenericType`. Other heap objects that happen
+        // `FuncColSpec`/`AggColSpec`/`Column` (resolved by `ElementId`), the
+        // metamodel types whose `crate::relation` allocators populate a
+        // parametric `classifierGenericType`. Other heap objects that happen
         // to carry a `classifierGenericType` — function-definition copies
         // (`^$fn()`), user instances — must stay on the synthesized path so
         // `genericType()` agrees with the `Value::Element` form of the same
@@ -675,6 +675,7 @@ impl NativeFunction for GenericTypeOf {
                     crate::m3_paths::COL_SPEC,
                     crate::m3_paths::COL_SPEC_ARRAY,
                     crate::m3_paths::FUNC_COL_SPEC,
+                    crate::m3_paths::AGG_COL_SPEC,
                     crate::m3_paths::COLUMN,
                 ]
                 .iter()
@@ -684,8 +685,9 @@ impl NativeFunction for GenericTypeOf {
                     .heap()
                     .get_property_values(&obj_id.clone(), "classifierGenericType")?;
                 if let Some(Value::Object(cgt_id)) = cgt.iter().next() {
-                    let type_args =
-                        ctx.heap().get_property_values(&cgt_id.clone(), "typeArguments")?;
+                    let type_args = ctx
+                        .heap()
+                        .get_property_values(&cgt_id.clone(), "typeArguments")?;
                     if !type_args.is_empty() {
                         return Ok(Evaluated::new(Value::Object(cgt_id.clone())));
                     }

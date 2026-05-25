@@ -659,6 +659,15 @@ pub struct RelationColumnLowered {
     /// truncation that reads the next struct's bytes as the
     /// discriminant.
     pub init_lambda: Option<ValueSpec>,
+    /// Optional reduce lambda — the *second* function of an `Agg`-kind
+    /// ColSpec (`~name:{p,w,r|map}:y|reduce`). `init_lambda` holds the map
+    /// half; this holds the reduce half (AST `ColumnSpec.extra_function`).
+    /// `None` for `Plain`/`Func` columns. Populated by `lower_column` when
+    /// the source carried an `extra_function` lambda; the runtime allocator
+    /// (`alloc_agg_col_spec_literal`) reads it to set the `AggColSpec.reduce`
+    /// slot. Same positional-postcard precaution as `init_lambda` — always
+    /// serialized, no `skip_serializing_if`.
+    pub reduce_lambda: Option<ValueSpec>,
 }
 
 /// Backward-compatible alias: existing code uses `Expression` throughout

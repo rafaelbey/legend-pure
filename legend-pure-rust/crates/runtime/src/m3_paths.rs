@@ -248,6 +248,14 @@ pub const COL_SPEC_ARRAY: &Classifier = "meta::pure::metamodel::relation::ColSpe
 /// with `kind = Func` is evaluated; consumed by `extend`.
 pub const FUNC_COL_SPEC: &Classifier = "meta::pure::metamodel::relation::FuncColSpec";
 
+/// `meta::pure::metamodel::relation::AggColSpec` — heap classifier for the
+/// `~name:map:reduce` aggregation column literal. Carries `name: String[1]`,
+/// `map: Function<Z>[1]` (the per-row map lambda) and `reduce: Function<V>[1]`
+/// (the lambda collapsing the collected `V[*]`). Allocated by the runtime when
+/// a `ColSpecLiteral` with `kind = Agg` is evaluated; consumed by the
+/// (engine-side) aggregating `extend`.
+pub const AGG_COL_SPEC: &Classifier = "meta::pure::metamodel::relation::AggColSpec";
+
 /// `meta::pure::functions::relation::SortInfo` — heap classifier for a
 /// single sort key. Carries `column: ColSpec<T>[1]` plus
 /// `direction: SortType[1]`. Allocated by the `ascending` / `descending`

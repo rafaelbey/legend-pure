@@ -1988,7 +1988,10 @@ fn lambda_return_type(
     let last = body.last()?;
     let mut scope = var_types.clone();
     for p in parameters {
-        scope.insert(p.name.clone(), (p.type_expr.clone(), p.multiplicity.clone()));
+        scope.insert(
+            p.name.clone(),
+            (p.type_expr.clone(), p.multiplicity.clone()),
+        );
     }
     let type_expr = infer_typeexpr_from_valuespec(last, model, &scope)?;
     let multiplicity = infer_multiplicity_from_valuespec(last, model, &scope)

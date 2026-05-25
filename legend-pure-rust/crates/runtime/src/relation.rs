@@ -371,6 +371,56 @@ pub fn alloc_func_col_spec_literal(
     Ok(fcs)
 }
 
+/// Allocate an `AggColSpec` literal — the heap shape behind `~name:map:reduce`
+/// (Agg) syntax. Sets the platform `AggColSpec` slots `name`, `map`, `reduce`
+/// (the two already-evaluated lambdas) plus a `classifierGenericType` wrapping a
+/// single-column `RelationType` — the correct "T is RelationType" shape from
+/// [`alloc_col_spec_literal`], deliberately *not* the bare-`Column` shape
+/// [`alloc_func_col_spec_literal`] still carries.
+///
+/// The caller (`eval.rs::ColSpecLiteral`) evaluates `column.init_lambda` (map)
+/// and `column.reduce_lambda` (reduce) against the enclosing scope first so each
+/// `Value::Function` captures any outer-scope variables; this allocator just
+/// slots the produced values onto the heap object.
+///
+/// # Errors
+/// Returns `PureException` if any underlying heap allocation fails.
+#[allow(clippy::result_large_err)]
+pub fn alloc_agg_col_spec_literal(
+    heap: &mut RuntimeHeap,
+    model: &PureModel,
+    column: &RelationColumnLowered,
+    map_value: Value,
+    reduce_value: Value,
+) -> Result<ObjectHandle, PureException> {
+    // Single-column RelationType captures the column's typed shape —
+    // matches the platform's "T is of type RelationType" invariant.
+    let inner_relation = alloc_relation_literal(heap, model, std::slice::from_ref(column))?;
+
+    let inner_gt = heap.alloc_dynamic(m3_paths::GENERIC_TYPE);
+    heap.mutate_add(&inner_gt, "rawType", &[Value::Object(inner_relation)])
+        .map_err(PureException::from)?;
+
+    let outer_gt = heap.alloc_dynamic(m3_paths::GENERIC_TYPE);
+    let acs_raw_type =
+        m3_paths::resolve(model, m3_paths::AGG_COL_SPEC).map_or(Value::Unit, Value::Element);
+    heap.mutate_add(&outer_gt, "rawType", &[acs_raw_type])
+        .map_err(PureException::from)?;
+    heap.mutate_add(&outer_gt, "typeArguments", &[Value::Object(inner_gt)])
+        .map_err(PureException::from)?;
+
+    let acs = heap.alloc_dynamic(m3_paths::AGG_COL_SPEC);
+    heap.mutate_add(&acs, "name", &[Value::String(column.name.clone())])
+        .map_err(PureException::from)?;
+    heap.mutate_add(&acs, "map", &[map_value])
+        .map_err(PureException::from)?;
+    heap.mutate_add(&acs, "reduce", &[reduce_value])
+        .map_err(PureException::from)?;
+    heap.mutate_add(&acs, "classifierGenericType", &[Value::Object(outer_gt)])
+        .map_err(PureException::from)?;
+    Ok(acs)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -403,6 +453,7 @@ mod tests {
             type_element: bootstrap::INTEGER_ID,
             multiplicity: Multiplicity::PureOne,
             init_lambda: None,
+            reduce_lambda: None,
         };
 
         let cs = alloc_col_spec_literal(&mut heap, &model, &column)
@@ -492,5 +543,87 @@ mod tests {
             })
             .expect("ColSpec.name is a String");
         assert_eq!(cs_name.as_str(), "col name");
+    }
+
+    /// `alloc_agg_col_spec_literal` must materialise an `AggColSpec` carrying
+    /// the platform `name`/`map`/`reduce` slots (the reduce slot is what the
+    /// engine's aggregating `extend` reads), and — like `alloc_col_spec_literal`
+    /// — wrap a single-column `RelationType` in its inner `classifierGenericType`
+    /// (not a bare `Column`).
+    #[test]
+    fn agg_col_spec_literal_has_map_reduce_and_relation_type_inner() {
+        let model = bootstrap_model();
+        let mut heap = RuntimeHeap::new();
+
+        let column = RelationColumnLowered {
+            name: SmolStr::new("total"),
+            type_element: bootstrap::INTEGER_ID,
+            multiplicity: Multiplicity::PureOne,
+            init_lambda: None,
+            reduce_lambda: None,
+        };
+
+        // Sentinel values stand in for the evaluated map/reduce lambdas.
+        let map_value = Value::String(SmolStr::new("MAP"));
+        let reduce_value = Value::String(SmolStr::new("REDUCE"));
+        let acs = alloc_agg_col_spec_literal(&mut heap, &model, &column, map_value, reduce_value)
+            .expect("alloc must succeed against the bootstrap model");
+
+        assert_eq!(
+            heap.classifier(&acs)
+                .expect("AggColSpec classifier")
+                .as_str(),
+            m3_paths::AGG_COL_SPEC,
+        );
+
+        // The map and reduce slots carry the supplied function values.
+        let read_string = |slot: &str| {
+            heap.get_property_values(&acs, slot)
+                .unwrap_or_else(|_| panic!("AggColSpec.{slot} slot"))
+                .iter()
+                .find_map(|v| match v {
+                    Value::String(s) => Some(s.clone()),
+                    _ => None,
+                })
+        };
+        assert_eq!(read_string("map").as_deref(), Some("MAP"));
+        assert_eq!(read_string("reduce").as_deref(), Some("REDUCE"));
+
+        // Inner classifierGenericType.typeArguments[0].rawType is a RelationType
+        // (the "T is RelationType" invariant), not a bare Column.
+        let outer_gt = heap
+            .get_property_values(&acs, "classifierGenericType")
+            .expect("classifierGenericType slot")
+            .iter()
+            .find_map(|v| match v {
+                Value::Object(o) => Some(o.clone()),
+                _ => None,
+            })
+            .expect("classifierGenericType is an Object");
+        let inner_gt = heap
+            .get_property_values(&outer_gt, "typeArguments")
+            .expect("typeArguments slot")
+            .iter()
+            .find_map(|v| match v {
+                Value::Object(o) => Some(o.clone()),
+                _ => None,
+            })
+            .expect("typeArguments[0] is an Object");
+        let inner_raw = heap
+            .get_property_values(&inner_gt, "rawType")
+            .expect("rawType slot")
+            .iter()
+            .find_map(|v| match v {
+                Value::Object(o) => Some(o.clone()),
+                _ => None,
+            })
+            .expect("inner rawType is an Object");
+        assert_eq!(
+            heap.classifier(&inner_raw)
+                .expect("inner classifier")
+                .as_str(),
+            m3_paths::RELATION_TYPE,
+            "AggColSpec inner rawType must be a RelationType, not a bare Column",
+        );
     }
 }
