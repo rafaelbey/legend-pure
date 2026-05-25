@@ -118,3 +118,100 @@ function my::test(x: Any[1]): String[1]
 }",
     );
 }
+
+/// Operator-precedence guard for the engine relation `extend` ColSpec lambda.
+///
+/// `core_functions_relation/relation/functions/transformation/extend.pure:61`
+/// (`testSimpleExtendStrShared` / `testSimpleExtendStr_MultipleExpressions`)
+/// and `.../relation/tests/composition.pure:61` (`testExtendFilter`) all
+/// contain the column lambda:
+///
+/// ```text
+/// ~name:c | $c.str->toOne() + $c.val->toOne()->toString()
+/// ```
+///
+/// A legend-engine port report hypothesized the Rust parser groups this as
+/// `($c.str->toOne() + $c.val->toOne())->toString()` — routing `String +
+/// Integer` through `plus` and applying `toString` to the sum (the cause of
+/// the `plus_String` "expected Object, got Integer" trace). That would
+/// require `+` to bind tighter than postfix `->`. It does not: `->` is parsed
+/// in `parse_postfix`, below `parse_additive` in the precedence-climbing
+/// chain, so the right operand of `+` fully consumes its arrow chain before
+/// the `Arithmetic` node is built. The six top-level guards in
+/// `runtime/tests/eval_tests.rs` lock the literal forms; this locks the
+/// `~name:c|<body>` ColSpec-lambda path the engine actually exercises, whose
+/// body routes through `parse_expression` at `expression.rs:1221`.
+///
+/// Expected grouping (matches the Protocol JSON emitted on this HEAD):
+/// `plus(toOne($c.str), toString(toOne($c.val)))` — `plus` at the top,
+/// `toString` nested under its *right* operand.
+#[test]
+fn colspec_lambda_binds_arrow_tighter_than_plus() {
+    use legend_pure_parser_ast::element::Element;
+    use legend_pure_parser_ast::expression::{ArithmeticOp, ColumnTypeSpec, Expression};
+
+    let file = parse_ok(
+        r"###Pure
+function my::test(): Any[*]
+{
+    ~name:c|$c.str->toOne() + $c.val->toOne()->toString()
+}",
+    );
+
+    let func = file
+        .all_elements()
+        .find_map(|e| match e {
+            Element::Function(f) => Some(f),
+            _ => None,
+        })
+        .expect("parsed function");
+    let col = func
+        .body
+        .iter()
+        .find_map(|expr| match expr {
+            Expression::Column(c) => Some(c),
+            _ => None,
+        })
+        .expect("column builder in body");
+    let lambda = match col.columns[0].type_spec.as_ref() {
+        Some(ColumnTypeSpec::Lambda(l)) => l,
+        other => panic!("expected ColSpec lambda, got {other:?}"),
+    };
+    let body = lambda.body.first().expect("lambda body expression");
+
+    // Top of the lambda body must be `+` (plus), NOT the arrow `->toString()`.
+    // If `->` bound looser than `+`, this would be an
+    // `ArrowFunction { function: toString, .. }` wrapping the sum.
+    let arith = match body {
+        Expression::Arithmetic(a) => a,
+        other => panic!(
+            "expected top-level `plus`, got {other:?} \
+             (would be ArrowFunction(toString) if `+` bound tighter than `->`)"
+        ),
+    };
+    assert_eq!(arith.op, ArithmeticOp::Plus);
+
+    // Right operand is `$c.val->toOne()->toString()`: an arrow whose function
+    // is `toString` and whose target is itself the `->toOne()` arrow — i.e.
+    // `toString`'s receiver is the Integer column, not the `String + Integer`
+    // sum.
+    let right = match arith.right.as_ref() {
+        Expression::ArrowFunction(a) => a,
+        other => panic!("expected right operand `...->toString()`, got {other:?}"),
+    };
+    assert_eq!(right.function.name.as_str(), "toString");
+    match right.target.as_ref() {
+        Expression::ArrowFunction(inner) => assert_eq!(
+            inner.function.name.as_str(),
+            "toOne",
+            "toString's receiver is `$c.val->toOne()`, not the `+` sum"
+        ),
+        other => panic!("expected `toString` target `$c.val->toOne()`, got {other:?}"),
+    }
+
+    // Left operand is `$c.str->toOne()`, unaffected by the right-hand arrow.
+    match arith.left.as_ref() {
+        Expression::ArrowFunction(a) => assert_eq!(a.function.name.as_str(), "toOne"),
+        other => panic!("expected left operand `$c.str->toOne()`, got {other:?}"),
+    }
+}
