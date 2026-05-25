@@ -1357,7 +1357,9 @@ fn walk_type_refs(
             }
             walk_type_refs(return_type, fallback_si, emit);
         }
-        TypeExpr::AlgebraUnion(a, b) => {
+        TypeExpr::GenericTypeOperation {
+            left: a, right: b, ..
+        } => {
             walk_type_refs(a, fallback_si, emit);
             walk_type_refs(b, fallback_si, emit);
         }

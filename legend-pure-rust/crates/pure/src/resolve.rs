@@ -140,7 +140,93 @@ pub(crate) struct ResolutionContext<'a> {
     pub island_lowerers: &'a [Box<dyn crate::island_lower::IslandLowerer>],
 }
 
-/// Resolves an AST `TypeReference` to a Pure `TypeExpr`.
+/// Resolves an AST `TypeReference` to a Pure `TypeExpr`, then folds in any
+/// relation type-algebra attached to it (`+`/`-`, `⊆`, `Name=`).
+///
+/// This is the single public entry point; every caller (recursive type-arg
+/// resolution, the sentinel resolvers, and external callers in the pipeline
+/// and lowering paths) routes through here so the algebra applies uniformly
+/// at any nesting depth. The base resolution lives in
+/// [`resolve_type_ref_base`]; [`apply_type_algebra`] does the folding and is
+/// a no-op when the three algebra fields are empty (the overwhelmingly common
+/// case).
+///
+/// Returns `None` and pushes a `CompilationError` if the type cannot be resolved.
+pub(crate) fn resolve_type_ref(
+    type_ref: &ast_type::TypeReference,
+    ctx: &mut ResolutionContext<'_>,
+    errors: &mut Vec<CompilationError>,
+) -> Option<TypeExpr> {
+    let base = resolve_type_ref_base(type_ref, ctx, errors)?;
+    Some(apply_type_algebra(base, type_ref, ctx, errors))
+}
+
+/// Folds the relation type-algebra carried on a `TypeReference` into `base`,
+/// mirroring Java's left-associative `GenericTypeOperation` chain.
+///
+/// Application order (innermost → outermost):
+/// 1. `algebra_ops` (`+`/`-`) left-fold: `T - Z + V` → `Union(Difference(T,
+///    Z), V)`, i.e. `((T-Z)+V)`.
+/// 2. `subset_bound` (`X⊆T`): wrap as `Subset { left: <so-far>, right: T }`.
+/// 3. `equal_binding` (`Name=…`): wrap as `Equal { left: Generic(name),
+///    right: <so-far> }`. The LHS is the raw AST identifier — a type variable
+///    that binds during inference — so it is *not* run through resolution.
+///
+/// Returns `base` unchanged when all three fields are empty. If an operand
+/// fails to resolve, the inner `resolve_type_ref` has already pushed the
+/// error; we keep the accumulator as-is rather than double-reporting.
+fn apply_type_algebra(
+    base: TypeExpr,
+    type_ref: &ast_type::TypeReference,
+    ctx: &mut ResolutionContext<'_>,
+    errors: &mut Vec<CompilationError>,
+) -> TypeExpr {
+    use crate::types::GenericTypeOpKind;
+
+    let mut acc = base;
+
+    // 1. `+`/`-` steps, left to right: `(T - Z) + V`.
+    for step in &type_ref.algebra_ops {
+        let Some(operand) = resolve_type_ref(&step.operand, ctx, errors) else {
+            continue;
+        };
+        let op = match step.kind {
+            ast_type::AlgebraOpKind::Union => GenericTypeOpKind::Union,
+            ast_type::AlgebraOpKind::Difference => GenericTypeOpKind::Difference,
+        };
+        acc = TypeExpr::GenericTypeOperation {
+            op,
+            left: Box::new(acc),
+            right: Box::new(operand),
+        };
+    }
+
+    // 2. `⊆` bound: the so-far relation must be a subset of `right`.
+    if let Some(bound) = &type_ref.subset_bound
+        && let Some(right) = resolve_type_ref(bound, ctx, errors)
+    {
+        acc = TypeExpr::GenericTypeOperation {
+            op: GenericTypeOpKind::Subset,
+            left: Box::new(acc),
+            right: Box::new(right),
+        };
+    }
+
+    // 3. `Name=` binding: the concretised type binds to this variable.
+    if let Some(name) = &type_ref.equal_binding {
+        acc = TypeExpr::GenericTypeOperation {
+            op: GenericTypeOpKind::Equal,
+            left: Box::new(TypeExpr::Generic(name.clone())),
+            right: Box::new(acc),
+        };
+    }
+
+    acc
+}
+
+/// Core `TypeReference` → `TypeExpr` resolution, without the relation
+/// type-algebra folding done by [`apply_type_algebra`]. Callers should use
+/// [`resolve_type_ref`] (the wrapper) so algebra applies at every depth.
 ///
 /// Resolution order (matches Java `ImportStub.resolvePackageableElement`):
 /// 1. If qualified (has package): resolve via the AST Package tree directly
@@ -148,7 +234,7 @@ pub(crate) struct ResolutionContext<'a> {
 ///    then root package fallback
 ///
 /// Returns `None` and pushes a `CompilationError` if the type cannot be resolved.
-pub(crate) fn resolve_type_ref(
+fn resolve_type_ref_base(
     type_ref: &ast_type::TypeReference,
     ctx: &mut ResolutionContext<'_>,
     errors: &mut Vec<CompilationError>,
@@ -1636,6 +1722,19 @@ fn infer_typeexpr_from_valuespec_impl(
     // `var_types` scope (see [`infer_typeexpr_from_valuespec_fresh`])
     // can recover the body type when lower-time inference was
     // pessimistic because sibling-arg generics hadn't yet bound.
+    //
+    // Plain ColSpec literals are surfaced *before* the `type_info`
+    // short-circuit: their cached `type_info` is deliberately the bare
+    // classifier (the dispatch narrower reads it and must not see column
+    // names — see `lower::relation::lower_column`), but the binding pass
+    // (`infer_generic_bindings`) needs the column *names* as an inner
+    // `Relation` to pair against a `(?:K)⊆T` / `Z=…⊆T` param and resolve
+    // `K`/`Z`/`V`. Build that shape directly from the literal here. The
+    // column type is `Unresolved` — the real type comes from the relation
+    // `T` during binding, and `Unresolved` short-circuits the binder's leaf.
+    if let Some(te) = colspec_binding_type(vs, model) {
+        return Some(te);
+    }
     if !fresh && let Some(rt) = vs.type_info.as_deref() {
         return Some(rt.type_expr.clone());
     }
@@ -1742,6 +1841,64 @@ fn infer_typeexpr_from_valuespec_impl(
         // future caller does, this is the place to refine.
         _ => infer_type_from_valuespec(vs, model, var_types).map(bare),
     }
+}
+
+/// Resolves the `meta::pure::metamodel::relation` classifier element for a
+/// *plain* column-spec literal — `ColSpec` (`array = false`) or `ColSpecArray`
+/// (`array = true`). Only the plain forms surface an inner column relation;
+/// `Func`/`Agg` ColSpecs keep their `<{T->Z}, R>` shape and don't route here.
+fn colspec_classifier(model: &crate::model::PureModel, array: bool) -> Option<ElementId> {
+    let class_name = if array { "ColSpecArray" } else { "ColSpec" };
+    model.resolve_by_path(&[
+        SmolStr::new("meta"),
+        SmolStr::new("pure"),
+        SmolStr::new("metamodel"),
+        SmolStr::new("relation"),
+        SmolStr::new(class_name),
+    ])
+}
+
+/// Binding-pass type for a *plain* `ColSpec`/`ColSpecArray` literal:
+/// `Named<ColSpec>{[Relation([{name, Unresolved, mult}, …])]}`, surfacing the
+/// column *names* so dispatch binding can pair the arg against a
+/// `(?:K)⊆T` / `Z=…⊆T` param and resolve `K`/`Z`/`V` (the `rename`/`select`
+/// shapes). Returns `None` for non-ColSpec values and for `Func`/`Agg`
+/// ColSpecs (whose `<{T->Z}, R>` shape isn't a column relation).
+///
+/// This is intentionally separate from the literal's cached `type_info`,
+/// which stays the bare classifier — see [`crate::lower::relation::lower_column`]
+/// and the dispatch-narrower note there. The column type is `Unresolved`: the
+/// real type is recovered from the relation `T` during binding, and
+/// `Unresolved` short-circuits the binder's leaf so the arg never spuriously
+/// binds `K` to a placeholder.
+fn colspec_binding_type(
+    vs: &crate::types::ValueSpec,
+    model: &crate::model::PureModel,
+) -> Option<crate::types::TypeExpr> {
+    use crate::types::{ColSpecLiteralKind, ExprKind, RelationColumnTypeExpr, TypeExpr};
+    let col = |c: &crate::types::RelationColumnLowered| RelationColumnTypeExpr {
+        name: c.name.clone(),
+        type_expr: TypeExpr::Unresolved,
+        multiplicity: c.multiplicity.clone(),
+    };
+    let (cols, array) = match vs.kind.as_ref() {
+        ExprKind::ColSpecLiteral {
+            column,
+            kind: ColSpecLiteralKind::Plain,
+        } => (vec![col(column)], false),
+        ExprKind::ColSpecArrayLiteral {
+            columns,
+            kind: ColSpecLiteralKind::Plain,
+        } => (columns.iter().map(col).collect(), true),
+        _ => return None,
+    };
+    Some(TypeExpr::Named {
+        element: colspec_classifier(model, array)?,
+        type_arguments: vec![TypeExpr::Relation(cols)],
+        multiplicity_arguments: Vec::new(),
+        value_arguments: vec![],
+        source_info: None,
+    })
 }
 
 /// LUB at the TypeExpr level. For two `Named` types with the same
@@ -2295,6 +2452,37 @@ fn extract_relation_columns(
             type_arguments.first().and_then(extract_relation_columns)
         }
         _ => None,
+    }
+}
+
+/// Merges two concrete relation column lists for a `Union`/`Difference`
+/// type-algebra step, mirroring Java `GenericType.merge`:
+/// - `Union` (`+`) appends `right`'s columns after `left`'s.
+/// - `Difference` (`-`) drops every `left` column whose name appears in
+///   `right` (name-based removal — `rename`'s `T-Z` strips the old columns).
+///
+/// `Subset`/`Equal` are binding constraints, not column merges; callers gate
+/// on `Union`/`Difference` before calling, so those arms just return `left`.
+fn merge_relation_columns(
+    op: crate::types::GenericTypeOpKind,
+    left: &[crate::types::RelationColumnTypeExpr],
+    right: &[crate::types::RelationColumnTypeExpr],
+) -> Vec<crate::types::RelationColumnTypeExpr> {
+    use crate::types::GenericTypeOpKind;
+    match op {
+        GenericTypeOpKind::Union => {
+            let mut cols = left.to_vec();
+            cols.extend(right.iter().cloned());
+            cols
+        }
+        GenericTypeOpKind::Difference => {
+            let drop: std::collections::HashSet<&SmolStr> = right.iter().map(|c| &c.name).collect();
+            left.iter()
+                .filter(|c| !drop.contains(&c.name))
+                .cloned()
+                .collect()
+        }
+        GenericTypeOpKind::Subset | GenericTypeOpKind::Equal => left.to_vec(),
     }
 }
 
@@ -2954,7 +3142,7 @@ fn collect_generic_names_in_typeexpr(
                 mult_names.insert(n.clone());
             }
         }
-        TypeExpr::AlgebraUnion(left, right) => {
+        TypeExpr::GenericTypeOperation { left, right, .. } => {
             collect_generic_names_in_typeexpr(left, type_names, mult_names);
             collect_generic_names_in_typeexpr(right, type_names, mult_names);
         }
@@ -3031,10 +3219,11 @@ pub(crate) fn rename_callee_typeexpr(
             )),
             return_multiplicity: rename_callee_multiplicity(return_multiplicity, mult_rename),
         },
-        TypeExpr::AlgebraUnion(left, right) => TypeExpr::AlgebraUnion(
-            Box::new(rename_callee_typeexpr(left, type_rename, mult_rename)),
-            Box::new(rename_callee_typeexpr(right, type_rename, mult_rename)),
-        ),
+        TypeExpr::GenericTypeOperation { op, left, right } => TypeExpr::GenericTypeOperation {
+            op: *op,
+            left: Box::new(rename_callee_typeexpr(left, type_rename, mult_rename)),
+            right: Box::new(rename_callee_typeexpr(right, type_rename, mult_rename)),
+        },
         TypeExpr::Relation(cols) => TypeExpr::Relation(
             cols.iter()
                 .map(|c| crate::types::RelationColumnTypeExpr {
@@ -3407,7 +3596,145 @@ pub(crate) fn bind_type_with_mode(
                 }
             }
         }
+        // Relation type-algebra subset constraint. Only the *wildcard* form
+        // — `Subset{ left: Relation([{type_expr: Generic(K), …}]), right:
+        // Generic(T) }`, i.e. `(?:K)⊆T` — binds here: the wildcard column's
+        // value type `K` is dictated by `T`'s matching column, looked up by
+        // the *arg* column's name (`eval`/`rename` shape). Multiplicity flows
+        // from the same `T` column.
+        //
+        // The other Subset form, `Subset{ left: Generic(Z), … }` (select's
+        // `Z⊆T`), is intentionally a no-op (falls to the catch-all): select
+        // compiles today with `Z` left floating as `Generic("Z")` and selects
+        // columns by name at runtime, so binding `Z` here would only risk a
+        // compile-time mismatch against the `Relation<Z>` return for no
+        // functional gain. This narrowness is the design, not a gap.
+        //
+        // Defensive: if `T` isn't bound yet (e.g. `eval`'s `T` binds from a
+        // later parameter), the lookup yields nothing and `K` stays generic —
+        // the `T-Z+V` op tree simply doesn't collapse, leaving a sound partial
+        // return type.
+        TypeExpr::GenericTypeOperation {
+            op: crate::types::GenericTypeOpKind::Subset,
+            left,
+            right,
+        } => {
+            // Clone `T`'s already-bound columns so the immutable borrow of
+            // `out` is released before the mutable bind below.
+            let ref_cols: Option<Vec<crate::types::RelationColumnTypeExpr>> = match right.as_ref() {
+                TypeExpr::Generic(t_name) => out
+                    .get(t_name)
+                    .and_then(extract_relation_columns)
+                    .map(<[_]>::to_vec),
+                _ => extract_relation_columns(right).map(<[_]>::to_vec),
+            };
+            if let (TypeExpr::Relation(wildcard_cols), TypeExpr::Relation(arg_cols), Some(ref_cols)) =
+                (left.as_ref(), arg_ty, ref_cols)
+                && let Some(wildcard_col) = wildcard_cols.first()
+            {
+                for ac in arg_cols {
+                    if let Some(rc) = ref_cols.iter().find(|c| c.name == ac.name) {
+                        bind_type_with_mode(
+                            &wildcard_col.type_expr,
+                            &rc.type_expr,
+                            out,
+                            ty_auth,
+                            mult_out,
+                            model,
+                            mode,
+                            /* inside_structural */ true,
+                        );
+                        bind_mult_with_mode(
+                            &wildcard_col.multiplicity,
+                            &rc.multiplicity,
+                            mult_out,
+                            mode,
+                        );
+                    }
+                }
+            }
+        }
+        // Relation type-algebra equal binding `Name=…` (`rename`'s
+        // `Z=(?:K)⊆T` / `V=(?:K)`). Two steps:
+        //   1. Recurse `inner` (the RHS) against the arg so the wildcard's `K`
+        //      binds — for `old` this drives the `Subset` lookup above
+        //      (`K ← T`'s column); for `new` (`V=(?:K)`, no `⊆T`) `inner` is
+        //      the bare wildcard `Relation` and `K` is already bound from
+        //      `old`'s pass (the arg-side `Unresolved` short-circuits, so the
+        //      arg never re-binds `K`).
+        //   2. Bind the `Name` LHS (`Z`/`V`) *authoritatively* to the column
+        //      instance `Relation([{name: <arg col name>, type_expr: <K
+        //      substituted from `out`>, mult: <arg col mult>}])` — the
+        //      relation that `T-Z` removes by name (`old`) and `T+V` appends
+        //      (`new`). Authoritative because `Z`/`V` is a specific column
+        //      instance, not a LUB constraint.
+        //
+        // Mult precision: the instance column's multiplicity is taken from the
+        // arg ColSpec's lowered column. Capturing the *source* column's mult
+        // through a parallel mult-variable (Java's full `merge`) is a known
+        // follow-up; for the target chained-rename case the new column flows
+        // through `->toOne()`, so this default suffices.
+        TypeExpr::GenericTypeOperation {
+            op: crate::types::GenericTypeOpKind::Equal,
+            left,
+            right,
+        } => {
+            // Step 1: fill `K` (and any deeper vars) from the inner shape.
+            bind_type_with_mode(
+                right,
+                arg_ty,
+                out,
+                ty_auth,
+                mult_out,
+                model,
+                mode,
+                inside_structural,
+            );
+
+            // Step 2: bind the LHS name to the concretised column instance.
+            if let TypeExpr::Generic(_) = left.as_ref()
+                && let TypeExpr::Relation(arg_cols) = arg_ty
+                && let Some(wildcard_ty) = wildcard_col_type(right)
+            {
+                let col_type = substitute_type(wildcard_ty, out);
+                let instance_cols: Vec<crate::types::RelationColumnTypeExpr> = arg_cols
+                    .iter()
+                    .map(|ac| crate::types::RelationColumnTypeExpr {
+                        name: ac.name.clone(),
+                        type_expr: col_type.clone(),
+                        multiplicity: ac.multiplicity.clone(),
+                    })
+                    .collect();
+                bind_type_with_mode(
+                    left,
+                    &TypeExpr::Relation(instance_cols),
+                    out,
+                    ty_auth,
+                    mult_out,
+                    model,
+                    RegisterMode::Authoritative,
+                    inside_structural,
+                );
+            }
+        }
         _ => {}
+    }
+}
+
+/// Extracts the wildcard column's value type from a `(?:K)` / `(?:K)⊆T`
+/// inner shape: the single column's `type_expr` inside the `Relation`,
+/// descending through a `Subset` wrapper. Returns `None` for shapes without
+/// a leading wildcard column.
+fn wildcard_col_type(inner: &crate::types::TypeExpr) -> Option<&crate::types::TypeExpr> {
+    use crate::types::{GenericTypeOpKind, TypeExpr};
+    match inner {
+        TypeExpr::Relation(cols) => cols.first().map(|c| &c.type_expr),
+        TypeExpr::GenericTypeOperation {
+            op: GenericTypeOpKind::Subset,
+            left,
+            ..
+        } => wildcard_col_type(left),
+        _ => None,
     }
 }
 
@@ -3831,7 +4158,7 @@ pub(crate) fn mult_lub(
 
 /// Rewrites a `TypeExpr` by substituting `Generic(name)` nodes with their
 /// bound types. Recurses into `Named { type_arguments }`, `FunctionType`,
-/// and `AlgebraUnion` so substitution works at any nesting depth.
+/// and `GenericTypeOperation` so substitution works at any nesting depth.
 pub(crate) fn substitute_type(
     ty: &crate::types::TypeExpr,
     bindings: &HashMap<SmolStr, crate::types::TypeExpr>,
@@ -3935,10 +4262,38 @@ pub(crate) fn substitute_type_with_mults(
             )),
             return_multiplicity: substitute_mult(return_multiplicity, mult_bindings),
         },
-        TypeExpr::AlgebraUnion(a, b) => TypeExpr::AlgebraUnion(
-            Box::new(substitute_type_with_mults(a, bindings, mult_bindings)),
-            Box::new(substitute_type_with_mults(b, bindings, mult_bindings)),
-        ),
+        // Relation type-algebra. Substitute both operands, then — for the
+        // column-merge ops `Union`/`Difference` — eagerly evaluate once both
+        // sides have reduced to concrete relation column lists, collapsing the
+        // op node to a plain `TypeExpr::Relation(merged)`. This mirrors Java's
+        // `GenericType.merge` running inside `makeTypeArgumentAsConcreteAsPossible`
+        // as soon as the operands are concrete `RelationType`s. The collapsed
+        // bare `Relation` lands exactly where the generic relation variable sat
+        // (e.g. `Relation<T-Z+V>` → `Named{Relation, [Relation(merged)]}`), the
+        // same shape a relation variable binds to. When either side is still
+        // generic, rebuild the op node so a later substitution pass can finish
+        // the job. `Subset`/`Equal` carry binding constraints (resolved during
+        // inference, not here), so they only ever rebuild.
+        TypeExpr::GenericTypeOperation { op, left, right } => {
+            use crate::types::GenericTypeOpKind;
+            let left_sub = substitute_type_with_mults(left, bindings, mult_bindings);
+            let right_sub = substitute_type_with_mults(right, bindings, mult_bindings);
+            let merge_ready =
+                matches!(op, GenericTypeOpKind::Union | GenericTypeOpKind::Difference);
+            if merge_ready
+                && let (Some(left_cols), Some(right_cols)) = (
+                    extract_relation_columns(&left_sub),
+                    extract_relation_columns(&right_sub),
+                )
+            {
+                return TypeExpr::Relation(merge_relation_columns(*op, left_cols, right_cols));
+            }
+            TypeExpr::GenericTypeOperation {
+                op: *op,
+                left: Box::new(left_sub),
+                right: Box::new(right_sub),
+            }
+        }
         // Recurse into structural relation columns: each column's
         // `type_expr` may reference an outer-scope generic
         // (e.g. `wrapPrimitiveInTDS<T>(…):TDS<(value:T[0..1])>[1]`
@@ -4614,6 +4969,568 @@ mod tests {
     fn import_scope_from_path_str() {
         let scope = ImportScope::from_path_str("meta::pure::profiles");
         assert_eq!(scope.package.to_string(), "meta::pure::profiles");
+    }
+
+    /// Build a bare unqualified `TypeReference` with empty algebra fields.
+    fn tref(name: &str) -> ast_type::TypeReference {
+        ast_type::TypeReference {
+            package: None,
+            name: SmolStr::new(name),
+            type_arguments: vec![],
+            multiplicity_arguments: vec![],
+            type_variable_values: vec![],
+            algebra_ops: vec![],
+            subset_bound: None,
+            equal_binding: None,
+            source_info: SourceInfo::new("t.pure", 1, 1, 1, 1),
+        }
+    }
+
+    /// `T - Z + V` (`rename`'s `Relation<T-Z+V>` type-arg) must resolve to the
+    /// left-associative op tree `Union(Difference(T, Z), V)` — i.e. `((T-Z)+V)`.
+    /// This is the Phase-c gate: the resolver builds the `GenericTypeOperation`
+    /// tree that Phase d evaluates once `T`/`Z`/`V` bind to concrete relations.
+    #[test]
+    fn type_algebra_difference_then_union_folds_left() {
+        use crate::types::GenericTypeOpKind;
+
+        let model = crate::model::PureModel::new();
+        let scopes: Vec<ImportScope> = Vec::new();
+        let mut cache = HashMap::new();
+        // T/Z/V in scope as type parameters — base resolution short-circuits
+        // each to `Generic(name)` without any model lookup.
+        let type_params: Vec<SmolStr> =
+            vec![SmolStr::new("T"), SmolStr::new("Z"), SmolStr::new("V")];
+        let mult_params: Vec<SmolStr> = Vec::new();
+        let mut ctx = ResolutionContext {
+            model: &model,
+            import_scopes: &scopes,
+            resolve_cache: &mut cache,
+            type_parameters: &type_params,
+            multiplicity_parameters: &mult_params,
+            self_package: None,
+            variable_types: HashMap::new(),
+            island_lowerers: &[],
+        };
+
+        // `T - Z + V`: base `T`, then `[Difference(Z), Union(V)]`.
+        let mut arg = tref("T");
+        arg.algebra_ops = vec![
+            ast_type::AlgebraOp {
+                kind: ast_type::AlgebraOpKind::Difference,
+                operand: tref("Z"),
+            },
+            ast_type::AlgebraOp {
+                kind: ast_type::AlgebraOpKind::Union,
+                operand: tref("V"),
+            },
+        ];
+
+        let mut errors = Vec::new();
+        let resolved = resolve_type_ref(&arg, &mut ctx, &mut errors).expect("resolves");
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+
+        // Outermost is the `+V` Union; its left is the `-Z` Difference.
+        match resolved {
+            TypeExpr::GenericTypeOperation {
+                op: GenericTypeOpKind::Union,
+                left,
+                right,
+            } => {
+                assert_eq!(*right, TypeExpr::Generic(SmolStr::new("V")));
+                match *left {
+                    TypeExpr::GenericTypeOperation {
+                        op: GenericTypeOpKind::Difference,
+                        left: inner_left,
+                        right: inner_right,
+                    } => {
+                        assert_eq!(*inner_left, TypeExpr::Generic(SmolStr::new("T")));
+                        assert_eq!(*inner_right, TypeExpr::Generic(SmolStr::new("Z")));
+                    }
+                    other => panic!("expected Difference(T, Z), got {other:?}"),
+                }
+            }
+            other => panic!("expected Union(.., V), got {other:?}"),
+        }
+    }
+
+    /// `Relation<T-Z+V>` resolves to a `Named { element: Relation,
+    /// type_arguments: [GenericTypeOperation(((T-Z)+V))] }` — the op tree lives
+    /// *inside* the outer relation's `type_arguments`, not at the top. Phase d's
+    /// evaluator must recurse into `type_arguments` of `Named` to find it. This
+    /// pins that structure so the Phase-d wiring has a fixture.
+    #[test]
+    fn type_algebra_op_tree_nests_inside_relation_named() {
+        use crate::types::GenericTypeOpKind;
+
+        // Minimal model with a `Relation` class registered at root so the
+        // unqualified `Relation` head resolves.
+        let mut model = crate::model::PureModel::new();
+        model.chunks.push(crate::model::ModelChunk::new(0));
+        let chunk_id = 1u16;
+        let mut chunk = crate::model::ModelChunk::new(chunk_id);
+        let si = SourceInfo::new("t.pure", 1, 1, 1, 1);
+        let rel_idx = chunk.alloc_element(
+            crate::model::ElementNode {
+                name: SmolStr::new("Relation"),
+                source_info: si.clone(),
+                name_source_info: si.clone(),
+                parent_package: model.root_package,
+            },
+            crate::model::Element::Class(crate::nodes::class::Class {
+                type_parameters: vec![crate::nodes::class::TypeParameter::invariant(SmolStr::new(
+                    "T",
+                ))],
+                multiplicity_parameters: Vec::new(),
+                type_variable_parameters: Vec::new(),
+                super_types: Vec::new(),
+                properties: Vec::new(),
+                qualified_properties: Vec::new(),
+                constraints: Vec::new(),
+                stereotypes: Vec::new(),
+                tagged_values: Vec::new(),
+                original_milestoned_properties: Vec::new(),
+            }),
+        );
+        model.chunks.push(chunk);
+        let rel_id = ElementId::InstanceId {
+            chunk_id,
+            local_idx: rel_idx,
+        };
+        model.register_element(model.root_package, rel_id);
+
+        let scopes: Vec<ImportScope> = Vec::new();
+        let mut cache = HashMap::new();
+        let type_params: Vec<SmolStr> =
+            vec![SmolStr::new("T"), SmolStr::new("Z"), SmolStr::new("V")];
+        let mult_params: Vec<SmolStr> = Vec::new();
+        let mut ctx = ResolutionContext {
+            model: &model,
+            import_scopes: &scopes,
+            resolve_cache: &mut cache,
+            type_parameters: &type_params,
+            multiplicity_parameters: &mult_params,
+            self_package: None,
+            variable_types: HashMap::new(),
+            island_lowerers: &[],
+        };
+
+        // `Relation<T-Z+V>`: a `Relation` ref whose single type-arg carries
+        // the `[Difference(Z), Union(V)]` algebra on base `T`.
+        let mut inner = tref("T");
+        inner.algebra_ops = vec![
+            ast_type::AlgebraOp {
+                kind: ast_type::AlgebraOpKind::Difference,
+                operand: tref("Z"),
+            },
+            ast_type::AlgebraOp {
+                kind: ast_type::AlgebraOpKind::Union,
+                operand: tref("V"),
+            },
+        ];
+        let mut rel = tref("Relation");
+        rel.type_arguments = vec![inner];
+
+        let mut errors = Vec::new();
+        let resolved = resolve_type_ref(&rel, &mut ctx, &mut errors).expect("resolves");
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+
+        match resolved {
+            TypeExpr::Named {
+                element,
+                type_arguments,
+                ..
+            } => {
+                assert_eq!(element, rel_id);
+                assert_eq!(type_arguments.len(), 1);
+                assert!(
+                    matches!(
+                        &type_arguments[0],
+                        TypeExpr::GenericTypeOperation {
+                            op: GenericTypeOpKind::Union,
+                            ..
+                        }
+                    ),
+                    "op tree must nest inside Relation's type_arguments, got {:?}",
+                    type_arguments[0]
+                );
+            }
+            other => panic!("expected Named(Relation, [op tree]), got {other:?}"),
+        }
+    }
+
+    /// `Z=(?:K)⊆T` (`rename`'s `ColSpec<Z=(?:K)⊆T>` type-arg) resolves to
+    /// `Equal { Generic(Z), Subset { Relation([{?:K}]), Generic(T) } }`. The
+    /// `(?:K)` wildcard becomes a single-column relation; `⊆T` wraps it in
+    /// `Subset`; the `Z=` LHS wraps that in `Equal` — the binding handled in
+    /// Phase f.
+    #[test]
+    fn type_algebra_named_subset_wildcard_colspec() {
+        use crate::types::GenericTypeOpKind;
+
+        let model = crate::model::PureModel::new();
+        let scopes: Vec<ImportScope> = Vec::new();
+        let mut cache = HashMap::new();
+        let type_params: Vec<SmolStr> =
+            vec![SmolStr::new("T"), SmolStr::new("K"), SmolStr::new("Z")];
+        let mult_params: Vec<SmolStr> = Vec::new();
+        let mut ctx = ResolutionContext {
+            model: &model,
+            import_scopes: &scopes,
+            resolve_cache: &mut cache,
+            type_parameters: &type_params,
+            multiplicity_parameters: &mult_params,
+            self_package: None,
+            variable_types: HashMap::new(),
+            island_lowerers: &[],
+        };
+
+        // `(?:K)` wildcard with `⊆T` bound and `Z=` binding.
+        let mut wildcard = tref("?");
+        wildcard.type_arguments = vec![tref("K")];
+        wildcard.subset_bound = Some(Box::new(tref("T")));
+        wildcard.equal_binding = Some(SmolStr::new("Z"));
+
+        let mut errors = Vec::new();
+        let resolved = resolve_type_ref(&wildcard, &mut ctx, &mut errors).expect("resolves");
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+
+        match resolved {
+            TypeExpr::GenericTypeOperation {
+                op: GenericTypeOpKind::Equal,
+                left,
+                right,
+            } => {
+                assert_eq!(*left, TypeExpr::Generic(SmolStr::new("Z")));
+                match *right {
+                    TypeExpr::GenericTypeOperation {
+                        op: GenericTypeOpKind::Subset,
+                        left: sub_left,
+                        right: sub_right,
+                    } => {
+                        assert_eq!(*sub_right, TypeExpr::Generic(SmolStr::new("T")));
+                        match *sub_left {
+                            TypeExpr::Relation(cols) => {
+                                assert_eq!(cols.len(), 1);
+                                assert_eq!(cols[0].name, SmolStr::new("?"));
+                                assert_eq!(cols[0].type_expr, TypeExpr::Generic(SmolStr::new("K")));
+                            }
+                            other => panic!("expected Relation([{{?:K}}]), got {other:?}"),
+                        }
+                    }
+                    other => panic!("expected Subset(.., T), got {other:?}"),
+                }
+            }
+            other => panic!("expected Equal(Z, ..), got {other:?}"),
+        }
+    }
+
+    /// A single relation column carrying a placeholder type (the merge logic
+    /// keys on column *names*, so the type is irrelevant here).
+    fn col(name: &str) -> crate::types::RelationColumnTypeExpr {
+        crate::types::RelationColumnTypeExpr {
+            name: SmolStr::new(name),
+            type_expr: TypeExpr::Generic(SmolStr::new("Integer")),
+            multiplicity: Multiplicity::PureOne,
+        }
+    }
+
+    /// A bare `Relation` over the given column names.
+    fn rel(names: &[&str]) -> TypeExpr {
+        TypeExpr::Relation(names.iter().map(|n| col(n)).collect())
+    }
+
+    fn op(kind: crate::types::GenericTypeOpKind, left: TypeExpr, right: TypeExpr) -> TypeExpr {
+        TypeExpr::GenericTypeOperation {
+            op: kind,
+            left: Box::new(left),
+            right: Box::new(right),
+        }
+    }
+
+    fn col_names(te: &TypeExpr) -> Vec<String> {
+        match te {
+            TypeExpr::Relation(cols) => cols.iter().map(|c| c.name.to_string()).collect(),
+            other => panic!("expected concrete Relation, got {other:?}"),
+        }
+    }
+
+    /// Phase-d headline gate: `substitute(((T-Z)+V), {T:{val,str}, Z:{str},
+    /// V:{newStr}})` must eager-collapse to the concrete renamed relation
+    /// `Relation([val, newStr])` — `T` minus the dropped `str`, plus the new
+    /// `newStr`. This is exactly what `rename`'s `Relation<T-Z+V>` return type
+    /// reduces to once the call-site bindings land.
+    #[test]
+    fn substitute_collapses_difference_then_union_to_concrete_relation() {
+        use crate::types::GenericTypeOpKind::{Difference, Union};
+
+        // `((T - Z) + V)`.
+        let tree = op(
+            Union,
+            op(
+                Difference,
+                TypeExpr::Generic(SmolStr::new("T")),
+                TypeExpr::Generic(SmolStr::new("Z")),
+            ),
+            TypeExpr::Generic(SmolStr::new("V")),
+        );
+
+        let mut bindings = HashMap::new();
+        bindings.insert(SmolStr::new("T"), rel(&["val", "str"]));
+        bindings.insert(SmolStr::new("Z"), rel(&["str"]));
+        bindings.insert(SmolStr::new("V"), rel(&["newStr"]));
+
+        let result = substitute_type(&tree, &bindings);
+        assert_eq!(col_names(&result), vec!["val", "newStr"]);
+    }
+
+    /// The op tree may be nested inside a `Named { Relation, [..] }` (the shape
+    /// `Relation<T-Z+V>` resolves to). Substitution must recurse into
+    /// `type_arguments` and collapse the inner op tree in place.
+    #[test]
+    fn substitute_collapses_op_tree_nested_in_named_relation() {
+        use crate::types::GenericTypeOpKind::{Difference, Union};
+
+        let inner = op(
+            Union,
+            op(
+                Difference,
+                TypeExpr::Generic(SmolStr::new("T")),
+                TypeExpr::Generic(SmolStr::new("Z")),
+            ),
+            TypeExpr::Generic(SmolStr::new("V")),
+        );
+        let named = TypeExpr::Named {
+            element: crate::bootstrap::ANY_ID, // stand-in head; not inspected here
+            type_arguments: vec![inner],
+            multiplicity_arguments: vec![],
+            value_arguments: vec![],
+            source_info: None,
+        };
+
+        let mut bindings = HashMap::new();
+        bindings.insert(SmolStr::new("T"), rel(&["val", "str"]));
+        bindings.insert(SmolStr::new("Z"), rel(&["str"]));
+        bindings.insert(SmolStr::new("V"), rel(&["newStr"]));
+
+        match substitute_type(&named, &bindings) {
+            TypeExpr::Named { type_arguments, .. } => {
+                assert_eq!(type_arguments.len(), 1);
+                assert_eq!(col_names(&type_arguments[0]), vec!["val", "newStr"]);
+            }
+            other => panic!("expected Named, got {other:?}"),
+        }
+    }
+
+    /// When an operand stays generic (its binding is absent), the op node must
+    /// survive substitution rather than collapse — a later pass finishes once
+    /// the binding lands. Guards against eager-collapsing on a half-bound tree.
+    #[test]
+    fn substitute_leaves_op_tree_intact_when_operand_unbound() {
+        use crate::types::GenericTypeOpKind::Union;
+
+        let tree = op(
+            Union,
+            TypeExpr::Generic(SmolStr::new("T")),
+            TypeExpr::Generic(SmolStr::new("V")),
+        );
+        // Only V is bound; T stays generic.
+        let mut bindings = HashMap::new();
+        bindings.insert(SmolStr::new("V"), rel(&["newStr"]));
+
+        match substitute_type(&tree, &bindings) {
+            TypeExpr::GenericTypeOperation {
+                op: Union,
+                left,
+                right,
+            } => {
+                assert_eq!(*left, TypeExpr::Generic(SmolStr::new("T")));
+                assert_eq!(col_names(&right), vec!["newStr"]);
+            }
+            other => panic!("expected surviving Union op node, got {other:?}"),
+        }
+    }
+
+    /// A relation column with a `Generic`-named placeholder type, so the
+    /// binding test can assert *which* type flowed into `K`/`Z`/`V`.
+    fn col_t(name: &str, ty: &str) -> crate::types::RelationColumnTypeExpr {
+        crate::types::RelationColumnTypeExpr {
+            name: SmolStr::new(name),
+            type_expr: TypeExpr::Generic(SmolStr::new(ty)),
+            multiplicity: Multiplicity::ZeroOrOne,
+        }
+    }
+
+    /// The `(?:K)` wildcard column.
+    fn wildcard_k() -> TypeExpr {
+        TypeExpr::Relation(vec![crate::types::RelationColumnTypeExpr {
+            name: SmolStr::new("?"),
+            type_expr: TypeExpr::Generic(SmolStr::new("K")),
+            multiplicity: Multiplicity::PureOne,
+        }])
+    }
+
+    /// Phase e+f headline gate: end-to-end `rename` binding + substitution at
+    /// the type level. With `T` bound to `{val, str}`, binding `old:ColSpec<
+    /// Z=(?:K)⊆T>` against arg `~str` must bind `K` to `str`'s type and `Z` to
+    /// the `{str}` column instance; binding `new:ColSpec<V=(?:K)>` against arg
+    /// `~newStr` must reuse `K` and bind `V` to `{newStr}`. Substituting the
+    /// `Relation<T-Z+V>` op tree then yields the renamed `{val, newStr}`.
+    #[test]
+    fn rename_binding_concretises_renamed_relation() {
+        use crate::inference::context::RegisterMode;
+        use crate::types::GenericTypeOpKind::{Difference, Equal, Subset, Union};
+
+        let model = crate::model::PureModel::new();
+        let mut out: HashMap<SmolStr, TypeExpr> = HashMap::new();
+        let mut ty_auth: HashMap<SmolStr, TypeExpr> = HashMap::new();
+        let mut mult_out: HashMap<SmolStr, Multiplicity> = HashMap::new();
+
+        // Param 0 `r:Relation<T>` already bound `T` to the source relation.
+        out.insert(
+            SmolStr::new("T"),
+            TypeExpr::Relation(vec![col_t("val", "Integer"), col_t("str", "String")]),
+        );
+
+        // Param 1 `old:ColSpec<Z=(?:K)⊆T>` against arg `~str`.
+        let old_param = op(Equal, TypeExpr::Generic(SmolStr::new("Z")), {
+            op(Subset, wildcard_k(), TypeExpr::Generic(SmolStr::new("T")))
+        });
+        let old_arg = TypeExpr::Relation(vec![crate::types::RelationColumnTypeExpr {
+            name: SmolStr::new("str"),
+            type_expr: TypeExpr::Unresolved,
+            multiplicity: Multiplicity::ZeroOrOne,
+        }]);
+        bind_type_with_mode(
+            &old_param,
+            &old_arg,
+            &mut out,
+            &mut ty_auth,
+            &mut mult_out,
+            &model,
+            RegisterMode::Authoritative,
+            false,
+        );
+
+        // `K` bound to `str`'s type (looked up by name in `T`).
+        assert_eq!(
+            out.get("K"),
+            Some(&TypeExpr::Generic(SmolStr::new("String")))
+        );
+        // `Z` bound to the `{str}` column instance.
+        assert_eq!(col_names(out.get("Z").expect("Z bound")), vec!["str"]);
+
+        // Param 2 `new:ColSpec<V=(?:K)>` against arg `~newStr` — `K` reused.
+        let new_param = op(Equal, TypeExpr::Generic(SmolStr::new("V")), wildcard_k());
+        let new_arg = TypeExpr::Relation(vec![crate::types::RelationColumnTypeExpr {
+            name: SmolStr::new("newStr"),
+            type_expr: TypeExpr::Unresolved,
+            multiplicity: Multiplicity::ZeroOrOne,
+        }]);
+        bind_type_with_mode(
+            &new_param,
+            &new_arg,
+            &mut out,
+            &mut ty_auth,
+            &mut mult_out,
+            &model,
+            RegisterMode::Authoritative,
+            false,
+        );
+
+        // `V` bound to the `{newStr}` instance, carrying `K`'s type (String).
+        match out.get("V").expect("V bound") {
+            TypeExpr::Relation(cols) => {
+                assert_eq!(cols.len(), 1);
+                assert_eq!(cols[0].name, SmolStr::new("newStr"));
+                assert_eq!(cols[0].type_expr, TypeExpr::Generic(SmolStr::new("String")));
+            }
+            other => panic!("expected V = Relation([{{newStr}}]), got {other:?}"),
+        }
+
+        // Substitute the `Relation<T-Z+V>` op tree → renamed `{val, newStr}`.
+        let return_tree = op(
+            Union,
+            op(
+                Difference,
+                TypeExpr::Generic(SmolStr::new("T")),
+                TypeExpr::Generic(SmolStr::new("Z")),
+            ),
+            TypeExpr::Generic(SmolStr::new("V")),
+        );
+        let result = substitute_type(&return_tree, &out);
+        assert_eq!(col_names(&result), vec!["val", "newStr"]);
+    }
+
+    /// `eval`/`select`-style probe: the `Subset` arm is a no-op when `T` is
+    /// unbound (`eval`'s `T` binds from a later param), and the `Generic(Z)`
+    /// subset form (select's `Z⊆T`) is intentionally never bound here. Guards
+    /// the narrowed-blast-radius invariant the green PCT suite relies on.
+    #[test]
+    fn subset_arm_is_noop_without_t_and_for_generic_left() {
+        use crate::inference::context::RegisterMode;
+        use crate::types::GenericTypeOpKind::Subset;
+
+        let model = crate::model::PureModel::new();
+        let mut ty_auth: HashMap<SmolStr, TypeExpr> = HashMap::new();
+        let mut mult_out: HashMap<SmolStr, Multiplicity> = HashMap::new();
+
+        // (a) eval's `(?:Z)⊆T` with `T` unbound → no binding.
+        let mut out: HashMap<SmolStr, TypeExpr> = HashMap::new();
+        let eval_param = op(
+            Subset,
+            TypeExpr::Relation(vec![crate::types::RelationColumnTypeExpr {
+                name: SmolStr::new("?"),
+                type_expr: TypeExpr::Generic(SmolStr::new("Z")),
+                multiplicity: Multiplicity::PureOne,
+            }]),
+            TypeExpr::Generic(SmolStr::new("T")),
+        );
+        let arg = TypeExpr::Relation(vec![crate::types::RelationColumnTypeExpr {
+            name: SmolStr::new("c"),
+            type_expr: TypeExpr::Unresolved,
+            multiplicity: Multiplicity::ZeroOrOne,
+        }]);
+        bind_type_with_mode(
+            &eval_param,
+            &arg,
+            &mut out,
+            &mut ty_auth,
+            &mut mult_out,
+            &model,
+            RegisterMode::Authoritative,
+            false,
+        );
+        assert!(
+            out.get("Z").is_none(),
+            "Z must stay unbound when T is absent"
+        );
+
+        // (b) select's `Z⊆T` (Generic left) → intentional no-op even with T bound.
+        let mut out2: HashMap<SmolStr, TypeExpr> = HashMap::new();
+        out2.insert(
+            SmolStr::new("T"),
+            TypeExpr::Relation(vec![col_t("a", "Integer"), col_t("b", "String")]),
+        );
+        let select_param = op(
+            Subset,
+            TypeExpr::Generic(SmolStr::new("Z")),
+            TypeExpr::Generic(SmolStr::new("T")),
+        );
+        bind_type_with_mode(
+            &select_param,
+            &arg,
+            &mut out2,
+            &mut ty_auth,
+            &mut mult_out,
+            &model,
+            RegisterMode::Authoritative,
+            false,
+        );
+        assert!(
+            out2.get("Z").is_none(),
+            "select's Generic-left Subset must remain a no-op"
+        );
     }
 
     /// Imports must shadow non-primitive root aliases.

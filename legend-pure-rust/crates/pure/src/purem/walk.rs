@@ -282,7 +282,9 @@ pub fn walk_type(ty: &mut TypeExpr, visit: &mut dyn FnMut(&mut ElementId)) {
             walk_multiplicity(return_multiplicity, visit);
         }
         TypeExpr::Relation(_) | TypeExpr::Generic(_) | TypeExpr::Unresolved => {}
-        TypeExpr::AlgebraUnion(a, b) => {
+        TypeExpr::GenericTypeOperation {
+            left: a, right: b, ..
+        } => {
             walk_type(a, visit);
             walk_type(b, visit);
         }

@@ -468,6 +468,9 @@ fn parse_type_reference(cursor: &mut Cursor) -> Result<TypeReference, ParseError
         type_arguments: Vec::new(),
         multiplicity_arguments: Vec::new(),
         type_variable_values: Vec::new(),
+        algebra_ops: vec![],
+        subset_bound: None,
+        equal_binding: None,
         source_info: si,
     })
 }
@@ -573,6 +576,9 @@ fn stub_type_ref(span: &SourceInfo) -> TypeReference {
         type_arguments: Vec::new(),
         multiplicity_arguments: Vec::new(),
         type_variable_values: Vec::new(),
+        algebra_ops: vec![],
+        subset_bound: None,
+        equal_binding: None,
         source_info: span.clone(),
     }
 }

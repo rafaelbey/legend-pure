@@ -421,8 +421,45 @@ pub struct TypeReference {
     pub multiplicity_arguments: Vec<MultiplicityArgument>,
     /// Type variable values: `(200, 'ok')`.
     pub type_variable_values: Vec<TypeVariableValue>,
+    /// Relation type-algebra steps applied to this type argument, in
+    /// source order: `T - Z + V` → `[Difference(Z), Union(V)]`. Empty
+    /// for ordinary type arguments. Mirrors Java's left-associative
+    /// `GenericTypeOperation` chain; the resolver folds these into
+    /// `TypeExpr::GenericTypeOperation` and evaluates them once the
+    /// operands are concrete relation types.
+    pub algebra_ops: Vec<AlgebraOp>,
+    /// Subtype-constraint bound `X⊆T` (U+2286): the relation `X` must be
+    /// a subset of `T`. `None` when absent. Real shape:
+    /// `ColSpec<(?:K)⊆T>` in `rename`/`eval`. Carries the reference
+    /// relation used to resolve a wildcard column's type by name.
+    pub subset_bound: Option<Box<TypeReference>>,
+    /// Named-binding LHS for `Name=Type`: e.g. `Z` in `Z=(?:K)⊆T`. The
+    /// concretised type argument binds to this variable during
+    /// inference. `None` for un-named type arguments.
+    pub equal_binding: Option<Identifier>,
     /// Source location.
     pub source_info: SourceInfo,
+}
+
+/// One step in a relation type-algebra chain attached to a
+/// [`TypeReference`]: `+ operand` (union) or `- operand` (difference).
+/// Accumulated left-to-right (`(T - Z) + V`), mirroring Java's nested
+/// `GenericTypeOperation`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AlgebraOp {
+    /// Union (`+`) or difference (`-`).
+    pub kind: AlgebraOpKind,
+    /// The right-hand operand of the operator.
+    pub operand: TypeReference,
+}
+
+/// The operator of an [`AlgebraOp`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AlgebraOpKind {
+    /// `+` — append the operand relation's columns.
+    Union,
+    /// `-` — remove the operand relation's columns (by name).
+    Difference,
 }
 
 impl TypeReference {
@@ -736,6 +773,9 @@ mod tests {
             type_arguments: vec![],
             multiplicity_arguments: vec![],
             type_variable_values: vec![],
+            algebra_ops: vec![],
+            subset_bound: None,
+            equal_binding: None,
             source_info: test_src(),
         };
         assert_eq!(type_ref.full_path(), "String");
@@ -753,6 +793,9 @@ mod tests {
             type_arguments: vec![],
             multiplicity_arguments: vec![],
             type_variable_values: vec![],
+            algebra_ops: vec![],
+            subset_bound: None,
+            equal_binding: None,
             source_info: test_src(),
         };
         assert_eq!(type_ref.full_path(), "meta::pure::String");
@@ -766,6 +809,9 @@ mod tests {
             type_arguments: vec![],
             multiplicity_arguments: vec![],
             type_variable_values: vec![],
+            algebra_ops: vec![],
+            subset_bound: None,
+            equal_binding: None,
             source_info: SourceInfo::new("file.pure", 5, 3, 5, 9),
         };
         assert_eq!(type_ref.source_info().start_line, 5);

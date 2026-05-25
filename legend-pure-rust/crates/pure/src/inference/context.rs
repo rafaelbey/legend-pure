@@ -122,7 +122,7 @@ impl GenericBindings {
     /// Substitute the type-variable bindings into `ty`. Replaces every
     /// `TypeExpr::Generic(name)` whose `name` is in `self.ty`; recurses
     /// through `Named { type_arguments }`, `FunctionType { parameters,
-    /// return_type }`, and `AlgebraUnion`.
+    /// return_type }`, and `GenericTypeOperation`.
     ///
     /// This is the single entry point for "make this `TypeExpr` as
     /// concrete as possible given the bindings I've collected." Mirrors

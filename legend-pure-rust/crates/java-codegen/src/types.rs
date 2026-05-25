@@ -144,10 +144,12 @@ fn render_inner_type(
             fqn: function_fqn.to_owned(),
             position: position.describe(),
         }),
-        TypeExpr::Relation(_) | TypeExpr::AlgebraUnion(_, _) => Err(CodegenError::RelationTyped {
-            fqn: function_fqn.to_owned(),
-            position: position.describe(),
-        }),
+        TypeExpr::Relation(_) | TypeExpr::GenericTypeOperation { .. } => {
+            Err(CodegenError::RelationTyped {
+                fqn: function_fqn.to_owned(),
+                position: position.describe(),
+            })
+        }
         TypeExpr::Generic(name) => match generic_policy {
             GenericPolicy::Reject => Err(CodegenError::GenericTyped {
                 fqn: function_fqn.to_owned(),
@@ -285,7 +287,9 @@ fn reject_nested_function_types(
             }
             Ok(())
         }
-        TypeExpr::AlgebraUnion(a, b) => {
+        TypeExpr::GenericTypeOperation {
+            left: a, right: b, ..
+        } => {
             reject_nested_function_types(a, function_fqn, position)?;
             reject_nested_function_types(b, function_fqn, position)
         }

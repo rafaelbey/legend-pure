@@ -2314,7 +2314,9 @@ fn describe_type_expr(expr: &TypeExpr, model: &PureModel) -> String {
         TypeExpr::Generic(name) => name.to_string(),
         TypeExpr::FunctionType { .. } => "<FunctionType>".to_string(),
         TypeExpr::Relation(_) => "<RelationType>".to_string(),
-        TypeExpr::AlgebraUnion(a, b) => format!(
+        TypeExpr::GenericTypeOperation {
+            left: a, right: b, ..
+        } => format!(
             "{}|{}",
             describe_type_expr(a, model),
             describe_type_expr(b, model)

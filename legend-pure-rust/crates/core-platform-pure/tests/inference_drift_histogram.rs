@@ -296,7 +296,9 @@ fn count_generic(t: &TypeExpr) -> usize {
             p + count_generic(return_type)
         }
         TypeExpr::Relation(cols) => cols.iter().map(|c| count_generic(&c.type_expr)).sum(),
-        TypeExpr::AlgebraUnion(a, b) => count_generic(a) + count_generic(b),
+        TypeExpr::GenericTypeOperation {
+            left: a, right: b, ..
+        } => count_generic(a) + count_generic(b),
         TypeExpr::Unresolved => 0,
     }
 }

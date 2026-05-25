@@ -212,7 +212,9 @@ fn render_type_expr(model: &PureModel, type_expr: &TypeExpr, out: &mut String) {
         }
         TypeExpr::Generic(name) => out.push_str(name),
         TypeExpr::FunctionType { .. } => out.push_str("<FunctionType>"),
-        TypeExpr::AlgebraUnion(a, b) => {
+        TypeExpr::GenericTypeOperation {
+            left: a, right: b, ..
+        } => {
             render_type_expr(model, a, out);
             out.push_str(" | ");
             render_type_expr(model, b, out);

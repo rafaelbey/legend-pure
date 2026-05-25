@@ -1063,7 +1063,9 @@ fn walk_type_expr(model: &PureModel, ty: &TypeExpr, visit: &mut dyn FnMut(Refere
             }
             walk_type_expr(model, return_type, visit);
         }
-        TypeExpr::AlgebraUnion(a, b) => {
+        TypeExpr::GenericTypeOperation {
+            left: a, right: b, ..
+        } => {
             walk_type_expr(model, a, visit);
             walk_type_expr(model, b, visit);
         }

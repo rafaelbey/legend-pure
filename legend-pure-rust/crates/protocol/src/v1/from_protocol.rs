@@ -153,6 +153,9 @@ pub fn convert_generic_type(
         type_arguments: type_arguments?,
         multiplicity_arguments: vec![],
         type_variable_values: vec![], // Simplified — type variable values rarely roundtrip
+        algebra_ops: vec![],
+        subset_bound: None,
+        equal_binding: None,
         source_info: si,
     })
 }
@@ -465,6 +468,9 @@ pub fn convert_value_spec_to_expression(
                 type_arguments: vec![],
                 multiplicity_arguments: vec![],
                 type_variable_values: vec![],
+                algebra_ops: vec![],
+                subset_bound: None,
+                equal_binding: None,
                 source_info: si.clone(),
             };
             Ok(Expression::TypeReferenceExpr(TypeReferenceExpr {
@@ -517,6 +523,9 @@ fn convert_navigation_path_class_instance(
         type_arguments: vec![],
         multiplicity_arguments: vec![],
         type_variable_values: vec![],
+        algebra_ops: vec![],
+        subset_bound: None,
+        equal_binding: None,
         source_info: si.clone(),
     };
 
@@ -817,6 +826,9 @@ fn convert_class(c: &v1::element::ProtocolClass) -> Result<ast::element::ClassDe
                 type_arguments: vec![],
                 multiplicity_arguments: vec![],
                 type_variable_values: vec![],
+                algebra_ops: vec![],
+                subset_bound: None,
+                equal_binding: None,
                 source_info: si.clone(),
             })
         })

@@ -47,6 +47,9 @@ SourceFile {
                                         type_arguments: [],
                                         multiplicity_arguments: [],
                                         type_variable_values: [],
+                                        algebra_ops: [],
+                                        subset_bound: None,
+                                        equal_binding: None,
                                         source_info: SourceInfo {
                                             source: "test.pure",
                                             start_line: 19,
@@ -93,6 +96,9 @@ SourceFile {
                                         type_arguments: [],
                                         multiplicity_arguments: [],
                                         type_variable_values: [],
+                                        algebra_ops: [],
+                                        subset_bound: None,
+                                        equal_binding: None,
                                         source_info: SourceInfo {
                                             source: "test.pure",
                                             start_line: 20,
@@ -139,6 +145,9 @@ SourceFile {
                                         type_arguments: [],
                                         multiplicity_arguments: [],
                                         type_variable_values: [],
+                                        algebra_ops: [],
+                                        subset_bound: None,
+                                        equal_binding: None,
                                         source_info: SourceInfo {
                                             source: "test.pure",
                                             start_line: 21,
@@ -185,6 +194,9 @@ SourceFile {
                                         type_arguments: [],
                                         multiplicity_arguments: [],
                                         type_variable_values: [],
+                                        algebra_ops: [],
+                                        subset_bound: None,
+                                        equal_binding: None,
                                         source_info: SourceInfo {
                                             source: "test.pure",
                                             start_line: 22,
@@ -243,6 +255,9 @@ SourceFile {
                                         type_arguments: [],
                                         multiplicity_arguments: [],
                                         type_variable_values: [],
+                                        algebra_ops: [],
+                                        subset_bound: None,
+                                        equal_binding: None,
                                         source_info: SourceInfo {
                                             source: "test.pure",
                                             start_line: 23,
@@ -330,6 +345,9 @@ SourceFile {
                                         type_arguments: [],
                                         multiplicity_arguments: [],
                                         type_variable_values: [],
+                                        algebra_ops: [],
+                                        subset_bound: None,
+                                        equal_binding: None,
                                         source_info: SourceInfo {
                                             source: "test.pure",
                                             start_line: 24,

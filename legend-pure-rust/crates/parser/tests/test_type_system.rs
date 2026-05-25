@@ -177,12 +177,43 @@ fn generic_arg_with_type_union() {
     //       rel1:Relation<T>[1], rel2:Relation<V>[1], ...
     //   ): Relation<T+V>[1];
     //
-    // The parser accepts the `+`-chained types in type-arg position
-    // and discards the union (the AST has no slot for it; Java treats
-    // unions as structural types resolved later in compilation).
+    // The parser captures the `+`-chained types as `algebra_ops`
+    // (`AlgebraOp { kind: Union, operand }`) on the base type-arg, so
+    // the union survives to the resolver, which folds it into a
+    // `GenericTypeOperation` tree and evaluates it against concrete
+    // relation types (mirroring Java's `GenericTypeOperation`).
     let file = parse_ok(
         r"###Pure
 native function my::asOfJoin<T,V>(rel:Relation<T+V>[1]): Relation<T+V>[1];",
+    );
+    insta::assert_debug_snapshot!(file);
+}
+
+#[test]
+fn relation_rename_type_algebra() {
+    // The full `rename` signature exercises every type-algebra slot the
+    // parser must now capture (was discarded pre-feature). Real shape from
+    // `core_functions_relation/.../rename.pure`:
+    //
+    //   native function meta::pure::functions::relation::rename<T,Z,K,V>(
+    //       r:Relation<T>[1],
+    //       old:ColSpec<Z=(?:K)\u{2286}T>[1],
+    //       new:ColSpec<V=(?:K)>[1]
+    //   ): Relation<T-Z+V>[1];
+    //
+    // The snapshot is the Phase-a gate: it must show
+    //   - return type `Relation<T-Z+V>`: type-arg `T` carries
+    //     `algebra_ops: [Difference(Z), Union(V)]` (left-associative);
+    //   - param `old`: `equal_binding: Some("Z")`, `subset_bound: Some(T)`,
+    //     and the `(?:K)` wildcard column preserved;
+    //   - param `new`: `equal_binding: Some("V")`, `(?:K)` preserved.
+    let file = parse_ok(
+        "###Pure\n\
+         native function my::rename<T,Z,K,V>(\
+         r: Relation<T>[1], \
+         old: ColSpec<Z=(?:K)\u{2286}T>[1], \
+         new: ColSpec<V=(?:K)>[1]\
+         ): Relation<T-Z+V>[1];",
     );
     insta::assert_debug_snapshot!(file);
 }

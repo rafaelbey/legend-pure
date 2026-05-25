@@ -183,7 +183,9 @@ fn seed_from_type_expr(ty: &TypeExpr, queue: &mut Vec<ElementId>) {
                 seed_from_type_expr(&col.type_expr, queue);
             }
         }
-        TypeExpr::AlgebraUnion(a, b) => {
+        TypeExpr::GenericTypeOperation {
+            left: a, right: b, ..
+        } => {
             seed_from_type_expr(a, queue);
             seed_from_type_expr(b, queue);
         }

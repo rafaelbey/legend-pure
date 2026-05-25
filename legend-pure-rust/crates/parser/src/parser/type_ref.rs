@@ -18,12 +18,56 @@ use super::{split_package_name, unquote_string};
 use crate::error::ParseError;
 use legend_pure_parser_ast::SourceInfo;
 use legend_pure_parser_ast::type_ref::{
-    FUNCTION_TYPE_SENTINEL, Identifier, Multiplicity, MultiplicityArgument, Package,
-    RELATION_TYPE_SENTINEL, RelationColumn, RelationType, TypeReference, TypeSpec,
-    TypeVariableValue, UnitReference,
+    AlgebraOp, AlgebraOpKind, FUNCTION_TYPE_SENTINEL, Identifier, Multiplicity,
+    MultiplicityArgument, Package, RELATION_TYPE_SENTINEL, RelationColumn, RelationType,
+    TypeReference, TypeSpec, TypeVariableValue, UnitReference,
 };
 use legend_pure_parser_lexer::TokenKind;
 use smol_str::SmolStr;
+
+/// Build a `TypeReference` from a wildcard column-spec RHS like `(?:K)`
+/// (the right side of `Z=(?:K)`). A single column becomes the `?`-named
+/// shape (`{name:"?", type_arguments:[K]}`) that the resolver's wildcard
+/// arm decodes to `Relation([{?:K}])`; multiple columns wrap in the
+/// relation-type sentinel so the resolver decodes the full column set.
+fn wildcard_relation_ref(cols: Vec<RelationColumn>, si: SourceInfo) -> TypeReference {
+    let mut col_refs: Vec<TypeReference> = cols
+        .into_iter()
+        .map(|c| {
+            let multiplicity_arguments = c
+                .multiplicity
+                .map(|m| vec![MultiplicityArgument::Concrete(m, c.source_info.clone())])
+                .unwrap_or_default();
+            TypeReference {
+                package: None,
+                name: c.name,
+                type_arguments: vec![c.type_ref],
+                multiplicity_arguments,
+                type_variable_values: vec![],
+                algebra_ops: vec![],
+                subset_bound: None,
+                equal_binding: None,
+                source_info: c.source_info,
+            }
+        })
+        .collect();
+    if col_refs.len() == 1
+        && let Some(only) = col_refs.pop()
+    {
+        return only;
+    }
+    TypeReference {
+        package: None,
+        name: SmolStr::new(RELATION_TYPE_SENTINEL),
+        type_arguments: col_refs,
+        multiplicity_arguments: vec![],
+        type_variable_values: vec![],
+        algebra_ops: vec![],
+        subset_bound: None,
+        equal_binding: None,
+        source_info: si,
+    }
+}
 
 impl Parser {
     // ── Type references ─────────────────────────────────────────────────
@@ -77,6 +121,9 @@ impl Parser {
                         type_arguments: vec![col.type_ref],
                         multiplicity_arguments: vec![],
                         type_variable_values: vec![],
+                        algebra_ops: vec![],
+                        subset_bound: None,
+                        equal_binding: None,
                         source_info: col.source_info,
                     });
                 }
@@ -106,46 +153,54 @@ impl Parser {
                     // wildcard placeholder (the resolver maps `?` to
                     // `TypeExpr::Generic("?")`, permissive on the
                     // narrower side).
+                    let mut equal_binding: Option<Identifier> = None;
                     if self.cursor.eat(TokenKind::Equals) {
+                        // The LHS parsed into `arg` is the binding name
+                        // (e.g. `Z` in `Z=(?:K)⊆T`). Capture it; the RHS
+                        // becomes the bound type.
+                        if arg.package.is_none()
+                            && arg.type_arguments.is_empty()
+                            && arg.multiplicity_arguments.is_empty()
+                        {
+                            equal_binding = Some(arg.name.clone());
+                        }
                         if self.cursor.check(TokenKind::LParen) {
                             let qsi = self.cursor.current_source_info();
-                            let _cols = self.parse_relation_columns()?;
-                            arg = TypeReference {
-                                package: None,
-                                name: SmolStr::new("?"),
-                                type_arguments: vec![],
-                                multiplicity_arguments: vec![],
-                                type_variable_values: vec![],
-                                source_info: qsi,
-                            };
+                            let cols = self.parse_relation_columns()?;
+                            arg = wildcard_relation_ref(cols, qsi);
                         } else {
                             arg = self.parse_type_reference()?;
                         }
                     }
-                    // Type-algebra operators `T+V` (union) and `T-Z`
-                    // (difference): the M3 grammar allows them inside a
-                    // generic-type-arg position (e.g. `Relation<T+V>` /
-                    // `Relation<T-Z+V>`). The AST has no dedicated
-                    // algebra slot; we keep the first operand and drop
-                    // the rest, matching Java's structural-algebra
-                    // resolution at compile time. Whichever operand is
-                    // captured doesn't affect downstream dispatch since
-                    // the lowerer treats algebra as opaque shapes.
+                    // Type-algebra operators `T+V` (union) / `T-Z`
+                    // (difference) inside a generic-type-arg position
+                    // (e.g. `Relation<T-Z+V>`). Captured left-to-right so
+                    // the resolver folds `((T - Z) + V)` and evaluates the
+                    // column merge once operands are concrete relation
+                    // types (mirrors Java's `GenericTypeOperation`).
+                    let mut algebra_ops = Vec::new();
                     while self.cursor.check(TokenKind::Plus) || self.cursor.check(TokenKind::Minus)
                     {
-                        self.cursor.advance();
-                        let _discarded = self.parse_type_reference()?;
+                        let kind = if self.cursor.eat(TokenKind::Plus) {
+                            AlgebraOpKind::Union
+                        } else {
+                            self.cursor.expect(TokenKind::Minus)?;
+                            AlgebraOpKind::Difference
+                        };
+                        let operand = self.parse_type_reference()?;
+                        algebra_ops.push(AlgebraOp { kind, operand });
                     }
-                    // Subtype-constraint operator `X⊆T` (U+2286): the
-                    // type to the right is a *bound* on the type-arg
-                    // (`X` must be a subtype of `T`). The AST has no
-                    // bounds slot today; we accept the syntax and drop
-                    // the bound — Stage-1 resolution doesn't enforce
-                    // it. Real shape: `ColSpec<(?:Z)⊆T>` in
-                    // `core_functions_relation/relation/functions/eval.pure`.
-                    if self.cursor.eat(TokenKind::Subset) {
-                        let _bound = self.parse_type_reference()?;
-                    }
+                    // Subtype-constraint bound `X⊆T` (U+2286): the
+                    // reference relation used to resolve a wildcard
+                    // column's type by name (Java `processEmptyColumnType`).
+                    let subset_bound = if self.cursor.eat(TokenKind::Subset) {
+                        Some(Box::new(self.parse_type_reference()?))
+                    } else {
+                        None
+                    };
+                    arg.algebra_ops = algebra_ops;
+                    arg.subset_bound = subset_bound;
+                    arg.equal_binding = equal_binding;
                     args.push(arg);
                     if !self.cursor.eat(TokenKind::Comma) {
                         break;
@@ -182,6 +237,9 @@ impl Parser {
             type_arguments,
             multiplicity_arguments,
             type_variable_values,
+            algebra_ops: vec![],
+            subset_bound: None,
+            equal_binding: None,
             source_info: start,
         })
     }
@@ -268,6 +326,9 @@ impl Parser {
                         .map(|m| vec![MultiplicityArgument::Concrete(m, c.source_info.clone())])
                         .unwrap_or_default(),
                     type_variable_values: vec![],
+                    algebra_ops: vec![],
+                    subset_bound: None,
+                    equal_binding: None,
                     source_info: c.source_info,
                 })
                 .collect();
@@ -277,6 +338,9 @@ impl Parser {
                 type_arguments: col_refs,
                 multiplicity_arguments: vec![],
                 type_variable_values: vec![],
+                algebra_ops: vec![],
+                subset_bound: None,
+                equal_binding: None,
                 source_info: cols_si,
             };
             return Ok(TypeSpec::Type(TypeReference {
@@ -285,6 +349,9 @@ impl Parser {
                 type_arguments: vec![sentinel],
                 multiplicity_arguments: vec![],
                 type_variable_values: vec![],
+                algebra_ops: vec![],
+                subset_bound: None,
+                equal_binding: None,
                 source_info: start,
             }));
         }
@@ -360,6 +427,9 @@ impl Parser {
                     type_arguments: vec![],
                     multiplicity_arguments: vec![],
                     type_variable_values: vec![],
+                    algebra_ops: vec![],
+                    subset_bound: None,
+                    equal_binding: None,
                     source_info: qsi,
                 }
             } else {
@@ -456,6 +526,9 @@ impl Parser {
                 start.clone(),
             )],
             type_variable_values: vec![],
+            algebra_ops: vec![],
+            subset_bound: None,
+            equal_binding: None,
             source_info: start,
         })
     }

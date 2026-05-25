@@ -487,6 +487,9 @@ fn type_ref(pkg_segs: &[&str], name: &str) -> ast::type_ref::TypeReference {
         type_arguments: vec![],
         multiplicity_arguments: vec![],
         type_variable_values: vec![],
+        algebra_ops: vec![],
+        subset_bound: None,
+        equal_binding: None,
         source_info: synthetic_si(),
     }
 }

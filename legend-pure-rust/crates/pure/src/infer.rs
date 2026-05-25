@@ -240,7 +240,9 @@ fn walk_type_for_generics(
                 mults.insert(name.clone());
             }
         }
-        TypeExpr::AlgebraUnion(a, b) => {
+        TypeExpr::GenericTypeOperation {
+            left: a, right: b, ..
+        } => {
             walk_type_for_generics(a, types, mults);
             walk_type_for_generics(b, types, mults);
         }
@@ -1946,7 +1948,9 @@ fn render_type_expr(model: &PureModel, type_expr: &TypeExpr, out: &mut String) {
             out.push(']');
             out.push_str("}>");
         }
-        TypeExpr::AlgebraUnion(a, b) => {
+        TypeExpr::GenericTypeOperation {
+            left: a, right: b, ..
+        } => {
             render_type_expr(model, a, out);
             out.push_str(" | ");
             render_type_expr(model, b, out);

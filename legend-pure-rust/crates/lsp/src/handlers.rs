@@ -167,7 +167,9 @@ fn render_type_expr(ty: &TypeExpr) -> String {
     match ty {
         TypeExpr::Named { element, .. } => format!("element({element})"),
         TypeExpr::FunctionType { .. } => "FunctionType".to_string(),
-        TypeExpr::AlgebraUnion(a, b) => {
+        TypeExpr::GenericTypeOperation {
+            left: a, right: b, ..
+        } => {
             format!("{} | {}", render_type_expr(a), render_type_expr(b),)
         }
         TypeExpr::Generic(name) => name.to_string(),

@@ -316,6 +316,9 @@ fn arrow_cast_to_typed_tds(
                     type_arguments: vec![],
                     multiplicity_arguments: vec![],
                     type_variable_values: vec![],
+                    algebra_ops: vec![],
+                    subset_bound: None,
+                    equal_binding: None,
                     source_info: source_info.clone(),
                 }],
                 multiplicity_arguments: vec![MultiplicityArgument::Concrete(
@@ -323,6 +326,9 @@ fn arrow_cast_to_typed_tds(
                     source_info.clone(),
                 )],
                 type_variable_values: vec![],
+                algebra_ops: vec![],
+                subset_bound: None,
+                equal_binding: None,
                 source_info: source_info.clone(),
             }
         })
@@ -334,6 +340,9 @@ fn arrow_cast_to_typed_tds(
         type_arguments: column_refs,
         multiplicity_arguments: vec![],
         type_variable_values: vec![],
+        algebra_ops: vec![],
+        subset_bound: None,
+        equal_binding: None,
         source_info: source_info.clone(),
     };
     // `RelationType<(cols)>` wrapping the structural relation.
@@ -343,6 +352,9 @@ fn arrow_cast_to_typed_tds(
         type_arguments: vec![structural_relation_ref],
         multiplicity_arguments: vec![],
         type_variable_values: vec![],
+        algebra_ops: vec![],
+        subset_bound: None,
+        equal_binding: None,
         source_info: source_info.clone(),
     };
     let tds_ref = TypeReference {
@@ -351,6 +363,9 @@ fn arrow_cast_to_typed_tds(
         type_arguments: vec![relation_type_ref],
         multiplicity_arguments: vec![],
         type_variable_values: vec![],
+        algebra_ops: vec![],
+        subset_bound: None,
+        equal_binding: None,
         source_info: source_info.clone(),
     };
     let type_arg = TypeReferenceExpr {

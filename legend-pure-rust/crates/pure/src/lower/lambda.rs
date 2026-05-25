@@ -240,11 +240,13 @@ fn is_concrete_type(ty: &crate::types::TypeExpr) -> bool {
         // is known — same logic. Type-arguments and inner generics can
         // survive.
         TypeExpr::FunctionType { .. } | TypeExpr::Relation(_) => true,
-        // `Generic` and `AlgebraUnion` are not concrete *at the head*
+        // `Generic` and `GenericTypeOperation` are not concrete *at the head*
         // — the lambda lowering can't produce a useful expected type
         // from them (the enclosing scope may bind later, but the
         // lambda's own dispatch needs a concrete head). `Unresolved`
         // is the type-hole marker.
-        TypeExpr::Generic(_) | TypeExpr::AlgebraUnion(_, _) | TypeExpr::Unresolved => false,
+        TypeExpr::Generic(_) | TypeExpr::GenericTypeOperation { .. } | TypeExpr::Unresolved => {
+            false
+        }
     }
 }

@@ -92,6 +92,19 @@ pub(super) fn lower_column(
             resolve_relation_class_id(ctx, "AggColSpecArray")?
         }
     };
+    // The cached `type_info` stays the bare classifier
+    // (`Named<ColSpec>{[]}`, no type arguments). This is what the dispatch
+    // narrower reads directly (`narrow_candidates_by_type`'s relation-column
+    // check), and it must stay bare: surfacing the column *names* here would
+    // make the name-based column-compatibility check wrongly eliminate the
+    // `(?:?)`-wildcard overloads (`over`'s `ColSpec<(?:?)⊆T>`), whose param
+    // column is the placeholder name `"?"` that no real arg column matches.
+    //
+    // The column names ARE surfaced for the *binding* pass — but only via
+    // [`crate::resolve::infer_typeexpr_from_valuespec`], which builds the
+    // inner `Relation([{name, …}])` for plain ColSpecs directly from this
+    // `ColSpecLiteral`/`ColSpecArrayLiteral` (bypassing the bare `type_info`).
+    // That keeps dispatch and binding reading different, purpose-fit shapes.
     let type_expr = TypeExpr::Named {
         element: outer_id,
         type_arguments: vec![],

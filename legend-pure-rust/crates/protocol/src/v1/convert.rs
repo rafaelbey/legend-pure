@@ -1253,6 +1253,9 @@ mod tests {
             type_arguments: vec![],
             multiplicity_arguments: vec![],
             type_variable_values: vec![],
+            algebra_ops: vec![],
+            subset_bound: None,
+            equal_binding: None,
             source_info: src(),
         };
         let gt: v1::generic_type::GenericType = (&tr).into();

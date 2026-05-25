@@ -142,7 +142,7 @@ fn append_type_signature(builder: &mut String, type_expr: &TypeExpr, model: &Pur
             // In practice, relation-typed params resolve as Named.
             builder.push_str("Relation");
         }
-        TypeExpr::AlgebraUnion(_, _) => {
+        TypeExpr::GenericTypeOperation { .. } => {
             builder.push_str("Any");
         }
         TypeExpr::Unresolved => {

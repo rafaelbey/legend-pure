@@ -387,6 +387,9 @@ impl Parser {
                     type_arguments: vec![col.type_ref],
                     multiplicity_arguments: vec![],
                     type_variable_values: vec![],
+                    algebra_ops: vec![],
+                    subset_bound: None,
+                    equal_binding: None,
                     source_info: col.source_info,
                 })
                 .collect();
@@ -396,6 +399,9 @@ impl Parser {
                 type_arguments: col_args,
                 multiplicity_arguments: vec![],
                 type_variable_values: vec![],
+                algebra_ops: vec![],
+                subset_bound: None,
+                equal_binding: None,
                 source_info: start.clone(),
             }
         } else {

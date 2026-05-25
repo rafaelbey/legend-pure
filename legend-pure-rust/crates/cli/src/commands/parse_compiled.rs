@@ -319,7 +319,7 @@ fn render_type_expr_as_generic_type(
             (path, args)
         }
         TypeExpr::Generic(name) => (name.to_string(), Vec::new()),
-        // Function / Relation / AlgebraUnion / Unresolved aren't used as
+        // Function / Relation / GenericTypeOperation / Unresolved aren't used as
         // milestoned-target property types, so falling back to a "Any"
         // placeholder is safe; if it ever becomes wrong we'll see it in
         // a snapshot mismatch.
@@ -607,7 +607,7 @@ fn value_spec_to_protocol(vs: &ValueSpec, model: &PureModel) -> v1::value_spec::
 
 /// Render an `@<type>` type reference at expression position. The four
 /// structural variants (`FunctionType`, `Relation`, `Generic`,
-/// `AlgebraUnion`) map onto `classInstance` payloads whose `_type`
+/// `GenericTypeOperation`) map onto `classInstance` payloads whose `_type`
 /// names mirror the M3 metamodel class they materialise. Java parity:
 /// at the metamodel level Java materialises a fresh `GenericType` /
 /// `FunctionType` / `RelationType` instance; the wire shape carries
@@ -691,7 +691,7 @@ fn type_reference_to_protocol(
                 source_information: src,
             })
         }
-        TypeExpr::AlgebraUnion(left, right) => {
+        TypeExpr::GenericTypeOperation { left, right, .. } => {
             let mut value = serde_json::Map::new();
             value.insert(
                 "left".to_string(),
@@ -734,7 +734,7 @@ fn render_type_expr_path(ty: &TypeExpr, model: &PureModel) -> String {
         TypeExpr::Generic(name) => name.to_string(),
         TypeExpr::FunctionType { .. } => "<FunctionType>".to_string(),
         TypeExpr::Relation(_) => "<RelationType>".to_string(),
-        TypeExpr::AlgebraUnion(_, _) => "<AlgebraUnion>".to_string(),
+        TypeExpr::GenericTypeOperation { .. } => "<GenericTypeOperation>".to_string(),
         TypeExpr::Unresolved => "<Unresolved>".to_string(),
     }
 }

@@ -344,7 +344,7 @@ pub(crate) fn bind_from_lambda_body(
 /// Walks a `TypeExpr` collecting every `Generic(name)` it carries (at
 /// the top level, inside `Named.type_arguments`, inside
 /// `FunctionType.parameters` / `return_type`, inside
-/// `AlgebraUnion`, inside `Relation` column types). Invokes `sink` once
+/// `GenericTypeOperation`, inside `Relation` column types). Invokes `sink` once
 /// per name.
 fn collect_generic_names_in_typeexpr<F: FnMut(&smol_str::SmolStr)>(
     te: &crate::types::TypeExpr,
@@ -368,7 +368,7 @@ fn collect_generic_names_in_typeexpr<F: FnMut(&smol_str::SmolStr)>(
             }
             collect_generic_names_in_typeexpr(return_type, sink);
         }
-        TypeExpr::AlgebraUnion(left, right) => {
+        TypeExpr::GenericTypeOperation { left, right, .. } => {
             collect_generic_names_in_typeexpr(left, sink);
             collect_generic_names_in_typeexpr(right, sink);
         }

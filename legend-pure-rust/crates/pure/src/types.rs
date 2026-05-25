@@ -47,7 +47,10 @@ use crate::ids::ElementId;
 /// | `{String[1] -> Bool[1]}` | `FunctionType { .. }` |
 /// | `(a: Integer, b: String)` | `Relation(relation_id)` |
 /// | `T`, `U` | `Generic("T")` |
-/// | `T + V` | `AlgebraUnion(..)` |
+/// | `T + V` | `GenericTypeOperation { op: Union, .. }` |
+/// | `T - V` | `GenericTypeOperation { op: Difference, .. }` |
+/// | `T ⊆ V` | `GenericTypeOperation { op: Subset, .. }` |
+/// | `Z = (?:K)⊆T` | `GenericTypeOperation { op: Equal, .. }` |
 /// | (untyped lambda param, no annotation, no expectation) | `Unresolved` |
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum TypeExpr {
@@ -109,8 +112,24 @@ pub enum TypeExpr {
     Relation(Vec<RelationColumnTypeExpr>),
     /// An unresolved type variable: `T`, `U`.
     Generic(SmolStr),
-    /// Algebraic union of two relation types: `T + V`.
-    AlgebraUnion(Box<TypeExpr>, Box<TypeExpr>),
+    /// A binary relation type-algebra operation, mirroring Java's
+    /// `GenericTypeOperation`. Covers `T + V` (column union), `T - V`
+    /// (column difference), `T ⊆ V` (subset constraint), and the
+    /// `Z = (?:K)⊆T` column-binding equality. Built by the resolver from
+    /// the parser's `algebra_ops`/`subset_bound`/`equal_binding` fields,
+    /// then evaluated against concrete relation types in
+    /// `substitute_type_with_mults` (Union appends columns, Difference
+    /// removes by name; Subset/Equal drive `(?:K)` binding and pass
+    /// through once binding is done). Left-associative: `T - Z + V`
+    /// nests as `Union { left: Difference { left: T, right: Z }, right: V }`.
+    GenericTypeOperation {
+        /// Which relation-algebra operation this node performs.
+        op: GenericTypeOpKind,
+        /// Left operand (the accumulated type so far, for chained ops).
+        left: Box<TypeExpr>,
+        /// Right operand.
+        right: Box<TypeExpr>,
+    },
     /// **Type hole** — a sentinel marker for a lambda parameter the
     /// compiler could not infer: no source annotation AND no caller-side
     /// expectation flowed in. Unit variant; the parameter's user-visible
@@ -146,6 +165,23 @@ pub enum TypeExpr {
     /// - runtime `match` dispatch → matches any value (same as
     ///   `Generic(_)`), so partially-broken builds remain inspectable
     Unresolved,
+}
+
+/// The relation type-algebra operation carried by
+/// [`TypeExpr::GenericTypeOperation`]. Mirrors the `type` discriminant on
+/// Java's `GenericTypeOperation` (`Union`/`Difference`/`Subset`/`Equal`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum GenericTypeOpKind {
+    /// `T + V` — append `V`'s columns to `T`'s.
+    Union,
+    /// `T - V` — remove `V`'s columns (matched by name) from `T`.
+    Difference,
+    /// `T ⊆ V` — `T` is constrained to be a subset of `V`'s columns.
+    /// Drives `(?:K)` wildcard-column binding; passes through once bound.
+    Subset,
+    /// `Z = …` — binds the generic `Z` to the (right-hand) column type.
+    /// Drives `(?:K)` wildcard-column binding; passes through once bound.
+    Equal,
 }
 
 /// One column of a structural relation type.

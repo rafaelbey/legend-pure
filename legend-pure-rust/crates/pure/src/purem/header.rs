@@ -70,7 +70,8 @@ const SCHEMA_FINGERPRINT_TYPES: &str = concat!(
     "ModelChunk{chunk_id,nodes,elements}",
     "Element{Class,Enumeration,Function,Profile,Association,Measure,Unit,PrimitiveType,PackageableMultiplicity,Package}",
     // crates/pure/src/types.rs
-    "TypeExpr{Named,FunctionType,Relation,Generic,AlgebraUnion,Unresolved}",
+    "TypeExpr{Named,FunctionType,Relation,Generic,GenericTypeOperation{op,left,right},Unresolved}",
+    "GenericTypeOpKind{Union,Difference,Subset,Equal}",
     "ConstValue{Integer,String}",
     "Multiplicity{PureOne,ZeroOrOne,ZeroOrMany,OneOrMany,Range,Variable}",
     "Parameter{name,type_expr,multiplicity,source_info}",
