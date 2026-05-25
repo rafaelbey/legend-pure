@@ -30,8 +30,11 @@
 //!   native can navigate
 //!   `csa.classifierGenericType.typeArguments[0].rawType.columns` per Java.
 
+use legend_pure_dsl_tds::csv::{ColumnType, ParsedColumn};
+use legend_pure_parser_pure::ids::ElementId;
 use legend_pure_parser_pure::model::PureModel;
 use legend_pure_parser_pure::types::{Multiplicity, RelationColumnLowered};
+use smol_str::SmolStr;
 
 use crate::error::PureException;
 use crate::heap::{ObjectHandle, RuntimeHeap};
@@ -127,6 +130,64 @@ pub fn alloc_column(
     heap.mutate_add(&column, "classifierGenericType", &[Value::Object(outer_gt)])
         .map_err(PureException::from)?;
     Ok(column)
+}
+
+/// Resolve a parsed-CSV [`ColumnType`] to its m3 `ElementId`. The seven
+/// inferred primitives map to their `bootstrap` ids; an `Other` (explicit
+/// `name:Pkg::Class` annotation) resolves through the model. Returns `None`
+/// when an `Other` path doesn't resolve.
+#[must_use]
+pub fn column_type_element(model: &PureModel, ty: &ColumnType) -> Option<ElementId> {
+    use legend_pure_parser_pure::bootstrap;
+    Some(match ty {
+        ColumnType::Integer => bootstrap::INTEGER_ID,
+        ColumnType::Float => bootstrap::FLOAT_ID,
+        ColumnType::Decimal => bootstrap::DECIMAL_ID,
+        ColumnType::Boolean => bootstrap::BOOLEAN_ID,
+        ColumnType::String => bootstrap::STRING_ID,
+        ColumnType::StrictDate => bootstrap::STRICT_DATE_ID,
+        ColumnType::DateTime => bootstrap::DATE_TIME_ID,
+        ColumnType::Other { package, name } => {
+            let mut segments: Vec<SmolStr> = match package {
+                Some(p) => p.split("::").map(SmolStr::new).collect(),
+                None => Vec::new(),
+            };
+            segments.push(name.clone());
+            model.resolve_by_path(&segments)?
+        }
+    })
+}
+
+/// Allocate a canonical `Column` heap object (name + `nameWildCard` +
+/// `classifierGenericType`) from a runtime-parsed [`ParsedColumn`].
+///
+/// A native that re-parses a TDS at runtime (e.g. the engine `columns()`
+/// native) gets back `ParsedColumn { name, type_tag, multiplicity }` rather
+/// than a parser-resolved [`RelationColumnLowered`]. This bridges the two:
+/// it maps [`ColumnType`] → `ElementId` via [`column_type_element`] (falling
+/// back to `Any` for an unresolvable `Other`) and delegates to
+/// [`alloc_column`], so reflective walks like
+/// `col.classifierGenericType.typeArguments->at(1).rawType` resolve to the
+/// column's value type.
+///
+/// # Errors
+/// Returns `PureException` if any underlying heap allocation fails.
+#[allow(clippy::result_large_err)]
+pub fn alloc_column_from_parsed(
+    heap: &mut RuntimeHeap,
+    model: &PureModel,
+    col: &ParsedColumn,
+) -> Result<ObjectHandle, PureException> {
+    let type_element = column_type_element(model, &col.type_tag)
+        .unwrap_or(legend_pure_parser_pure::bootstrap::ANY_ID);
+    let lowered = RelationColumnLowered {
+        name: col.name.clone(),
+        type_element,
+        multiplicity: col.multiplicity.clone(),
+        init_lambda: None,
+        reduce_lambda: None,
+    };
+    alloc_column(heap, model, &lowered)
 }
 
 /// Allocate a `RelationType` heap object containing the supplied columns.
@@ -543,6 +604,72 @@ mod tests {
             })
             .expect("ColSpec.name is a String");
         assert_eq!(cs_name.as_str(), "col name");
+    }
+
+    /// `alloc_column_from_parsed` maps a runtime-parsed `ParsedColumn`'s
+    /// `ColumnType` to the right value-type `ElementId` and produces a Column
+    /// whose `classifierGenericType.typeArguments[1].rawType` is that type —
+    /// the shape `assertTdsEquivalent`'s reflective walk needs.
+    #[test]
+    fn alloc_column_from_parsed_sets_value_type_in_classifier_gt() {
+        use legend_pure_dsl_tds::csv::{ColumnType, ParsedColumn};
+
+        let model = bootstrap_model();
+        let mut heap = RuntimeHeap::new();
+
+        let parsed = ParsedColumn {
+            name: SmolStr::new("total"),
+            type_tag: ColumnType::Integer,
+            multiplicity: Multiplicity::ZeroOrOne,
+        };
+        let col = alloc_column_from_parsed(&mut heap, &model, &parsed)
+            .expect("alloc must succeed against the bootstrap model");
+
+        // Column.classifierGenericType.typeArguments[1].rawType == Integer.
+        let cgt = heap
+            .get_property_values(&col, "classifierGenericType")
+            .expect("classifierGenericType slot")
+            .iter()
+            .find_map(|v| match v {
+                Value::Object(o) => Some(o.clone()),
+                _ => None,
+            })
+            .expect("classifierGenericType is an Object");
+        let type_args = heap
+            .get_property_values(&cgt, "typeArguments")
+            .expect("typeArguments slot");
+        // Slot 0 is the (null) source-relation placeholder; slot 1 is the
+        // value type's GenericType.
+        let value_gt = match &type_args[1] {
+            Value::Object(o) => o.clone(),
+            other => panic!("typeArguments[1] should be a GenericType object, got {other:?}"),
+        };
+        let raw = heap
+            .get_property_values(&value_gt, "rawType")
+            .expect("rawType slot");
+        assert_eq!(
+            raw.iter()
+                .find_map(|v| match v {
+                    Value::Element(e) => Some(*e),
+                    _ => None,
+                })
+                .expect("rawType is an Element"),
+            bootstrap::INTEGER_ID,
+        );
+
+        // The column also carries its name and the canonical nameWildCard=false.
+        assert_eq!(
+            heap.get_property_values(&col, "name")
+                .expect("name")
+                .iter()
+                .find_map(|v| match v {
+                    Value::String(s) => Some(s.clone()),
+                    _ => None,
+                })
+                .expect("name is a String")
+                .as_str(),
+            "total",
+        );
     }
 
     /// `alloc_agg_col_spec_literal` must materialise an `AggColSpec` carrying
