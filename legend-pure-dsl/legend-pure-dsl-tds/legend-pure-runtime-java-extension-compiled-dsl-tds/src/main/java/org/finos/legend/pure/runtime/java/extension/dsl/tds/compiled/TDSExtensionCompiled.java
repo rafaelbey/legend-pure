@@ -18,6 +18,7 @@ import org.eclipse.collections.api.factory.Lists;
 import org.finos.legend.pure.runtime.java.compiled.extension.CompiledExtension;
 import org.finos.legend.pure.runtime.java.compiled.generation.processors.natives.Native;
 import org.finos.legend.pure.runtime.java.extension.dsl.tds.compiled.natives.StringToTDS;
+import org.finos.legend.pure.runtime.java.extension.dsl.tds.compiled.natives.TdsToCsv;
 
 import java.util.List;
 
@@ -27,7 +28,8 @@ public class TDSExtensionCompiled implements CompiledExtension
     public List<Native> getExtraNatives()
     {
         return Lists.fixedSize.with(
-            new StringToTDS()
+            new StringToTDS(),
+            new TdsToCsv()
         );
     }
 

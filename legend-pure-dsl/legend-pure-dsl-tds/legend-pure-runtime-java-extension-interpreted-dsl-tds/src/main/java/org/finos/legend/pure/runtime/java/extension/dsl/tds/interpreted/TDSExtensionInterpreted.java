@@ -14,7 +14,9 @@
 
 package org.finos.legend.pure.runtime.java.extension.dsl.tds.interpreted;
 
+import org.eclipse.collections.impl.tuple.Tuples;
 import org.finos.legend.pure.runtime.java.extension.dsl.tds.interpreted.natives.StringToTDS;
+import org.finos.legend.pure.runtime.java.extension.dsl.tds.interpreted.natives.TdsToCsv;
 import org.finos.legend.pure.runtime.java.interpreted.extension.BaseInterpretedExtension;
 import org.finos.legend.pure.runtime.java.interpreted.extension.InterpretedExtension;
 
@@ -22,7 +24,10 @@ public class TDSExtensionInterpreted extends BaseInterpretedExtension
 {
     public TDSExtensionInterpreted()
     {
-        super("stringToTDS_String_1__TDS_1_", StringToTDS::new);
+        super(
+                Tuples.pair("stringToTDS_String_1__TDS_1_", StringToTDS::new),
+                Tuples.pair("tdsToCsv_TDS_1__String_1_", TdsToCsv::new)
+        );
     }
 
     public static InterpretedExtension extension()

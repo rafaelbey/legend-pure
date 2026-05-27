@@ -19,10 +19,15 @@
 //! includes `platform_dsl_tds`'s `tds.pure`), evaluates a function,
 //! and asserts:
 //!
-//! 1. A `stringToTDS('<csv>')` call returns a `TDS` heap instance
-//!    whose `csv` slot equals the input.
+//! 1. A `stringToTDS('<csv>')` call returns a `TDS` heap instance whose
+//!    derived `csv()` qualified property renders back the canonical CSV.
 //! 2. The `#TDS\n…\n#` literal goes through the compile-time lowerer
-//!    and produces the same observable `csv` slot at runtime.
+//!    and produces the same observable `csv()` at runtime.
+//!
+//! `csv` is a *qualified property* (derived from the typed `rows` via the
+//! `tdsToCsv` native), so the source uses `.csv()` (parens) — a bare
+//! `.csv` would be a plain property access against a slot that no longer
+//! exists.
 
 use std::sync::OnceLock;
 
@@ -128,14 +133,15 @@ fn eval_returning_csv(source: &str, fqn: &str) -> SmolStr {
 }
 
 #[test]
-fn string_to_tds_populates_csv_slot() {
+fn string_to_tds_csv_qp_renders_canonical_csv() {
     // `stringToTDS` lives in `meta::pure::metamodel::relation`, which
     // isn't in PLATFORM_AUTO_IMPORTS — `meta::pure::functions::relation`
     // is. Reference by FQN (or use the `#TDS#` literal which carries the
-    // FQN through the lowerer).
+    // FQN through the lowerer). `.csv()` dispatches the derived
+    // qualified property, which renders from the typed `rows`.
     let source = r"
         function test::f(): String[1] {
-            meta::pure::metamodel::relation::stringToTDS('a, b\n1, 2').csv
+            meta::pure::metamodel::relation::stringToTDS('a, b\n1, 2').csv()
         }
     ";
     let csv = eval_returning_csv(source, "f__String_1_");
@@ -146,14 +152,14 @@ fn string_to_tds_populates_csv_slot() {
 fn tds_literal_lowers_to_string_to_tds_and_csv_round_trips() {
     // `#TDS\n a, b\n 1, 2\n#` should lower to
     // `stringToTDS('a, b\n1, 2')->cast(@(a:Integer[1], b:Integer[1]))`.
-    // The cast doesn't change runtime identity — `.csv` reads through
-    // to the same heap slot the native populated.
+    // The cast doesn't change runtime identity — `.csv()` renders the
+    // same typed rows the native materialised.
     let source = r"
         function test::f(): String[1] {
             (#TDS
               a, b
               1, 2
-            #).csv
+            #).csv()
         }
     ";
     let csv = eval_returning_csv(source, "f__String_1_");
@@ -163,17 +169,17 @@ fn tds_literal_lowers_to_string_to_tds_and_csv_round_trips() {
 #[test]
 fn string_to_tds_and_tds_literal_produce_matching_csv() {
     // Belt-and-suspenders: the same content rendered via the two
-    // surface forms must produce identical csv slots, locking the
+    // surface forms must produce identical derived csv, locking the
     // "single shared code path" invariant from the runtime side.
     let source = r"
         function test::fLit(): String[1] {
             (#TDS
               x
               42
-            #).csv
+            #).csv()
         }
         function test::fNative(): String[1] {
-            meta::pure::metamodel::relation::stringToTDS('x\n42').csv
+            meta::pure::metamodel::relation::stringToTDS('x\n42').csv()
         }
     ";
     let lit = eval_returning_csv(source, "fLit__String_1_");

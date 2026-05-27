@@ -26,4 +26,9 @@ public class TDSNativeImplementation
     {
         return TDSExtension.parse(tdsString, sourceInformation, ((CompiledExecutionSupport) compiledExecutionSupport).getProcessorSupport());
     }
+
+    public static String tdsToCsv(TDS<?> tds, ExecutionSupport compiledExecutionSupport)
+    {
+        return TDSExtension.renderCsv(tds);
+    }
 }

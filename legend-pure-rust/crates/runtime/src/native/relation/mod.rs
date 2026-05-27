@@ -21,6 +21,8 @@
 //! - `addColumns(RelationType, ColSpecArray)` — declared in
 //!   `platform/.../essential/meta/type/relation/addColumns.pure`
 //! - `stringToTDS(String):TDS` — declared in `platform_dsl_tds/tds.pure`
+//! - `tdsToCsv(TDS):String` — declared in `platform_dsl_tds/tds.pure`;
+//!   backs the derived `TDS.csv()` qualified property
 //!
 //! Engine-side relation natives (`filter`/`sort`/`distinct`/`extend`/
 //! `select`/`rename`/`columns`/`limit`/`drop`/`concatenate`/`size`/
@@ -39,15 +41,17 @@
 mod add_columns;
 pub mod shared;
 mod string_to_tds;
+mod tds_to_csv;
 
 use crate::native::NativeRegistry;
 
 pub use add_columns::AddColumns;
 pub use string_to_tds::StringToTDS;
+pub use tds_to_csv::TdsToCsv;
 
 /// Register the platform-defined relation natives into the registry.
 ///
-/// Called from [`NativeRegistry::standard`] — these two natives are
+/// Called from [`NativeRegistry::standard`] — these natives are
 /// part of the minimum surface every Pure program can call. Engine-
 /// defined relation natives (`filter`, `sort`, `extend`, …) register
 /// separately through the
@@ -59,4 +63,5 @@ pub fn register(registry: &mut NativeRegistry) {
         AddColumns,
     );
     registry.register("stringToTDS_String_1__TDS_1_", StringToTDS);
+    registry.register("tdsToCsv_TDS_1__String_1_", TdsToCsv);
 }

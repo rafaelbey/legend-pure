@@ -62,6 +62,17 @@
                             </arguments>
                             <includeProjectDependencies>true</includeProjectDependencies>
                             <includePluginDependencies>true</includePluginDependencies>
+                            <!-- src/main/resources carries the CompiledExtension
+                                 service file (META-INF/services). It is not copied
+                                 to target/classes until process-resources, which
+                                 runs after this generate-sources codegen. Add it to
+                                 the classpath directly so CompiledExtensionLoader can
+                                 discover TDSExtensionCompiled and register the
+                                 tdsToCsv native that backs the TDS.csv() qualified
+                                 property generated into the factory. -->
+                            <additionalClasspathElements>
+                                <additionalClasspathElement>${project.basedir}/src/main/resources</additionalClasspathElement>
+                            </additionalClasspathElements>
                         </configuration>
                     </execution>
                 </executions>

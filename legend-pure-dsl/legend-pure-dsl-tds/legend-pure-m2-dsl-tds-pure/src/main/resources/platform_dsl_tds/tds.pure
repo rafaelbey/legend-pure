@@ -16,10 +16,16 @@ import meta::pure::metamodel::relation::*;
 
 Class meta::pure::metamodel::relation::TDS<T> extends meta::pure::metamodel::relation::Relation<T> // T is of RelationType kind
 {
-    csv : String[1];
+    rows : T[*];
+    csv(){$this->tdsToCsv()} : String[1];
 }
 
 native function meta::pure::metamodel::relation::stringToTDS(s:String[1]):meta::pure::metamodel::relation::TDS<Any>[1];
+
+// Renders the canonical CSV (header + one line per row) from a TDS's
+// `rows` + its column `RelationType`. Backs the `TDS.csv()` qualified
+// property — `csv` is now derived from `rows`, not a stored slot.
+native function meta::pure::metamodel::relation::tdsToCsv<T>(tds:meta::pure::metamodel::relation::TDS<T>[1]):String[1];
 
 Class meta::pure::metamodel::relation::TDSRelationAccessor<T> extends meta::pure::metamodel::relation::RelationElementAccessor<T> // sourceElement is of type TDS<T>
 {
@@ -42,10 +48,10 @@ function meta::pure::metamodel::relation::newTDSRelationAccessor<T>(tds:TDS<T>[1
 
 function <<test.Test>> meta::pure::metamodel::relation::tests::testStringToTDSProducesCsvField():Boolean[1]
 {
-    assertEquals('a, b\n1, 2', stringToTDS('a, b\n1, 2').csv);
+    assertEquals('a, b\n1, 2', stringToTDS('a, b\n1, 2').csv());
 }
 
 function <<test.Test>> meta::pure::metamodel::relation::tests::testStringToTDSPreservesHeaderOnlyCsv():Boolean[1]
 {
-    assertEquals('a, b', stringToTDS('a, b').csv);
+    assertEquals('a, b', stringToTDS('a, b').csv());
 }

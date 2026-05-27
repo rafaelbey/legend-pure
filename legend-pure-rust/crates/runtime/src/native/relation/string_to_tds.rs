@@ -19,7 +19,7 @@
 use legend_pure_parser_pure::types::ValueSpec;
 
 use crate::error::{PureException, PureRuntimeError};
-use crate::m3_paths;
+use crate::native::relation::shared::alloc_tds_from_parsed;
 use crate::native::{EvalContextTrait, Evaluated, NativeFunction, expect_args};
 use crate::value::Value;
 
@@ -27,8 +27,7 @@ use crate::value::Value;
 /// `stringToTDS(s:String[1]):TDS<Any>[1]`.
 ///
 /// Parses a CSV string into a runtime [`TDS`](crate::m3_paths::TDS) heap
-/// instance whose `csv` slot carries the trimmed canonical CSV. The
-/// shared parser and per-column type inference live in
+/// instance. The shared parser and per-column type inference live in
 /// [`legend_pure_dsl_tds::csv::parse_and_infer`] — same call the
 /// compile-time `#TDS\n…\n#` lowerer makes — so a `#TDS#` literal and
 /// a literal `stringToTDS('<csv>')` call produce equivalent runtime
@@ -36,12 +35,12 @@ use crate::value::Value;
 /// parameter `T`: `#TDS#` lowers to `stringToTDS(csv)->cast(@TDS<…>)`,
 /// supplying a typed `T`; a bare `stringToTDS` call stays at `TDS<Any>`.
 ///
-/// The structured per-column / per-cell representation (`ParsedTDS`)
-/// isn't stashed on the heap object yet — relation natives that
-/// consume typed columns (`size`, `over`, `extend`, `sort`, …) re-call
-/// `parse_and_infer` on demand via `super::shared::read_parsed_tds`.
-/// That's deferred work; for now, the only Pure-observable slot is
-/// `csv: String[1]`, which is what the metaclass declares.
+/// The resulting heap object carries the typed `rows` (source of truth)
+/// plus the inferred column `RelationType` on `classifierGenericType` —
+/// see [`alloc_tds_from_parsed`]. The `csv` property is *derived* from
+/// `rows` by the `tdsToCsv` native (which backs `TDS.csv()`), no longer
+/// a stored slot. Attaching the inferred `RelationType` even for a bare
+/// `stringToTDS` call mirrors Java's `TDSExtension.parse`.
 #[derive(Debug)]
 pub struct StringToTDS;
 
@@ -62,10 +61,7 @@ impl NativeFunction for StringToTDS {
                 )))
             })?;
 
-        let tds_handle = ctx.heap_mut().alloc_dynamic(m3_paths::TDS);
-        ctx.heap_mut()
-            .mutate_add(&tds_handle, "csv", &[Value::String(parsed.csv.into())])
-            .map_err(PureException::from)?;
+        let tds_handle = alloc_tds_from_parsed(ctx, &parsed)?;
         Ok(Evaluated::new(Value::Object(tds_handle)))
     }
 }

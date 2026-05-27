@@ -16,6 +16,7 @@ package org.finos.legend.pure.m2.inlinedsl.tds;
 
 import io.deephaven.csv.CsvSpecs;
 import io.deephaven.csv.parsers.DataType;
+import io.deephaven.csv.parsers.Parsers;
 import io.deephaven.csv.reading.CsvReader;
 import io.deephaven.csv.sinks.SinkFactory;
 import io.deephaven.csv.util.CsvReaderException;
@@ -25,6 +26,7 @@ import java.util.Arrays;
 import org.eclipse.collections.api.RichIterable;
 import org.eclipse.collections.api.block.function.Function;
 import org.eclipse.collections.api.factory.Lists;
+import org.eclipse.collections.api.list.MutableList;
 import org.eclipse.collections.api.tuple.Pair;
 import org.eclipse.collections.impl.tuple.Tuples;
 import org.eclipse.collections.impl.utility.ListIterate;
@@ -39,6 +41,7 @@ import org.finos.legend.pure.m3.coreinstance.TDSCoreInstanceFactoryRegistry;
 import org.finos.legend.pure.m3.coreinstance.meta.pure.metamodel._import.ImportGroup;
 import org.finos.legend.pure.m3.coreinstance.meta.pure.metamodel.function.FunctionAccessor;
 import org.finos.legend.pure.m3.coreinstance.meta.pure.metamodel.multiplicity.Multiplicity;
+import org.finos.legend.pure.m3.coreinstance.meta.pure.metamodel.relation.Column;
 import org.finos.legend.pure.m3.coreinstance.meta.pure.metamodel.relation.RelationType;
 import org.finos.legend.pure.m3.coreinstance.meta.pure.metamodel.relation.TDS;
 import org.finos.legend.pure.m3.coreinstance.meta.pure.metamodel.type.Class;
@@ -259,9 +262,76 @@ public class TDSExtension implements InlineDSL
                 ._rawType(tdsType)
                 ._typeArgumentsAdd(typeParam);
         GenericTypeValidator.validateGenericType(tdsGenericType, processorSupport);
-        return ((TDS<?>) processorSupport.newAnonymousCoreInstance(sourceInfo, M2TDSPaths.TDS))
-                ._classifierGenericType(tdsGenericType)
-                ._csv(fullText.replace("\r\n", "\n"));
+
+        // Materialise typed rows — the source of truth. `csv` is now a
+        // derived qualified property (see `tds.pure` / the `tdsToCsv`
+        // native), so we store `rows : T[*]` instead of a `csv` slot.
+        //
+        // A second Deephaven pass with a string-only parser yields each
+        // cell's original text (same splitting as the typed pass above,
+        // so cell columns align by index with `relationType._columns()`).
+        // Each non-null cell is routed to its column's inferred Pure
+        // primitive type; empty / `null` cells become absent slots
+        // (`[0..1]` semantics), mirroring the Rust runtime's row tuples.
+        CsvReader.Result stringResult;
+        try
+        {
+            stringResult = CsvReader.read(makePureStringSpecs(), new ByteArrayInputStream(fullText.getBytes(StandardCharsets.UTF_8)), makePureSinkFactory());
+        }
+        catch (CsvReaderException e)
+        {
+            throw new PureCompilationException(sourceInfo, e.getCause().getMessage());
+        }
+
+        MutableList<? extends Column<?, ?>> columns = relationType._columns().toList();
+        CsvReader.ResultColumn[] cellColumns = stringResult.columns();
+        int rowCount = cellColumns.length == 0 ? 0 : ((String[]) cellColumns[0].data()).length;
+        MutableList<CoreInstance> rows = Lists.mutable.empty();
+        for (int r = 0; r < rowCount; r++)
+        {
+            // Row classifier = the relation type T, so each row IS-A
+            // instance of T. Slots are keyed by column name.
+            CoreInstance row = processorSupport.newCoreInstance("", relationType, sourceInfo);
+            for (int c = 0; c < columns.size(); c++)
+            {
+                String cell = ((String[]) cellColumns[c].data())[r];
+                if (cell == null)
+                {
+                    continue;
+                }
+                Column<?, ?> column = columns.get(c);
+                CoreInstance value = makeCellValue(processorSupport, _Column.getColumnType(column), cell);
+                row.setKeyValues(Lists.mutable.with(column._name()), Lists.mutable.with(value));
+            }
+            rows.add(row);
+        }
+
+        TDS<?> tds = ((TDS<?>) processorSupport.newAnonymousCoreInstance(sourceInfo, M2TDSPaths.TDS))
+                ._classifierGenericType(tdsGenericType);
+        ((TDS) tds)._rows(rows);
+        return tds;
+    }
+
+    // Route a cell's text to its column's inferred Pure primitive type,
+    // producing a value CoreInstance whose classifier is that primitive
+    // type and whose name carries the literal (the standard Pure
+    // primitive representation; PrimitiveUtilities reads the value back
+    // off the name). Mirrors the Rust runtime's `typed_cell_to_value`.
+    // Created via ProcessorSupport so it works on the runtime native
+    // path, which has no ModelRepository handle.
+    private static CoreInstance makeCellValue(ProcessorSupport processorSupport, GenericType columnType, String cell)
+    {
+        Type rawType = columnType == null ? null : (Type) columnType._rawType();
+        // Primitive value instances may not carry source information, so
+        // these are created with a null SourceInformation.
+        if (rawType == null)
+        {
+            return processorSupport.newCoreInstance(cell, M3Paths.String, null);
+        }
+        // Decimal cells keep their D/d suffix in source form; strip it so
+        // the stored literal is a bare number (renderCell re-adds the D).
+        String value = ("Decimal".equals(rawType.getName()) && (cell.endsWith("D") || cell.endsWith("d"))) ? cell.substring(0, cell.length() - 1) : cell;
+        return processorSupport.newCoreInstance(value, rawType, null);
     }
 
     private static SourceInformation getSourceInfo(String text, String fileName, int columnOffset, int lineOffset)
@@ -326,6 +396,15 @@ public class TDSExtension implements InlineDSL
         return CsvSpecs.builder().nullValueLiterals(Arrays.asList("", "null")).build();
     }
 
+    // Same null-literal handling as makePureCsvSpecs, but forces every
+    // column to parse as a String so we recover each cell's original
+    // text (for row materialisation) rather than a width-narrowed
+    // primitive array. Empty / `null` cells surface as `null` entries.
+    public static CsvSpecs makePureStringSpecs()
+    {
+        return CsvSpecs.builder().nullValueLiterals(Arrays.asList("", "null")).parsers(Parsers.STRINGS).build();
+    }
+
     public static SinkFactory makePureSinkFactory()
     {
         return SinkFactory.arrays(
@@ -340,5 +419,68 @@ public class TDSExtension implements InlineDSL
                 null,
                 Long.MIN_VALUE,
                 Long.MIN_VALUE);
+    }
+
+    // Render a TDS's canonical CSV (header line + one line per row) from
+    // its `rows` + column `RelationType`. Backs the derived `TDS.csv()`
+    // qualified property via the `tdsToCsv` native (compiled +
+    // interpreted). The output mirrors the Rust runtime's
+    // `render_csv_from_columns_and_rows`: `, `-separated header/cells,
+    // single `\n` row separator, per-type cell formatting (see
+    // renderCell). Pure navigation only — no ProcessorSupport needed.
+    public static String renderCsv(TDS<?> tds)
+    {
+        RelationType<?> relationType = (RelationType<?>) tds._classifierGenericType()._typeArguments().getFirst()._rawType();
+        MutableList<? extends Column<?, ?>> columns = relationType._columns().toList();
+        StringBuilder out = new StringBuilder();
+        out.append(columns.collect(Column::_name).makeString(", "));
+        for (Object rowObj : tds._rows())
+        {
+            CoreInstance row = (CoreInstance) rowObj;
+            out.append("\n");
+            MutableList<String> cells = Lists.mutable.empty();
+            for (Column<?, ?> column : columns)
+            {
+                CoreInstance value = row.getValueForMetaPropertyToOne(column._name());
+                cells.add(renderCell(value, _Column.getColumnType(column)));
+            }
+            out.append(cells.makeString(", "));
+        }
+        return out.toString();
+    }
+
+    // Render a single cell to its canonical CSV form, keyed on the
+    // column's Pure type. Mirrors the Rust runtime's `render_cell`:
+    // null -> '', Integer/Boolean verbatim, Float forced to carry a
+    // decimal point, Decimal suffixed with D, dates verbatim, String
+    // single-quoted with internal ' escaped as \'.
+    private static String renderCell(CoreInstance value, GenericType columnType)
+    {
+        if (value == null)
+        {
+            return "''";
+        }
+        Type rawType = columnType == null ? null : (Type) columnType._rawType();
+        String typeName = rawType == null ? "String" : rawType.getName();
+        switch (typeName)
+        {
+            case "Integer":
+            case "Boolean":
+                return value.getName();
+            case "Float":
+            {
+                String s = value.getName();
+                return (s.indexOf('.') < 0 && s.indexOf('e') < 0 && s.indexOf('E') < 0) ? s + ".0" : s;
+            }
+            case "Decimal":
+                return value.getName() + "D";
+            case "StrictDate":
+            case "Date":
+            case "DateTime":
+                return value.getName();
+            case "String":
+            default:
+                return "'" + value.getName().replace("'", "\\'") + "'";
+        }
     }
 }
