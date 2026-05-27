@@ -27,24 +27,21 @@ use crate::native::{
 };
 use crate::value::Value;
 
-/// Compare two numeric values, returning an `Ordering`.
-/// Promotes Integer→Float when mixed.
-#[allow(clippy::cast_precision_loss)]
+/// Compare two values for the ordering natives (`lessThan`, `lessThanEqual`,
+/// `greaterThan`, `greaterThanEqual`).
+///
+/// Any two numeric values — including mixed `Number` subtypes
+/// (`Integer`/`Float`/`Decimal`) — promote toward the wider type and compare,
+/// matching Java Pure's `lessThan`/`compare` (e.g. `0.5d <= 2.5`). The numeric
+/// promotion is delegated to [`compare_values`] so these natives stay
+/// consistent with `compare` and the sort/iteration comparators by
+/// construction. `String`/`String` compares lexicographically. Genuinely
+/// non-comparable pairs (e.g. an `Object` vs a number) still error.
 fn numeric_cmp(a: &Value, b: &Value) -> Result<std::cmp::Ordering, PureRuntimeError> {
+    let is_numeric =
+        |v: &Value| matches!(v, Value::Integer(_) | Value::Float(_) | Value::Decimal(_));
     match (a, b) {
-        (Value::Integer(a), Value::Integer(b)) => Ok(a.cmp(b)),
-        (Value::Float(a), Value::Float(b)) => {
-            Ok(a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
-        }
-        (Value::Integer(a), Value::Float(b)) => {
-            let af = *a as f64;
-            Ok(af.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
-        }
-        (Value::Float(a), Value::Integer(b)) => {
-            let bf = *b as f64;
-            Ok(a.partial_cmp(&bf).unwrap_or(std::cmp::Ordering::Equal))
-        }
-        (Value::Decimal(a), Value::Decimal(b)) => Ok(a.cmp(b)),
+        _ if is_numeric(a) && is_numeric(b) => Ok(compare_values(a, b).cmp(&0)),
         (Value::String(a), Value::String(b)) => Ok(a.cmp(b)),
         _ => Err(PureRuntimeError::EvaluationError(format!(
             "Cannot compare {} and {}",
@@ -342,7 +339,7 @@ pub fn register(registry: &mut NativeRegistry) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::native::{MockCtx, lit_float, lit_int, lit_str};
+    use crate::native::{MockCtx, lit_decimal, lit_float, lit_int, lit_str};
 
     #[test]
     fn equal_same_type() {
@@ -399,6 +396,35 @@ mod tests {
                 .unwrap()
                 .into_value(),
             Value::Boolean(true)
+        );
+    }
+
+    #[test]
+    fn less_than_equal_decimal_vs_float_promotes() {
+        // Repro of the `_range(0.5d, 2.5)` window-frame boundary check:
+        // a Decimal literal compared against a Float must promote and
+        // compare (Java parity), not error with "Cannot compare Decimal
+        // and Float". `0.5d <= 2.5` is true.
+        assert_eq!(
+            LessThanEqual
+                .execute(
+                    &[lit_decimal(Decimal::new(5, 1)), lit_float(2.5)],
+                    &mut MockCtx
+                )
+                .unwrap()
+                .into_value(),
+            Value::Boolean(true)
+        );
+        // And the reverse direction / a false case: `2.5 <= 0.5d` is false.
+        assert_eq!(
+            LessThanEqual
+                .execute(
+                    &[lit_float(2.5), lit_decimal(Decimal::new(5, 1))],
+                    &mut MockCtx
+                )
+                .unwrap()
+                .into_value(),
+            Value::Boolean(false)
         );
     }
 
