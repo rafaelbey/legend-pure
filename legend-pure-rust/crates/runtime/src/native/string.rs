@@ -1010,54 +1010,6 @@ impl NativeFunction for Split {
     }
 }
 
-/// Pure `chunk(source:String[1], val:Integer[1]): String[*]`
-///
-/// Splits `source` into consecutive `val`-length pieces (the last piece may
-/// be shorter). Mirrors Java `FunctionsHelper.chunk` /
-/// interpreted `Chunk`:
-/// - `val < 1` raises `"Invalid chunk size: <val>"`.
-/// - empty `source` → empty collection (not one empty string).
-/// - `val >= source.length` → the whole string as a single element.
-///
-/// Pieces are counted in Unicode scalar values (`chars()`), which is
-/// panic-free (never slices mid-UTF-8) and matches the ASCII PCT corpus
-/// exactly. Java counts UTF-16 code units; the two agree for all BMP-only
-/// input and differ only on non-BMP characters, which no test exercises.
-#[derive(Debug)]
-pub struct Chunk;
-
-impl NativeFunction for Chunk {
-    fn execute(
-        &self,
-        args: &[ValueSpec],
-        ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Evaluated, PureException> {
-        let values = force_all(args, ctx)?;
-        expect_args("chunk", &values, 2)?;
-        let s = values[0].as_string()?;
-        let size = values[1].as_integer()?;
-        if size < 1 {
-            return Err(
-                PureRuntimeError::EvaluationError(format!("Invalid chunk size: {size}")).into(),
-            );
-        }
-        if s.is_empty() {
-            return Ok(Evaluated::new(Value::from_vec(Vec::new())));
-        }
-        #[allow(clippy::cast_sign_loss)]
-        let size = size as usize;
-        let chars: Vec<char> = s.chars().collect();
-        if size >= chars.len() {
-            return Ok(Evaluated::new(Value::String(s.clone())));
-        }
-        let pieces: Vec<Value> = chars
-            .chunks(size)
-            .map(|c| Value::String(SmolStr::new(c.iter().collect::<String>())))
-            .collect();
-        Ok(Evaluated::new(Value::from_vec(pieces)))
-    }
-}
-
 /// Pure `parseDecimal(string:String[1]):Decimal[1]`
 /// Pure `parseDecimal(string:String[1], precision:Integer[1], scale:Integer[1]):Decimal[1]`
 ///
@@ -1156,7 +1108,6 @@ pub fn register(registry: &mut NativeRegistry) {
     registry.register("indexOf_String_1__String_1__Integer_1_", IndexOf);
     registry.register("indexOf_String_1__String_1__Integer_1__Integer_1_", IndexOf);
     registry.register("split_String_1__String_1__String_MANY_", Split);
-    registry.register("chunk_String_1__Integer_1__String_MANY_", Chunk);
     registry.register("parseDecimal_String_1__Decimal_1_", ParseDecimal);
     registry.register(
         "parseDecimal_String_1__Integer_1__Integer_1__Decimal_1_",
@@ -1705,68 +1656,5 @@ mod tests {
             super::pure_to_string(&v, &mut MockCtx).unwrap(),
             "[1, 2, 3]"
         );
-    }
-
-    fn chunk_strings(s: &str, size: i64) -> Vec<String> {
-        let value = Chunk
-            .execute(&[lit_str(s), lit_int(size)], &mut MockCtx)
-            .unwrap()
-            .into_value();
-        // `Value` implements `Drop`, so match by reference (no move-out).
-        match &value {
-            Value::Collection(v) => v
-                .iter()
-                .map(|x| match x {
-                    Value::String(s) => s.to_string(),
-                    other => panic!("expected String, got {other:?}"),
-                })
-                .collect(),
-            Value::String(s) => vec![s.to_string()],
-            Value::Unit => Vec::new(),
-            other => panic!("expected String/Collection/Unit, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn chunk_splits_into_fixed_pieces_last_shorter() {
-        // testSimpleChunk: 'abcdefghijklmnop'->chunk(5) → abcde|fghij|klmno|p
-        assert_eq!(
-            chunk_strings("abcdefghijklmnop", 5),
-            vec!["abcde", "fghij", "klmno", "p"]
-        );
-    }
-
-    #[test]
-    fn chunk_size_at_least_string_length_returns_whole() {
-        // testSmallChunk: size larger than the string → single element.
-        assert_eq!(chunk_strings("abc", 5), vec!["abc"]);
-        assert_eq!(chunk_strings("abc", 3), vec!["abc"]);
-    }
-
-    #[test]
-    fn chunk_empty_string_is_empty_collection() {
-        // testChunkEmptyString: ''->chunk(1) → empty list (NOT [""]).
-        assert!(chunk_strings("", 1).is_empty());
-    }
-
-    #[test]
-    fn chunk_size_one_splits_every_char() {
-        assert_eq!(chunk_strings("abcd", 1), vec!["a", "b", "c", "d"]);
-    }
-
-    #[test]
-    fn chunk_invalid_size_errors() {
-        // testChunkZeroSize / testChunkNegativeSize: size < 1 raises
-        // "Invalid chunk size: <n>".
-        for bad in [0_i64, -1] {
-            let err = Chunk
-                .execute(&[lit_str("abc"), lit_int(bad)], &mut MockCtx)
-                .expect_err("size < 1 must error");
-            assert!(
-                err.to_string()
-                    .contains(&format!("Invalid chunk size: {bad}")),
-                "unexpected error message: {err}"
-            );
-        }
     }
 }
