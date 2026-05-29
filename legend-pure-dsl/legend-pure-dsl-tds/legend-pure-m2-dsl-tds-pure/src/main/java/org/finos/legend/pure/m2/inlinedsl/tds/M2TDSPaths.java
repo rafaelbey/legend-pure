@@ -17,4 +17,5 @@ package org.finos.legend.pure.m2.inlinedsl.tds;
 public class M2TDSPaths
 {
     public static final String TDS = "meta::pure::metamodel::relation::TDS";
+    public static final String TDSTuple = "meta::pure::metamodel::relation::TDSTuple";
 }

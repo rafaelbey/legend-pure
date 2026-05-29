@@ -40,18 +40,6 @@ public class TestFunctionTester extends PureExpressionTest
         return new FunctionExecutionCompiledBuilder().build();
     }
 
-    // TDS now stores typed `rows : T[*]` (the source of truth) instead of a
-    // `csv : String[1]` slot, with `csv()` a derived qualified property. The
-    // COMPILED engine cannot represent these rows: it maps every instance to a
-    // sealed, code-generated `Root_<path>_Impl` class, so a row with arbitrary
-    // column-named slots is not instantiable (anonymous RelationType classifier
-    // -> Root_NO_ID_Impl ClassNotFound; Any -> "Unknown property"). The
-    // interpreted engine and the Rust runtime allow loose key-values, so they
-    // run this fine (see the interpreted TestFunctionTester). A compiled-engine
-    // representation would need a native row backing (cf. legend-engine's
-    // TestTDSCompiled / RowContainer, which decode a stored csv String) — that
-    // is the agreed compiled-mode follow-up.
-    @org.junit.Ignore("TDS rows:T[*] not representable in the compiled engine; see class comment and compiled-mode follow-up")
     @org.junit.Test
     public void testFunction()
     {

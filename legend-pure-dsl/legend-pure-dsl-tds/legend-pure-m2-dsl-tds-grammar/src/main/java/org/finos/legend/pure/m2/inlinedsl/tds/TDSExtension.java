@@ -26,6 +26,7 @@ import java.util.Arrays;
 import org.eclipse.collections.api.RichIterable;
 import org.eclipse.collections.api.block.function.Function;
 import org.eclipse.collections.api.factory.Lists;
+import org.eclipse.collections.api.list.ListIterable;
 import org.eclipse.collections.api.list.MutableList;
 import org.eclipse.collections.api.tuple.Pair;
 import org.eclipse.collections.impl.tuple.Tuples;
@@ -49,6 +50,7 @@ import org.finos.legend.pure.m3.coreinstance.meta.pure.metamodel.type.Type;
 import org.finos.legend.pure.m3.coreinstance.meta.pure.metamodel.type.generics.GenericType;
 import org.finos.legend.pure.m3.coreinstance.meta.pure.metamodel.valuespecification.InstanceValue;
 import org.finos.legend.pure.m3.navigation.M3Paths;
+import org.finos.legend.pure.m3.navigation.M3Properties;
 import org.finos.legend.pure.m3.navigation.M3ProcessorSupport;
 import org.finos.legend.pure.m3.navigation.ProcessorSupport;
 import org.finos.legend.pure.m3.navigation._package._Package;
@@ -285,24 +287,44 @@ public class TDSExtension implements InlineDSL
 
         MutableList<? extends Column<?, ?>> columns = relationType._columns().toList();
         CsvReader.ResultColumn[] cellColumns = stringResult.columns();
-        int rowCount = cellColumns.length == 0 ? 0 : ((String[]) cellColumns[0].data()).length;
+        // Deephaven sinks pre-allocate column arrays larger than the actual
+        // filled rows (growth strategy); use the Result's `numRows()` for the
+        // true row count rather than `array.length`.
+        int rowCount = (int) stringResult.numRows();
         MutableList<CoreInstance> rows = Lists.mutable.empty();
         for (int r = 0; r < rowCount; r++)
         {
-            // Row classifier = the relation type T, so each row IS-A
-            // instance of T. Slots are keyed by column name.
-            CoreInstance row = processorSupport.newCoreInstance("", relationType, sourceInfo);
+            // Build the N `List<Any>` cell-holders in column order. Inner
+            // list of size 0 = null cell, size 1 = present cell.
+            MutableList<CoreInstance> cellHolders = Lists.mutable.withInitialCapacity(columns.size());
             for (int c = 0; c < columns.size(); c++)
             {
+                CoreInstance holder = processorSupport.newAnonymousCoreInstance(sourceInfo, M3Paths.List);
                 String cell = ((String[]) cellColumns[c].data())[r];
-                if (cell == null)
+                if (cell != null)
                 {
-                    continue;
+                    CoreInstance value = makeCellValue(processorSupport, _Column.getColumnType(columns.get(c)), cell);
+                    holder.setKeyValues(Lists.mutable.with("values"), Lists.mutable.with(value));
                 }
-                Column<?, ?> column = columns.get(c);
-                CoreInstance value = makeCellValue(processorSupport, _Column.getColumnType(column), cell);
-                row.setKeyValues(Lists.mutable.with(column._name()), Lists.mutable.with(value));
+                cellHolders.add(holder);
             }
+
+            // The Java-backing class is TDSTuple (concrete + named, so the
+            // compiled engine generates a Root_..._TDSTuple_Impl with a
+            // fixed `_values` field — dodging the dynamic-property wall on
+            // anonymous classifiers). We then OVERRIDE
+            // `classifierGenericType` to the runtime RelationType so Pure
+            // type checks see the row as an instance of T (satisfying
+            // `rows : T[*]`). Java-level `instanceof Root_TDSTuple_Impl`
+            // and Pure-level "instance of T" deliberately diverge — see
+            // TDSTuple's comment in tds.pure.
+            CoreInstance row = processorSupport.newAnonymousCoreInstance(sourceInfo, M2TDSPaths.TDSTuple);
+            row.setKeyValues(Lists.mutable.with("values"), cellHolders);
+
+            GenericType rowClassifierGT = ((GenericType) processorSupport.newAnonymousCoreInstance(sourceInfo, M3Paths.GenericType))
+                    ._rawType((Type) relationType);
+            row.setKeyValues(Lists.mutable.with(M3Properties.classifierGenericType), Lists.mutable.with(rowClassifierGT));
+
             rows.add(row);
         }
 
@@ -438,11 +460,16 @@ public class TDSExtension implements InlineDSL
         {
             CoreInstance row = (CoreInstance) rowObj;
             out.append("\n");
-            MutableList<String> cells = Lists.mutable.empty();
-            for (Column<?, ?> column : columns)
+            ListIterable<? extends CoreInstance> cellHolders = row.getValueForMetaPropertyToMany("values");
+            MutableList<String> cells = Lists.mutable.withInitialCapacity(columns.size());
+            for (int i = 0; i < columns.size(); i++)
             {
-                CoreInstance value = row.getValueForMetaPropertyToOne(column._name());
-                cells.add(renderCell(value, _Column.getColumnType(column)));
+                // Each holder is a `List<Any>` instance: 0 elements = null,
+                // 1 element = present. `getValueForMetaPropertyToOne` returns
+                // null when the inner list is empty.
+                CoreInstance holder = cellHolders.get(i);
+                CoreInstance value = holder.getValueForMetaPropertyToOne("values");
+                cells.add(renderCell(value, _Column.getColumnType(columns.get(i))));
             }
             out.append(cells.makeString(", "));
         }
