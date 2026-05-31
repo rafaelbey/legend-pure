@@ -404,21 +404,64 @@ pub fn render_csv_from_columns_and_rows(
     rows: &[Vec<Option<TypedCell>>],
 ) -> String {
     let mut buf = String::new();
-    let header: Vec<&str> = columns.iter().map(|c| c.name.as_str()).collect();
-    buf.push_str(&header.join(", "));
+    let header: Vec<String> = columns.iter().map(render_column_header).collect();
+    buf.push_str(&header.join(","));
     for row in rows {
         buf.push('\n');
         let cells: Vec<String> = row.iter().map(|c| render_cell(c.as_ref())).collect();
-        buf.push_str(&cells.join(", "));
+        buf.push_str(&cells.join(","));
     }
     buf
 }
 
+/// `name[:Type][[mult]]` — always emits the type tag; appends the
+/// multiplicity only when it differs from the column-default `[0..1]`.
+/// Mirrors the user-stated rule "always include column type; include
+/// multiplicity only when not [0..1]".
+fn render_column_header(col: &ParsedColumn) -> String {
+    let mut out = col.name.to_string();
+    out.push(':');
+    out.push_str(col.type_tag.pure_type_name());
+    let mult_str = render_multiplicity_suffix(&col.multiplicity);
+    if let Some(s) = mult_str {
+        out.push_str(&s);
+    }
+    out
+}
+
+/// Render a multiplicity bracket suffix (`[1]`, `[*]`, `[1..*]`,
+/// `[m..n]`), returning `None` for the column-default `[0..1]` which is
+/// elided from the header.
+fn render_multiplicity_suffix(mult: &Multiplicity) -> Option<String> {
+    match mult {
+        Multiplicity::ZeroOrOne => None,
+        Multiplicity::PureOne => Some("[1]".to_string()),
+        Multiplicity::OneOrMany => Some("[1..*]".to_string()),
+        Multiplicity::ZeroOrMany => Some("[*]".to_string()),
+        Multiplicity::Range { lower, upper: None } => Some(format!("[{lower}..*]")),
+        Multiplicity::Range {
+            lower,
+            upper: Some(u),
+        } => {
+            if *lower == *u {
+                Some(format!("[{lower}]"))
+            } else {
+                Some(format!("[{lower}..{u}]"))
+            }
+        }
+        Multiplicity::Variable(name) => Some(format!("[{name}]")),
+    }
+}
+
 /// Render a single [`TypedCell`] (or `None`) to its canonical CSV form.
+///
+/// `None` (absent cell) renders as the empty string — both `null` literal
+/// input and bare-empty input round-trip through this unified canonical
+/// form per the user-stated rule.
 #[allow(clippy::match_same_arms)] // Decimal/StrictDate/DateTime each produce a `SmolStr.to_string()` arm — keep them separate so future formatting tweaks per type are local edits
 fn render_cell(cell: Option<&TypedCell>) -> String {
     match cell {
-        None => "''".to_string(),
+        None => String::new(),
         Some(TypedCell::Integer(i)) => i.to_string(),
         Some(TypedCell::Float(f)) => {
             // `{:?}` on f64 always renders a decimal point (`1.0`,
@@ -430,13 +473,13 @@ fn render_cell(cell: Option<&TypedCell>) -> String {
         Some(TypedCell::Boolean(true)) => "true".to_string(),
         Some(TypedCell::Boolean(false)) => "false".to_string(),
         Some(TypedCell::String(s)) => {
-            // Single-quote wrap; escape internal `'` as `\'`. The
-            // parser's `parse_csv_line` consumes `\\<quote>` as the
-            // literal quote inside a quoted segment, and the cell
-            // materialiser strips the leading backslash via
-            // `unescape_string`.
-            let escaped = s.replace('\'', "\\'");
-            format!("'{escaped}'")
+            // Bare verbatim — strings round-trip unquoted in the
+            // canonical CSV. The parser still accepts the legacy
+            // single-quoted form for backwards compatibility; the
+            // renderer always emits the plain form. (Strings carrying
+            // commas, newlines, or leading/trailing whitespace are
+            // out of scope for this canonical form.)
+            s.to_string()
         }
         Some(TypedCell::StrictDate(s)) => s.to_string(),
         Some(TypedCell::DateTime(s)) => s.to_string(),
@@ -460,11 +503,10 @@ fn render_cell(cell: Option<&TypedCell>) -> String {
 pub fn build_row_tuple(
     columns: &[ParsedColumn],
     row: &[Option<TypedCell>],
+    relation_type: Option<&ObjectHandle>,
     ctx: &mut dyn EvalContextTrait,
 ) -> Result<ObjectHandle, PureException> {
-    let handle = ctx
-        .heap_mut()
-        .alloc_dynamic("meta::pure::metamodel::type::Any");
+    let handle = ctx.heap_mut().alloc_dynamic(m3_paths::TDS_TUPLE);
     for (col, cell) in columns.iter().zip(row.iter()) {
         let Some(cell) = cell else {
             continue;
@@ -472,6 +514,21 @@ pub fn build_row_tuple(
         let value = typed_cell_to_value(cell);
         ctx.heap_mut()
             .mutate_add(&handle, col.name.as_str(), &[value])
+            .map_err(PureException::from)?;
+    }
+    // Java parity: each row's `classifierGenericType.rawType` is set to
+    // the parent TDS's structural `RelationType`. That's what makes
+    // Pure-level `$row.colName` Column-application + structural
+    // `$row->instanceOf((cols))` resolve against `T` (the row type)
+    // rather than against `TDSTuple` itself. Skipped when no
+    // RelationType is supplied (legacy callers without a TDS context).
+    if let Some(rt) = relation_type {
+        let row_gt = ctx.heap_mut().alloc_dynamic(m3_paths::GENERIC_TYPE);
+        ctx.heap_mut()
+            .mutate_add(&row_gt, "rawType", &[Value::Object(rt.clone())])
+            .map_err(PureException::from)?;
+        ctx.heap_mut()
+            .mutate_add(&handle, "classifierGenericType", &[Value::Object(row_gt)])
             .map_err(PureException::from)?;
     }
     Ok(handle)
@@ -533,19 +590,12 @@ pub fn alloc_tds_from_parsed(
     // --- allocate + mutate (heap only) ---
     let tds = ctx.heap_mut().alloc_dynamic(m3_paths::TDS);
 
-    // rows: source of truth.
-    let mut row_objs: Vec<Value> = Vec::with_capacity(parsed.rows.len());
-    for row in &parsed.rows {
-        let row_obj = build_row_tuple(&parsed.columns, row, ctx)?;
-        row_objs.push(Value::Object(row_obj));
-    }
-    if !row_objs.is_empty() {
-        ctx.heap_mut()
-            .mutate_add(&tds, "rows", &row_objs)
-            .map_err(PureException::from)?;
-    }
-
-    // column RelationType → classifierGenericType.
+    // Hoist the column `RelationType` allocation ahead of the row
+    // tuples so each row tuple can capture it as its
+    // `classifierGenericType.rawType` (Java parity: TDSExtension's
+    // classifier-override). Without this the row's only static-type
+    // record is its `Any` classifier, and `$row->instanceOf((cols))`
+    // has nothing structural to compare against.
     let mut col_objs: Vec<Value> = Vec::with_capacity(parsed.columns.len());
     for (i, col) in parsed.columns.iter().enumerate() {
         let col_obj = alloc_tds_column(
@@ -561,6 +611,19 @@ pub fn alloc_tds_from_parsed(
     if !col_objs.is_empty() {
         ctx.heap_mut()
             .mutate_add(&relation_type, "columns", &col_objs)
+            .map_err(PureException::from)?;
+    }
+
+    // rows: source of truth — each row carries the shared
+    // `RelationType` as its classifierGenericType.rawType.
+    let mut row_objs: Vec<Value> = Vec::with_capacity(parsed.rows.len());
+    for row in &parsed.rows {
+        let row_obj = build_row_tuple(&parsed.columns, row, Some(&relation_type), ctx)?;
+        row_objs.push(Value::Object(row_obj));
+    }
+    if !row_objs.is_empty() {
+        ctx.heap_mut()
+            .mutate_add(&tds, "rows", &row_objs)
             .map_err(PureException::from)?;
     }
     let rt_gt = ctx.heap_mut().alloc_dynamic(m3_paths::GENERIC_TYPE);

@@ -518,10 +518,17 @@ pub struct QualifiedMemberAccess {
     pub source_info: SourceInfo,
 }
 
-/// A type reference expression: `@MyType`.
+/// A type reference expression: `@MyType` or the bare structural form
+/// `(a:Integer, b:String)`.
 ///
 /// Used as an argument to `cast` and `instanceOf` arrow functions:
-/// `$x->cast(@MyType)`, `$x->instanceOf(@MyType)`.
+/// `$x->cast(@MyType)`, `$x->instanceOf(@MyType)`. Also covers the bare
+/// structural-relation literal at expression position
+/// (`$row->cast((a:Integer, b:String))`) per the Java grammar's
+/// `atomicExpression: ... | type` alternative — Java's processor
+/// (`AntlrContextToM3CoreInstance.atomicExpression` line 1096) routes
+/// both alternatives through the same `InstanceValue<Type[1]>`
+/// construction, so the AST doesn't carry the surface distinction.
 #[derive(Debug, Clone, PartialEq, crate::Spanned)]
 pub struct TypeReferenceExpr {
     /// The referenced type.

@@ -2046,6 +2046,18 @@ public class CompiledSupport
         {
             CoreInstance rawType = type._rawType();
             ProcessorSupport processorSupport = ((CompiledExecutionSupport) es).getProcessorSupport();
+
+            // Structural-RelationType cast validation. Java parity with
+            // the interpreted `Cast.java` line ~92+: when both the cast
+            // target and the source instance carry a `RelationType`
+            // shape, compare columns by name + type-compatible cell
+            // type. Throws `Cast exception: …` on mismatch matching the
+            // interpreted form (`GenericType.print` shape).
+            if (rawType instanceof org.finos.legend.pure.m3.coreinstance.meta.pure.metamodel.relation.RelationType)
+            {
+                validateRelationTypeCast(instance, type, (org.finos.legend.pure.m3.coreinstance.meta.pure.metamodel.relation.RelationType<?>) rawType, si, processorSupport);
+            }
+
             boolean isExtendedPrimitive = org.finos.legend.pure.m3.navigation.type.Type.isExtendedPrimitiveType(rawType, processorSupport);
 
             if (isExtendedPrimitive)
@@ -2082,6 +2094,204 @@ public class CompiledSupport
         catch (Exception e)
         {
             throw new RuntimeException("Unexpected error validating object", e);
+        }
+    }
+
+    /**
+     * Structural validation for `cast(@(cols))` / `cast(@<RelationType>)`
+     * on the compiled engine. Mirrors the interpreted `Cast.java` line
+     * ~92+ structural branch: when the cast target rawType is a
+     * `RelationType` and the source instance carries a
+     * `classifierGenericType.rawType` that's also a RelationType, align
+     * the column sets and verify each source column's type can be cast
+     * to the matching target column's type. On mismatch throws
+     * `PureExecutionException("Cast exception: …")` using the same
+     * `GenericType.print` format the interpreted path produces.
+     *
+     * Skipped silently when either side isn't a `RelationType` instance
+     * (e.g. casting a non-row object — falls through to the standard
+     * Java instance-of check the cast already does).
+     */
+    /**
+     * Compile-time structural cast validator for `cast(@(cols))` /
+     * `cast(@(cols)[*])` invocations. The codegen in
+     * `Cast.build` bakes the target column list (names + Pure type FQNs)
+     * into the call site; this runtime helper walks each cast'd row and
+     * checks that the row's `classifierGenericType.rawType` is a
+     * `RelationType` with strictly matching columns (same count + same
+     * per-column name + per-column type element in `getGeneralizationResolutionOrder`).
+     * On mismatch throws `PureExecutionException` with the
+     * `Cast exception: (n:T, n:T) cannot be cast to (n:T, n:T)` format.
+     *
+     * Pass-through for non-RichIterable / non-CoreInstance instances —
+     * the normal `castWithExceptionHandling` already handled them.
+     */
+    @SuppressWarnings("unchecked")
+    public static <T> T validateRelationStructuralCast(T value, String[] expectedColNames, String[] expectedColTypeNames, SourceInformation si, ExecutionSupport es)
+    {
+        if (value == null)
+        {
+            return value;
+        }
+        ProcessorSupport processorSupport = ((CompiledExecutionSupport) es).getProcessorSupport();
+        Iterable<?> rows;
+        if (value instanceof RichIterable)
+        {
+            rows = (RichIterable<?>) value;
+        }
+        else if (value instanceof Iterable)
+        {
+            rows = (Iterable<?>) value;
+        }
+        else
+        {
+            rows = Lists.mutable.with(value);
+        }
+        for (Object row : rows)
+        {
+            if (!(row instanceof CoreInstance))
+            {
+                continue;
+            }
+            CoreInstance instanceGT = ((CoreInstance) row).getValueForMetaPropertyToOne(M3Properties.classifierGenericType);
+            if (instanceGT == null)
+            {
+                continue;
+            }
+            CoreInstance sourceRawType = instanceGT.getValueForMetaPropertyToOne(M3Properties.rawType);
+            if (!(sourceRawType instanceof org.finos.legend.pure.m3.coreinstance.meta.pure.metamodel.relation.RelationType))
+            {
+                continue;
+            }
+            ListIterable<? extends org.finos.legend.pure.m3.coreinstance.meta.pure.metamodel.relation.Column<?, ?>> sourceCols = ((org.finos.legend.pure.m3.coreinstance.meta.pure.metamodel.relation.RelationType<?>) sourceRawType)._columns().toList();
+            boolean ok = sourceCols.size() == expectedColNames.length;
+            if (ok)
+            {
+                for (int i = 0; i < expectedColNames.length; i++)
+                {
+                    org.finos.legend.pure.m3.coreinstance.meta.pure.metamodel.relation.Column<?, ?> sCol = sourceCols.get(i);
+                    if (!java.util.Objects.equals(sCol._name(), expectedColNames[i]))
+                    {
+                        ok = false;
+                        break;
+                    }
+                    org.finos.legend.pure.m3.coreinstance.meta.pure.metamodel.type.generics.GenericType sType = org.finos.legend.pure.m3.navigation.relation._Column.getColumnType(sCol);
+                    CoreInstance sRaw = sType == null ? null : sType._rawType();
+                    CoreInstance tRaw = processorSupport.package_getByUserPath(expectedColTypeNames[i]);
+                    if (sRaw == null || tRaw == null)
+                    {
+                        ok = false;
+                        break;
+                    }
+                    if (!org.finos.legend.pure.m3.navigation.type.Type.getGeneralizationResolutionOrder(tRaw, processorSupport).contains(sRaw))
+                    {
+                        ok = false;
+                        break;
+                    }
+                }
+            }
+            if (!ok)
+            {
+                String src = renderRelationDesc(sourceCols, processorSupport);
+                String tgt = renderExpectedRelationDesc(expectedColNames, expectedColTypeNames);
+                throw new org.finos.legend.pure.m3.exception.PureExecutionException(si, "Cast exception: " + src + " cannot be cast to " + tgt);
+            }
+        }
+        return value;
+    }
+
+    private static String renderRelationDesc(ListIterable<? extends org.finos.legend.pure.m3.coreinstance.meta.pure.metamodel.relation.Column<?, ?>> cols, ProcessorSupport processorSupport)
+    {
+        StringBuilder out = new StringBuilder("(");
+        for (int i = 0; i < cols.size(); i++)
+        {
+            if (i > 0) out.append(", ");
+            org.finos.legend.pure.m3.coreinstance.meta.pure.metamodel.relation.Column<?, ?> col = cols.get(i);
+            String name = col._name();
+            org.finos.legend.pure.m3.coreinstance.meta.pure.metamodel.type.generics.GenericType ctype = org.finos.legend.pure.m3.navigation.relation._Column.getColumnType(col);
+            CoreInstance craw = ctype == null ? null : ctype._rawType();
+            String t = craw == null ? "?" : craw.getName();
+            out.append(name).append(':').append(t);
+        }
+        return out.append(')').toString();
+    }
+
+    private static String renderExpectedRelationDesc(String[] names, String[] typeFqns)
+    {
+        StringBuilder out = new StringBuilder("(");
+        for (int i = 0; i < names.length; i++)
+        {
+            if (i > 0) out.append(", ");
+            // Render the bare type name (last `::`-segment) to match the
+            // source side which reads `column._rawType().getName()`.
+            String t = typeFqns[i];
+            int sep = t.lastIndexOf("::");
+            String bare = sep >= 0 ? t.substring(sep + 2) : t;
+            out.append(names[i]).append(':').append(bare);
+        }
+        return out.append(')').toString();
+    }
+
+    private static void validateRelationTypeCast(Object instance, org.finos.legend.pure.m3.coreinstance.meta.pure.metamodel.type.generics.GenericType targetType, org.finos.legend.pure.m3.coreinstance.meta.pure.metamodel.relation.RelationType<?> targetRelationType, SourceInformation si, ProcessorSupport processorSupport)
+    {
+        if (!(instance instanceof CoreInstance))
+        {
+            return;
+        }
+        CoreInstance instanceGT = ((CoreInstance) instance).getValueForMetaPropertyToOne(M3Properties.classifierGenericType);
+        if (instanceGT == null)
+        {
+            return;
+        }
+        CoreInstance sourceRawType = instanceGT.getValueForMetaPropertyToOne(M3Properties.rawType);
+        if (!(sourceRawType instanceof org.finos.legend.pure.m3.coreinstance.meta.pure.metamodel.relation.RelationType))
+        {
+            return;
+        }
+        org.finos.legend.pure.m3.coreinstance.meta.pure.metamodel.relation.RelationType<?> sourceRelationType = (org.finos.legend.pure.m3.coreinstance.meta.pure.metamodel.relation.RelationType<?>) sourceRawType;
+        // Strict positional comparison: same column count + per-column
+        // name + per-column type element. `_RelationType.alignColumnSets`
+        // would silently drop a non-matching column (it filters by name
+        // intersection then zips), which means `cast(@(a:Integer, b:Integer))`
+        // -> `cast(@(a:Integer, c:Integer))` slips through with only `a`
+        // surviving the alignment. The user's `testRowColumnAccess`
+        // assertError specifically exercises the name-mismatch case, so
+        // we mirror the Rust runtime's strict check here.
+        ListIterable<? extends org.finos.legend.pure.m3.coreinstance.meta.pure.metamodel.relation.Column<?, ?>> srcCols = sourceRelationType._columns().toList();
+        ListIterable<? extends org.finos.legend.pure.m3.coreinstance.meta.pure.metamodel.relation.Column<?, ?>> tgtCols = targetRelationType._columns().toList();
+        boolean compatible = srcCols.size() == tgtCols.size();
+        if (compatible)
+        {
+            for (int i = 0; i < srcCols.size(); i++)
+            {
+                org.finos.legend.pure.m3.coreinstance.meta.pure.metamodel.relation.Column<?, ?> sCol = srcCols.get(i);
+                org.finos.legend.pure.m3.coreinstance.meta.pure.metamodel.relation.Column<?, ?> tCol = tgtCols.get(i);
+                if (!java.util.Objects.equals(sCol._name(), tCol._name()))
+                {
+                    compatible = false;
+                    break;
+                }
+                org.finos.legend.pure.m3.coreinstance.meta.pure.metamodel.type.generics.GenericType sType = org.finos.legend.pure.m3.navigation.relation._Column.getColumnType(sCol);
+                org.finos.legend.pure.m3.coreinstance.meta.pure.metamodel.type.generics.GenericType tType = org.finos.legend.pure.m3.navigation.relation._Column.getColumnType(tCol);
+                CoreInstance sRaw = sType == null ? null : sType._rawType();
+                CoreInstance tRaw = tType == null ? null : tType._rawType();
+                if (sRaw == null || tRaw == null)
+                {
+                    compatible = false;
+                    break;
+                }
+                if (!org.finos.legend.pure.m3.navigation.type.Type.getGeneralizationResolutionOrder(tRaw, processorSupport).contains(sRaw))
+                {
+                    compatible = false;
+                    break;
+                }
+            }
+        }
+        if (!compatible)
+        {
+            String srcShape = org.finos.legend.pure.m3.navigation.generictype.GenericType.print(instanceGT, processorSupport);
+            String tgtShape = org.finos.legend.pure.m3.navigation.generictype.GenericType.print(targetType, processorSupport);
+            throw new org.finos.legend.pure.m3.exception.PureExecutionException(si, "Cast exception: " + srcShape + " cannot be cast to " + tgtShape);
         }
     }
 

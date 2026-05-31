@@ -226,6 +226,15 @@ pub const COLUMN: &Classifier = "meta::pure::metamodel::relation::Column";
 /// `stringToTDS('<csv>')->cast(@TDS<…>)`).
 pub const TDS: &Classifier = "meta::pure::metamodel::relation::TDS";
 
+/// `meta::pure::metamodel::relation::TDSTuple` — heap classifier for the
+/// individual rows under a TDS's `rows: T[*]` slot. Mirrors Java's
+/// TDSExtension classifier override: each row's `classifierGenericType.
+/// rawType` is set to the TDS's inferred column `RelationType` so
+/// Pure-level typing sees a row as an instance of `T` (the structural
+/// row type), enabling `$row.colName` Column-application + structural
+/// `$row->instanceOf((cols))`.
+pub const TDS_TUPLE: &Classifier = "meta::pure::metamodel::relation::TDSTuple";
+
 /// `meta::pure::metamodel::relation::ColSpec` — heap classifier for
 /// the single-column `~name` literal. Carries `name: String[1]` plus
 /// `classifierGenericType.typeArguments[0].rawType` pointing at a

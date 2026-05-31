@@ -273,15 +273,28 @@ pub fn parse_and_infer(csv: &str, overrides: &[ColumnOverride]) -> Result<Parsed
     }
 
     // Per-column inference: walk every cell in the column to classify.
+    // Each header cell may also carry an inline `name:Type[mult]`
+    // annotation (Java parity — `TestTDS` / `stringToTDS` accept it). An
+    // explicit override from the caller still wins; the inline form is
+    // a second fallback before data inference.
     let mut columns = Vec::with_capacity(column_count);
     for (idx, header) in header_cells.iter().enumerate() {
+        let header_text = header.canonical_name();
+        let (col_name, inline_type, inline_mult) = parse_header_annotation(header_text);
         let override_entry = overrides.get(idx).cloned().unwrap_or_default();
         let column_cells: Vec<&RawCell> = data_rows.iter().map(|row| &row.cells[idx]).collect();
         let inferred = infer_column(&column_cells);
-        let type_tag = override_entry.type_tag.clone().unwrap_or(inferred.0);
-        let multiplicity = override_entry.multiplicity.unwrap_or(inferred.1);
+        let type_tag = override_entry
+            .type_tag
+            .clone()
+            .or(inline_type)
+            .unwrap_or(inferred.0);
+        let multiplicity = override_entry
+            .multiplicity
+            .or(inline_mult)
+            .unwrap_or(inferred.1);
         columns.push(ParsedColumn {
-            name: SmolStr::new(header.canonical_name()),
+            name: col_name,
             type_tag,
             multiplicity,
         });
@@ -532,9 +545,114 @@ fn parse_csv_line(line: &str, line_no: usize) -> Result<Vec<RawCell>, CsvError> 
     Ok(cells)
 }
 
+/// Parse an inline `name[:Type[[mult]]]` header annotation, returning
+/// `(name, Some(type) | None, Some(mult) | None)`.
+///
+/// Splits on the *first* single `:` (skipping `::` package separators).
+/// The right-hand side, if present, is a type identifier (possibly
+/// `pkg::Class`-qualified) followed by an optional `[mult]` bracket.
+/// Recognised mults: `[1]`, `[*]`, `[0..1]`, `[1..*]`, `[m..n]`. Any
+/// unrecognised form falls through to `None` so the column inference
+/// re-derives from the data.
+///
+/// Java parity: `TestTDS` accepts the same annotated-header form, and
+/// the compile-time `#TDS#` lowerer's `parse_column_spec` reads the
+/// same shape.
+fn parse_header_annotation(s: &str) -> (SmolStr, Option<ColumnType>, Option<Multiplicity>) {
+    let trimmed = s.trim();
+    let bytes = trimmed.as_bytes();
+    let mut split_at: Option<usize> = None;
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b':' {
+            // Skip `::` package separators.
+            if i + 1 < bytes.len() && bytes[i + 1] == b':' {
+                i += 2;
+                continue;
+            }
+            split_at = Some(i);
+            break;
+        }
+        i += 1;
+    }
+    let Some(idx) = split_at else {
+        return (SmolStr::new(trimmed), None, None);
+    };
+    let name = trimmed[..idx].trim().to_string();
+    let annot = trimmed[idx + 1..].trim();
+    let (type_part, mult_part) = if let Some(bracket_start) = annot.find('[') {
+        let mult_inner = annot[bracket_start + 1..].trim_end_matches(']');
+        (annot[..bracket_start].trim(), Some(mult_inner.trim()))
+    } else {
+        (annot, None)
+    };
+    if type_part.is_empty() {
+        // `name:` with no type — treat as just the name, don't fabricate a type.
+        return (SmolStr::new(name), None, None);
+    }
+    let column_type = classify_header_type(type_part);
+    let multiplicity = mult_part.and_then(parse_multiplicity_bracket);
+    (SmolStr::new(name), Some(column_type), multiplicity)
+}
+
+/// Map a Pure-side type identifier from a header annotation to a
+/// [`ColumnType`]. Mirrors `lower::classify_type_name` so the `stringToTDS`
+/// runtime native and the `#TDS#` compile-time lowerer agree on which
+/// primitive each name maps to.
+fn classify_header_type(name: &str) -> ColumnType {
+    match name {
+        "Integer" => ColumnType::Integer,
+        "Float" => ColumnType::Float,
+        "Decimal" => ColumnType::Decimal,
+        "Boolean" => ColumnType::Boolean,
+        "String" => ColumnType::String,
+        "StrictDate" | "Date" => ColumnType::StrictDate,
+        "DateTime" => ColumnType::DateTime,
+        other => {
+            let (package, bare) = match other.rsplit_once("::") {
+                Some((pkg, n)) => (Some(SmolStr::new(pkg)), SmolStr::new(n)),
+                None => (None, SmolStr::new(other)),
+            };
+            ColumnType::Other {
+                package,
+                name: bare,
+            }
+        }
+    }
+}
+
+/// Parse the contents of a `[…]` multiplicity bracket: `1`, `*`, `0..1`,
+/// `1..*`, `m..n`. Returns `None` for any unrecognised form.
+fn parse_multiplicity_bracket(s: &str) -> Option<Multiplicity> {
+    let s = s.trim();
+    match s {
+        "1" => Some(Multiplicity::PureOne),
+        "*" | "0..*" => Some(Multiplicity::ZeroOrMany),
+        "0..1" => Some(Multiplicity::ZeroOrOne),
+        "1..*" => Some(Multiplicity::OneOrMany),
+        _ => {
+            if let Some((lo, hi)) = s.split_once("..") {
+                let lower: u32 = lo.trim().parse().ok()?;
+                let upper = match hi.trim() {
+                    "*" => None,
+                    other => Some(other.parse::<u32>().ok()?),
+                };
+                Some(Multiplicity::Range { lower, upper })
+            } else {
+                None
+            }
+        }
+    }
+}
+
 fn infer_column(cells: &[&RawCell]) -> (ColumnType, Multiplicity) {
+    // No data rows → can't claim `[1]`; conservatively default to
+    // `[0..1]` so a header-only TDS surfaces as
+    // `name:Type` (no explicit mult; the renderer elides default
+    // `[0..1]`). Any empty/null cell among data rows likewise drops to
+    // `[0..1]`.
     let any_empty = cells.iter().any(|c| c.is_empty());
-    let multiplicity = if any_empty {
+    let multiplicity = if cells.is_empty() || any_empty {
         Multiplicity::ZeroOrOne
     } else {
         Multiplicity::PureOne

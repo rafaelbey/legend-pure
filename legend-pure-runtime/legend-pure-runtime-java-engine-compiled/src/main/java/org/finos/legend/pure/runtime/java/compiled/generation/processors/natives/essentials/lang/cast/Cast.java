@@ -73,13 +73,57 @@ public class Cast extends AbstractNative
             {
                 String castType = TypeProcessor.typeToJavaObjectSingle(targetGenericType, true, processorSupport);
                 String interfaceString = TypeProcessor.pureTypeToJava(targetGenericType, false, false, true, processorSupport);
-                return "CompiledSupport.<" + castType + ">castWithExceptionHandling(" +
+                String castCall = "CompiledSupport.<" + castType + ">castWithExceptionHandling(" +
                         (Multiplicity.isToZeroOrOne(multiplicity) ? "" : "CompiledSupport.toPureCollection(") + sourceObject + (Multiplicity.isToZeroOrOne(multiplicity) ? "," : "),") +
                         interfaceString + ".class," +
                         NativeFunctionProcessor.buildM4LineColumnSourceInformation(sourceInformation) +
                         ")";
+                // Structural-RelationType target: wrap the Java cast with
+                // a runtime check that walks each row's
+                // `classifierGenericType.rawType` columns against the
+                // expected target column set (compile-time baked into
+                // the call). Mirrors Rust's structural cast + the
+                // interpreted `Cast.java` line 92+ path; necessary
+                // because `castWithExceptionHandling` reduces to a Java
+                // `Object` cast for structural targets (no concrete
+                // Java type exists) and would silently pass anything
+                // through.
+                if (targetRawType instanceof org.finos.legend.pure.m3.coreinstance.meta.pure.metamodel.relation.RelationType)
+                {
+                    org.finos.legend.pure.m3.coreinstance.meta.pure.metamodel.relation.RelationType<?> tRel = (org.finos.legend.pure.m3.coreinstance.meta.pure.metamodel.relation.RelationType<?>) targetRawType;
+                    StringBuilder names = new StringBuilder("new String[]{");
+                    StringBuilder typeFqns = new StringBuilder("new String[]{");
+                    ListIterable<? extends org.finos.legend.pure.m3.coreinstance.meta.pure.metamodel.relation.Column<?, ?>> cols = tRel._columns().toList();
+                    for (int i = 0; i < cols.size(); i++)
+                    {
+                        if (i > 0)
+                        {
+                            names.append(',');
+                            typeFqns.append(',');
+                        }
+                        org.finos.legend.pure.m3.coreinstance.meta.pure.metamodel.relation.Column<?, ?> col = cols.get(i);
+                        names.append('"').append(escapeForJavaLiteral(col._name())).append('"');
+                        org.finos.legend.pure.m3.coreinstance.meta.pure.metamodel.type.generics.GenericType ctype = org.finos.legend.pure.m3.navigation.relation._Column.getColumnType(col);
+                        CoreInstance craw = ctype == null ? null : ctype._rawType();
+                        String typeFqn = craw == null ? "" : org.finos.legend.pure.m3.navigation.PackageableElement.PackageableElement.getUserPathForPackageableElement(craw);
+                        typeFqns.append('"').append(escapeForJavaLiteral(typeFqn)).append('"');
+                    }
+                    names.append('}');
+                    typeFqns.append('}');
+                    return "CompiledSupport.<" + castType + ">validateRelationStructuralCast(" + castCall + "," +
+                            names + "," + typeFqns + "," +
+                            NativeFunctionProcessor.buildM4LineColumnSourceInformation(sourceInformation) +
+                            ", es)";
+                }
+                return castCall;
             }
         }
+    }
+
+    private static String escapeForJavaLiteral(String s)
+    {
+        if (s == null) return "";
+        return s.replace("\\", "\\\\").replace("\"", "\\\"");
     }
 
     public static String buildRunnableForExtendedPrimitiveType(String sourceObject, CoreInstance targetGenericType, SourceInformation sourceInformation, ProcessorSupport processorSupport)

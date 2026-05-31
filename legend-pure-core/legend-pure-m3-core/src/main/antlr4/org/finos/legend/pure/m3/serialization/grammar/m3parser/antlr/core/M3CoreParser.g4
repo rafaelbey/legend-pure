@@ -311,6 +311,7 @@ atomicExpression:
                  | (AT (type | multiplicity))
                  | anyLambda
                  | instanceReference
+                 | type
 ;
 
 columnBuilders: TILDE (oneColSpec | (BRACKET_OPEN (oneColSpec(COMMA oneColSpec)*)? BRACKET_CLOSE))

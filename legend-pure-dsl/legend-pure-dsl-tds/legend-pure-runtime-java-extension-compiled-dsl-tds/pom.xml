@@ -49,6 +49,7 @@
                 <artifactId>exec-maven-plugin</artifactId>
                 <executions>
                     <execution>
+                        <id>GenerateFactoryClasses</id>
                         <phase>generate-sources</phase>
                         <goals>
                             <goal>java</goal>
@@ -70,6 +71,38 @@
                                  discover TDSExtensionCompiled and register the
                                  tdsToCsv native that backs the TDS.csv() qualified
                                  property generated into the factory. -->
+                            <additionalClasspathElements>
+                                <additionalClasspathElement>${project.basedir}/src/main/resources</additionalClasspathElement>
+                            </additionalClasspathElements>
+                        </configuration>
+                    </execution>
+                    <execution>
+                        <!-- Generate Java sources for the `platform_dsl_tds`
+                             repository's .pure files (including tds.pure)
+                             so the compiled engine can dispatch the
+                             `<<test.Test>>` surveyor functions defined
+                             in tds.pure. Mirrors the `GenerateTestJavaCode`
+                             execution in `legend-pure-runtime-java-engine-compiled`
+                             which generates the same shape for the platform
+                             repository. Without this the test surveyor fails
+                             with `ClassNotFoundException:
+                             org.finos.legend.pure.generated.platform_dsl_tds_tds`. -->
+                        <id>GenerateTestJavaCode</id>
+                        <phase>compile</phase>
+                        <goals>
+                            <goal>java</goal>
+                        </goals>
+                        <configuration>
+                            <mainClass>
+                                org.finos.legend.pure.runtime.java.compiled.generation.orchestrator.JavaCodeGeneration
+                            </mainClass>
+                            <arguments>
+                                <argument>platform_dsl_tds</argument>
+                                <argument>${project.build.directory}/generated-test-resources</argument>
+                                <argument>${project.build.directory}</argument>
+                            </arguments>
+                            <includeProjectDependencies>true</includeProjectDependencies>
+                            <includePluginDependencies>true</includePluginDependencies>
                             <additionalClasspathElements>
                                 <additionalClasspathElement>${project.basedir}/src/main/resources</additionalClasspathElement>
                             </additionalClasspathElements>

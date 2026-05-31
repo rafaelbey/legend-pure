@@ -145,7 +145,11 @@ fn string_to_tds_csv_qp_renders_canonical_csv() {
         }
     ";
     let csv = eval_returning_csv(source, "f__String_1_");
-    assert_eq!(csv.as_str(), "a, b\n1, 2");
+    // Canonical CSV format: header `name:Type` (always) + `[mult]` when
+    // non-default `[0..1]`. Both cells parse as Integer with no empties
+    // → `[1]` rendered. Separator is `,` (no space). Mirrors the rule
+    // exercised by tds.pure's `testStringToTDSProducesCsvField`.
+    assert_eq!(csv.as_str(), "a:Integer[1],b:Integer[1]\n1,2");
 }
 
 #[test]
@@ -163,7 +167,10 @@ fn tds_literal_lowers_to_string_to_tds_and_csv_round_trips() {
         }
     ";
     let csv = eval_returning_csv(source, "f__String_1_");
-    assert_eq!(csv.as_str(), "a, b\n1, 2");
+    // Same canonical format as `stringToTDS('a, b\n1, 2')` — the `#TDS#`
+    // literal lowers to `stringToTDS(...)->cast(@TDS<…>)` and `csv()`
+    // re-renders the typed rows.
+    assert_eq!(csv.as_str(), "a:Integer[1],b:Integer[1]\n1,2");
 }
 
 #[test]

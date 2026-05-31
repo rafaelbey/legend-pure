@@ -713,7 +713,32 @@ impl Parser {
                 }
             }
             // Parenthesized expression: (expr)
+            // — OR bare relation-type literal at expression position:
+            //   `(a:Integer, b:String)` →
+            //   `Expression::TypeReferenceExpr(TypeSpec::Relation(...))`,
+            //   mirroring Java `M3CoreParser.g4` `atomicExpression: ... | type`
+            //   reaching `type → GROUP_OPEN columnType (COMMA columnType)* GROUP_CLOSE`.
+            //   The discriminator is 2-token lookahead: `( ident|? :` is
+            //   only a relation-type literal — no Pure expression starts
+            //   with `<ident>:` or `?:`. Wildcard column names (`?`)
+            //   are valid per `parse_relation_columns`.
             TokenKind::LParen => {
+                let next = self.cursor.peek_kind_at(1);
+                let after = self.cursor.peek_kind_at(2);
+                let is_relation_literal = (next.is_identifier_like()
+                    || next == TokenKind::Question)
+                    && after == TokenKind::Colon;
+                if is_relation_literal {
+                    let type_ref = self.parse_relation_type()?;
+                    // Bare `(cols)` and `@(cols)` produce the same AST
+                    // shape: Java's processor routes both through the
+                    // same `ctx.type()` handler (line 1096) and builds
+                    // an `InstanceValue<Type[1]>` either way.
+                    return Ok(Expression::TypeReferenceExpr(TypeReferenceExpr {
+                        type_ref,
+                        source_info: si,
+                    }));
+                }
                 self.cursor.advance();
                 let expr = self.parse_expression()?;
                 self.cursor.expect(TokenKind::RParen)?;

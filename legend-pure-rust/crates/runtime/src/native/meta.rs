@@ -256,6 +256,19 @@ impl NativeFunction for Cast {
         let values = force_all(args, ctx)?;
         expect_args("cast", &values, 2)?;
         let subject = values[0].clone();
+
+        // Structural-RelationType target — `cast(@(cols))` or its bare
+        // `(cols)` form. Java parity: `Cast.java` line ~92+ takes a
+        // dedicated RelationType branch that walks each source row's
+        // `classifierGenericType.rawType` and compares structurally to
+        // the target's columns; instanceOf does NOT (ephemeral type,
+        // per SME). Implements the cast path only.
+        if let Some(target_rt) =
+            cast_extract_relation_type_handle(&values[1], ctx.heap(), ctx.model())
+        {
+            return cast_to_relation_type(subject, &target_rt, ctx);
+        }
+
         let type_id = as_element_id(&values[1])?;
         let type_name = ctx.model().element_name(type_id).to_string();
         // Extract type-variable-values from the source `@P(8)` reference.
@@ -307,6 +320,256 @@ impl NativeFunction for Cast {
             evaluate_primitive_constraints(ctx, type_id, v, &type_value_args)?;
         }
         Ok(Evaluated::new(subject))
+    }
+}
+
+/// Drive the structural-RelationType cast branch (Java parity with
+/// `Cast.java:~92`). Each row in `subject` must have a
+/// `classifierGenericType.rawType` that is itself a RelationType, with
+/// columns matching `target_rt` by name + type element + is-a
+/// multiplicity (subject mult ⊆ target mult). On mismatch raises
+/// `Cast exception: <source structural type> cannot be cast to <target
+/// structural type>` with Java-formatted column lists `(n:T, n:T, …)`
+/// (default `[0..1]` multiplicity elided).
+#[allow(clippy::result_large_err)]
+fn cast_to_relation_type(
+    subject: Value,
+    target_rt: &ObjectHandle,
+    ctx: &mut dyn EvalContextTrait,
+) -> Result<Evaluated, PureException> {
+    let items: Vec<Value> = match &subject {
+        Value::Collection(coll) => coll.iter().cloned().collect(),
+        Value::Unit => return Ok(Evaluated::new(Value::Unit)),
+        other => vec![other.clone()],
+    };
+    let target_desc = format_relation_type_for_error(target_rt, ctx.heap(), ctx.model());
+    for v in &items {
+        let Some(source_rt) = cast_extract_subject_relation_type(v, ctx.heap(), ctx.model()) else {
+            return Err(PureException::from(PureRuntimeError::EvaluationError(
+                format!(
+                    "Cast exception: {} cannot be cast to {target_desc}",
+                    v.type_name()
+                ),
+            )));
+        };
+        if !relation_types_match_isa(&source_rt, target_rt, ctx.heap()) {
+            let source_desc = format_relation_type_for_error(&source_rt, ctx.heap(), ctx.model());
+            return Err(PureException::from(PureRuntimeError::EvaluationError(
+                format!("Cast exception: {source_desc} cannot be cast to {target_desc}"),
+            )));
+        }
+    }
+    Ok(Evaluated::new(subject))
+}
+
+/// If `value` represents a relation-type literal (`@(cols)` IV-wrapped
+/// OR a bare RelationType heap object), return the underlying
+/// RelationType handle.
+fn cast_extract_relation_type_handle(
+    value: &Value,
+    heap: &RuntimeHeap,
+    model: &PureModel,
+) -> Option<ObjectHandle> {
+    let Value::Object(handle) = value else { return None; };
+    let classifier = heap.classifier(&handle.clone()).ok()?;
+    let classifier_id = crate::m3_paths::resolve(model, &classifier)?;
+    let relation_type_id = crate::m3_paths::resolve(model, crate::m3_paths::RELATION_TYPE);
+    let instance_value_id = crate::m3_paths::resolve(model, crate::m3_paths::INSTANCE_VALUE);
+    if Some(classifier_id) == relation_type_id {
+        return Some(handle.clone());
+    }
+    if Some(classifier_id) == instance_value_id {
+        let gt_vals = heap.get_property_values(&handle.clone(), "genericType").ok()?;
+        let Value::Object(gt) = gt_vals.iter().next()? else { return None; };
+        let raw_vals = heap.get_property_values(&gt.clone(), "rawType").ok()?;
+        if let Some(Value::Object(rt)) = raw_vals.iter().next() {
+            let rt_cl = heap.classifier(&rt.clone()).ok()?;
+            if Some(crate::m3_paths::resolve(model, &rt_cl)?) == relation_type_id {
+                return Some(rt.clone());
+            }
+        }
+    }
+    None
+}
+
+/// Walk `value.classifierGenericType.rawType` and return the underlying
+/// RelationType handle when the subject is a TDSTuple row (or any other
+/// instance whose classifierGenericType points at a RelationType).
+fn cast_extract_subject_relation_type(
+    value: &Value,
+    heap: &RuntimeHeap,
+    model: &PureModel,
+) -> Option<ObjectHandle> {
+    let Value::Object(handle) = value else { return None; };
+    let cgt_vals = heap
+        .get_property_values(&handle.clone(), "classifierGenericType")
+        .ok()?;
+    let Value::Object(cgt) = cgt_vals.iter().next()? else { return None; };
+    let raw_vals = heap.get_property_values(&cgt.clone(), "rawType").ok()?;
+    if let Some(Value::Object(rt)) = raw_vals.iter().next() {
+        let rt_cl = heap.classifier(&rt.clone()).ok()?;
+        let relation_type_id = crate::m3_paths::resolve(model, crate::m3_paths::RELATION_TYPE);
+        if Some(crate::m3_paths::resolve(model, &rt_cl)?) == relation_type_id {
+            return Some(rt.clone());
+        }
+    }
+    None
+}
+
+/// Structural is-a between two `RelationType` heap objects: same column
+/// count, same per-column name + type element, and subject column's
+/// multiplicity is a subset of target column's multiplicity.
+fn relation_types_match_isa(
+    source: &ObjectHandle,
+    target: &ObjectHandle,
+    heap: &RuntimeHeap,
+) -> bool {
+    let Ok(src_cols) = heap.get_property_values(&source.clone(), "columns") else {
+        return false;
+    };
+    let Ok(tgt_cols) = heap.get_property_values(&target.clone(), "columns") else {
+        return false;
+    };
+    if src_cols.len() != tgt_cols.len() {
+        return false;
+    }
+    src_cols.iter().zip(tgt_cols.iter()).all(|(s, t)| {
+        let (Value::Object(sc), Value::Object(tc)) = (s, t) else { return false; };
+        if cast_column_name(sc, heap) != cast_column_name(tc, heap) {
+            return false;
+        }
+        if cast_column_type_element(sc, heap) != cast_column_type_element(tc, heap) {
+            return false;
+        }
+        let (Some(s_mult), Some(t_mult)) = (
+            cast_column_mult_bounds(sc, heap),
+            cast_column_mult_bounds(tc, heap),
+        ) else { return false; };
+        cast_multiplicity_is_subset(s_mult, t_mult)
+    })
+}
+
+fn cast_column_name(col: &ObjectHandle, heap: &RuntimeHeap) -> Option<SmolStr> {
+    let vals = heap.get_property_values(&col.clone(), "name").ok()?;
+    match vals.iter().next()? {
+        Value::String(s) => Some(s.clone()),
+        _ => None,
+    }
+}
+
+fn cast_column_type_element(col: &ObjectHandle, heap: &RuntimeHeap) -> Option<ElementId> {
+    let cgt = heap
+        .get_property_values(&col.clone(), "classifierGenericType")
+        .ok()?;
+    let Value::Object(cgt) = cgt.iter().next()? else { return None; };
+    let type_args = heap.get_property_values(&cgt.clone(), "typeArguments").ok()?;
+    let inner_gt = match type_args.iter().nth(1)? {
+        Value::Object(g) => g.clone(),
+        _ => return None,
+    };
+    let raw = heap.get_property_values(&inner_gt, "rawType").ok()?;
+    match raw.iter().next()? {
+        Value::Element(id) => Some(*id),
+        _ => None,
+    }
+}
+
+fn cast_column_mult_bounds(
+    col: &ObjectHandle,
+    heap: &RuntimeHeap,
+) -> Option<(i64, Option<i64>)> {
+    let cgt = heap
+        .get_property_values(&col.clone(), "classifierGenericType")
+        .ok()?;
+    let Value::Object(cgt) = cgt.iter().next()? else { return None; };
+    let mult_args = heap
+        .get_property_values(&cgt.clone(), "multiplicityArguments")
+        .ok()?;
+    let Value::Object(mult) = mult_args.iter().next()? else { return None; };
+    let lo = heap.get_property_values(&mult.clone(), "lowerBound").ok()?;
+    let up = heap.get_property_values(&mult.clone(), "upperBound").ok()?;
+    let lower = match lo.iter().next()? {
+        Value::Object(b) => heap
+            .get_property_values(&b.clone(), "value")
+            .ok()?
+            .iter()
+            .next()
+            .and_then(|v| match v {
+                Value::Integer(n) => Some(*n),
+                _ => None,
+            })?,
+        Value::Integer(n) => *n,
+        _ => return None,
+    };
+    let upper = match up.iter().next()? {
+        Value::Object(b) => heap
+            .get_property_values(&b.clone(), "value")
+            .ok()
+            .and_then(|vs| vs.iter().next().cloned())
+            .and_then(|v| match v {
+                Value::Integer(n) => Some(n),
+                _ => None,
+            }),
+        Value::Integer(n) => Some(*n),
+        _ => None,
+    };
+    Some((lower, upper))
+}
+
+/// `(s_lo, s_up) ⊆ (t_lo, t_up)` with `None` upper meaning `*`.
+fn cast_multiplicity_is_subset(s: (i64, Option<i64>), t: (i64, Option<i64>)) -> bool {
+    let lower_ok = s.0 >= t.0;
+    let upper_ok = match (s.1, t.1) {
+        (_, None) => true,
+        (None, Some(_)) => false,
+        (Some(su), Some(tu)) => su <= tu,
+    };
+    lower_ok && upper_ok
+}
+
+/// Render `(n:T, n:T, …)` for cast error messages — matches Java's
+/// `GenericType.print(RelationType<…>)` shape (default `[0..1]` mult
+/// elided; non-default mult emitted as `[m]`/`[m..n]`/`[m..*]`).
+fn format_relation_type_for_error(
+    rt: &ObjectHandle,
+    heap: &RuntimeHeap,
+    model: &PureModel,
+) -> String {
+    let cols = match heap.get_property_values(&rt.clone(), "columns") {
+        Ok(v) => v,
+        Err(_) => return "(?)".to_string(),
+    };
+    let mut parts: Vec<String> = Vec::with_capacity(cols.len());
+    for col_val in cols.iter() {
+        let Value::Object(col) = col_val else { continue };
+        let name = cast_column_name(col, heap).map(|s| s.to_string()).unwrap_or_default();
+        let type_name = cast_column_type_element(col, heap)
+            .map(|id| model.element_name(id).to_string())
+            .unwrap_or_else(|| "?".to_string());
+        let mut piece = format!("{name}:{type_name}");
+        if let Some(bounds) = cast_column_mult_bounds(col, heap) {
+            if let Some(s) = format_mult_bounds_for_error(bounds) {
+                piece.push_str(&s);
+            }
+        }
+        parts.push(piece);
+    }
+    format!("({})", parts.join(", "))
+}
+
+/// `[m]`/`[m..n]`/`[m..*]` rendered from raw lower/upper bounds. Java's
+/// `GenericType.print(RelationType)` (used by the `Cast exception` error
+/// format) elides both the column-default `[0..1]` AND `[1]`, treating
+/// the bare `name:Type` form as the canonical structural display. Other
+/// multiplicities surface verbatim.
+fn format_mult_bounds_for_error(b: (i64, Option<i64>)) -> Option<String> {
+    match b {
+        (0, Some(1)) | (1, Some(1)) => None,
+        (0, None) => Some("[*]".to_string()),
+        (1, None) => Some("[1..*]".to_string()),
+        (lo, Some(up)) if lo == up => Some(format!("[{lo}]")),
+        (lo, Some(up)) => Some(format!("[{lo}..{up}]")),
+        (lo, None) => Some(format!("[{lo}..*]")),
     }
 }
 

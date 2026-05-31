@@ -1172,6 +1172,15 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
                 if !collected.is_empty() {
                     return Ok(Value::from_vec(collected));
                 }
+                // Pure semantics: `obj.name` ≡ `obj.name()` when the
+                // receiver carries a zero-arg qualified property of
+                // that name — bare property access transparently
+                // dispatches to the QP. Tried before the getter-override
+                // path so `^TDS(rows=…).csv` invokes the `csv()`
+                // qualified property body just as `obj.csv()` would.
+                if let Some(qp_result) = self.try_zero_arg_qp(id.clone(), property)? {
+                    return Ok(qp_result);
+                }
                 // Slot empty — when the instance has a GetterOverride
                 // (`elementOverride` non-empty, set by `dynamicNew`'s
                 // hook-bearing overloads), dispatch through the
@@ -1291,6 +1300,82 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
     /// demand here — same shape `eval_class_member_collection`
     /// produces for `.properties` reads.
     #[allow(clippy::result_large_err)]
+    /// `obj.name` ≡ `obj.name()` fallback. When the receiver's class
+    /// declares a *zero-arg* qualified property of `name` (walking up
+    /// the supertype chain), invoke its body with `$this` bound to the
+    /// receiver and return the result. Returns `Ok(None)` when no
+    /// matching QP exists so the caller can continue to other fallbacks.
+    ///
+    /// Mirrors Pure's surface convention — the Java parser/compiler
+    /// makes the two forms equivalent at lookup time; we resolve at
+    /// runtime so the lowered IR's `PropertyCall` shape doesn't need to
+    /// know the receiver's class statically.
+    #[allow(clippy::result_large_err)]
+    fn try_zero_arg_qp(
+        &mut self,
+        instance_id: ObjectHandle,
+        property: &str,
+    ) -> Result<Option<Value>, PureException> {
+        let classifier = self
+            .heap
+            .classifier(&instance_id)
+            .map_err(PureException::from)?
+            .clone();
+        let Some(mut current_eid) = self.model.resolve_fqn_str(classifier.as_str()) else {
+            return Ok(None);
+        };
+        loop {
+            let Element::Class(class) = self.model.get_element(current_eid) else {
+                return Ok(None);
+            };
+            if let Some(qp) = class
+                .qualified_properties
+                .iter()
+                .find(|q| q.name == property && q.parameters.is_empty())
+            {
+                let body = qp.body.clone();
+                let type_var_param_names: Vec<SmolStr> = class
+                    .type_variable_parameters
+                    .iter()
+                    .map(|p| p.name.clone())
+                    .collect();
+                let type_var_values: Vec<Value> = if type_var_param_names.is_empty() {
+                    Vec::new()
+                } else {
+                    self.heap
+                        .get_property_values(&instance_id, "__typeVariableValues")
+                        .map(|v| v.iter().cloned().collect())
+                        .unwrap_or_default()
+                };
+                self.context.push_scope();
+                self.context
+                    .set(SmolStr::new("this"), Value::Object(instance_id));
+                for (name, value) in type_var_param_names.iter().zip(type_var_values.iter()) {
+                    self.context.set(name.clone(), value.clone());
+                }
+                let result = self.eval_body(&body);
+                self.context.pop_scope();
+                return result.map(Some);
+            }
+            // Walk a single supertype (matches `find_qp_params_for_arity`'s
+            // conservative linear walk).
+            let Some(next_eid) =
+                class
+                    .super_types
+                    .iter()
+                    .find_map(|st| match st {
+                        legend_pure_parser_pure::types::TypeExpr::Named { element, .. } => {
+                            Some(*element)
+                        }
+                        _ => None,
+                    })
+            else {
+                return Ok(None);
+            };
+            current_eid = next_eid;
+        }
+    }
+
     fn try_getter_override(
         &mut self,
         instance_id: ObjectHandle,

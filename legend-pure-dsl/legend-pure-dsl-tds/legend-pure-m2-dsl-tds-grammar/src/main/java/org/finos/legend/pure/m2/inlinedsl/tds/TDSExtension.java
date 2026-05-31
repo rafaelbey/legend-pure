@@ -217,10 +217,24 @@ public class TDSExtension implements InlineDSL
 
     public static Pair<String, GenericType> extractBodyAndType(String text, Function<String, GenericType> res)
     {
-        int headerHead = text.indexOf("\n");
-        headerHead = headerHead == -1 ? text.length() - 1 : headerHead;
-        String header = text.substring(0, headerHead);
-        String body = text.substring(headerHead + 1);
+        int newlineIdx = text.indexOf("\n");
+        String header;
+        String body;
+        if (newlineIdx == -1)
+        {
+            // No data rows — the whole input is the header. Previous
+            // implementation used `text.length() - 1` and silently
+            // dropped the last character of a header-only TDS, which
+            // surfaced as `Parser error … expected identifier found ']'`
+            // when the snipped column list was wrapped in `~[…]`.
+            header = text;
+            body = "";
+        }
+        else
+        {
+            header = text.substring(0, newlineIdx);
+            body = text.substring(newlineIdx + 1);
+        }
         return Tuples.pair(body, res.apply(header));
     }
 
@@ -240,13 +254,90 @@ public class TDSExtension implements InlineDSL
             throw new PureCompilationException(sourceInfo, e.getCause().getMessage());
         }
 
-        RelationType<?> relationType = _RelationType.build(ListIterate.zip(Arrays.asList(result.columns()), givenRelationType._columns()).collect(c ->
+        // Pre-scan the typed pass to infer per-column multiplicity: if
+        // any cell in a column is empty / `null`, that column is
+        // `[0..1]`; otherwise it is `[1]`. A column with no data rows at
+        // all defaults to `[0..1]` (we can't promise a value). Java
+        // parity with the Rust `infer_column` rule (the inferred mult is
+        // only applied when the user didn't pin one explicitly via the
+        // header `name:Type[mult]` annotation).
+        CsvReader.ResultColumn[] typedColumns = result.columns();
+        long inferRowCount = result.numRows();
+        boolean[] hasMissing = new boolean[typedColumns.length];
+        for (int colIdx = 0; colIdx < typedColumns.length; colIdx++)
+        {
+            Object data = typedColumns[colIdx].data();
+            for (long r = 0; r < inferRowCount; r++)
+            {
+                boolean missing;
+                if (data instanceof String[])
+                {
+                    missing = ((String[]) data)[(int) r] == null;
+                }
+                else if (data instanceof long[])
+                {
+                    // Deephaven CSV writes the `CSV_NULL_LONG` sentinel
+                    // we configured in `makePureSinkFactory` for null
+                    // cells in the primitive `long[]` sink. (Same
+                    // pattern for the other primitive types below.)
+                    missing = ((long[]) data)[(int) r] == CSV_NULL_LONG;
+                }
+                else if (data instanceof int[])
+                {
+                    missing = ((int[]) data)[(int) r] == CSV_NULL_INT;
+                }
+                else if (data instanceof byte[])
+                {
+                    missing = ((byte[]) data)[(int) r] == CSV_NULL_BYTE;
+                }
+                else if (data instanceof short[])
+                {
+                    missing = ((short[]) data)[(int) r] == Short.MIN_VALUE;
+                }
+                else if (data instanceof char[])
+                {
+                    missing = ((char[]) data)[(int) r] == CSV_NULL_CHAR;
+                }
+                else if (data instanceof double[])
+                {
+                    missing = ((double[]) data)[(int) r] == CSV_NULL_DOUBLE;
+                }
+                else if (data instanceof float[])
+                {
+                    missing = ((float[]) data)[(int) r] == CSV_NULL_FLOAT;
+                }
+                else if (data instanceof Object[])
+                {
+                    missing = ((Object[]) data)[(int) r] == null;
+                }
+                else
+                {
+                    missing = false;
+                }
+                if (missing)
+                {
+                    hasMissing[colIdx] = true;
+                    break;
+                }
+            }
+        }
+        final boolean[] hasMissingFinal = hasMissing;
+
+        Multiplicity defaultZeroOne = (Multiplicity) org.finos.legend.pure.m3.navigation.multiplicity.Multiplicity.newMultiplicity(0, 1, processorSupport);
+        Multiplicity defaultPureOne = (Multiplicity) processorSupport.package_getByUserPath(M3Paths.PureOne);
+        RelationType<?> relationType = _RelationType.build(ListIterate.zip(Arrays.asList(typedColumns), givenRelationType._columns()).collectWithIndex((c, idx) ->
         {
             GenericType columnType = _Column.getColumnType(c.getTwo());
             Multiplicity multiplicity = _Column.getColumnMultiplicity(c.getTwo());
             if (multiplicity == null)
             {
-                multiplicity = (Multiplicity) org.finos.legend.pure.m3.navigation.multiplicity.Multiplicity.newMultiplicity(0, 1, processorSupport);
+                // Header didn't pin a multiplicity — infer from the
+                // data: any missing cell drops to `[0..1]`, otherwise
+                // we promise `[1]`. Empty data → `[0..1]` (header-only
+                // TDS can't claim `[1]`).
+                multiplicity = (inferRowCount == 0L || hasMissingFinal[idx])
+                        ? defaultZeroOne
+                        : defaultPureOne;
             }
             if (columnType == null || columnType.getValueForMetaPropertyToOne("rawType") == null)
             {
@@ -427,17 +518,30 @@ public class TDSExtension implements InlineDSL
         return CsvSpecs.builder().nullValueLiterals(Arrays.asList("", "null")).parsers(Parsers.STRINGS).build();
     }
 
+    // Null sentinels Deephaven uses in `makePureSinkFactory`'s primitive
+    // arrays. The values here are the *exact* tokens written into the
+    // typed-result columns when a cell parses as null. Used by the
+    // per-column missing-cell pre-scan in `parse(GenericType, String, …)`
+    // to infer column multiplicity (`[0..1]` if any cell missing,
+    // otherwise `[1]`).
+    private static final int CSV_NULL_INT = 2_147_483_647;
+    private static final long CSV_NULL_LONG = 9_223_372_036_854_775_783L;
+    private static final float CSV_NULL_FLOAT = Float.NEGATIVE_INFINITY;
+    private static final double CSV_NULL_DOUBLE = Double.NEGATIVE_INFINITY;
+    private static final byte CSV_NULL_BYTE = Byte.MIN_VALUE;
+    private static final char CSV_NULL_CHAR = Character.MIN_VALUE;
+
     public static SinkFactory makePureSinkFactory()
     {
         return SinkFactory.arrays(
                 null,
                 null,
-                2_147_483_647, //largest prime for 32 signed numbers
-                9_223_372_036_854_775_783L, //largest prime for 64 signed numbers
-                Float.NEGATIVE_INFINITY,
-                Double.NEGATIVE_INFINITY,
-                Byte.MIN_VALUE,
-                Character.MIN_VALUE,
+                CSV_NULL_INT, //largest prime for 32 signed numbers
+                CSV_NULL_LONG, //largest prime for 64 signed numbers
+                CSV_NULL_FLOAT,
+                CSV_NULL_DOUBLE,
+                CSV_NULL_BYTE,
+                CSV_NULL_CHAR,
                 null,
                 Long.MIN_VALUE,
                 Long.MIN_VALUE);
@@ -446,16 +550,22 @@ public class TDSExtension implements InlineDSL
     // Render a TDS's canonical CSV (header line + one line per row) from
     // its `rows` + column `RelationType`. Backs the derived `TDS.csv()`
     // qualified property via the `tdsToCsv` native (compiled +
-    // interpreted). The output mirrors the Rust runtime's
-    // `render_csv_from_columns_and_rows`: `, `-separated header/cells,
-    // single `\n` row separator, per-type cell formatting (see
-    // renderCell). Pure navigation only — no ProcessorSupport needed.
+    // interpreted). Canonical format (mirrors the Rust runtime's
+    // `render_csv_from_columns_and_rows`):
+    //
+    // - Header: `name:Type[mult]` per column. Type tag always included;
+    //   multiplicity bracket appended only when the column's mult differs
+    //   from the column-default `[0..1]`.
+    // - Separator: `,` (no space) for both header and rows.
+    // - Cells: empty for absent values (both `null` literal and bare
+    //   empty input round-trip through the same canonical form), no
+    //   surrounding quotes on strings — see renderCell.
     public static String renderCsv(TDS<?> tds)
     {
         RelationType<?> relationType = (RelationType<?>) tds._classifierGenericType()._typeArguments().getFirst()._rawType();
         MutableList<? extends Column<?, ?>> columns = relationType._columns().toList();
         StringBuilder out = new StringBuilder();
-        out.append(columns.collect(Column::_name).makeString(", "));
+        out.append(columns.collect(TDSExtension::renderColumnHeader).makeString(","));
         for (Object rowObj : tds._rows())
         {
             CoreInstance row = (CoreInstance) rowObj;
@@ -471,21 +581,109 @@ public class TDSExtension implements InlineDSL
                 CoreInstance value = holder.getValueForMetaPropertyToOne("values");
                 cells.add(renderCell(value, _Column.getColumnType(columns.get(i))));
             }
-            out.append(cells.makeString(", "));
+            out.append(cells.makeString(","));
         }
         return out.toString();
     }
 
-    // Render a single cell to its canonical CSV form, keyed on the
-    // column's Pure type. Mirrors the Rust runtime's `render_cell`:
-    // null -> '', Integer/Boolean verbatim, Float forced to carry a
-    // decimal point, Decimal suffixed with D, dates verbatim, String
-    // single-quoted with internal ' escaped as \'.
+    // Render a column header as `name[:Type][[mult]]` per the canonical
+    // CSV format. Type tag always emitted (falls back to `String` when
+    // the column's classifierGenericType doesn't resolve a type element);
+    // multiplicity bracket omitted for the column-default `[0..1]`.
+    private static String renderColumnHeader(Column<?, ?> column)
+    {
+        StringBuilder out = new StringBuilder(column._name());
+        GenericType columnType = _Column.getColumnType(column);
+        Type rawType = columnType == null ? null : (Type) columnType._rawType();
+        String typeName = rawType == null ? "String" : rawType.getName();
+        out.append(':').append(typeName);
+        String multStr = renderColumnMultiplicity(column);
+        if (multStr != null)
+        {
+            out.append(multStr);
+        }
+        return out.toString();
+    }
+
+    // Bracket suffix `[1]`, `[*]`, `[1..*]`, `[m..n]` from a Column's
+    // multiplicity, or `null` for the column-default `[0..1]` (elided).
+    // Reads the multiplicity from the column's
+    // classifierGenericType.multiplicityArguments[0]; falls back to
+    // null when no multiplicity argument is present.
+    private static String renderColumnMultiplicity(Column<?, ?> column)
+    {
+        ListIterable<? extends CoreInstance> multArgs = column._classifierGenericType().getValueForMetaPropertyToMany("multiplicityArguments");
+        if (multArgs.isEmpty())
+        {
+            return null;
+        }
+        CoreInstance mult = multArgs.get(0);
+        if (mult == null)
+        {
+            return null;
+        }
+        Long lower = readBound(mult, "lowerBound");
+        Long upper = readBound(mult, "upperBound");
+        if (lower == null)
+        {
+            return null;
+        }
+        long lo = lower.longValue();
+        if (upper == null)
+        {
+            // unbounded upper
+            return lo == 0L ? "[*]" : lo == 1L ? "[1..*]" : "[" + lo + "..*]";
+        }
+        long up = upper.longValue();
+        if (lo == 0L && up == 1L)
+        {
+            return null; // column default, elided
+        }
+        if (lo == up)
+        {
+            return "[" + lo + "]";
+        }
+        return "[" + lo + ".." + up + "]";
+    }
+
+    // Read `<bound>.value` from a Multiplicity heap object (`lowerBound`
+    // / `upperBound` each carry a numeric `value`). Returns `null` for
+    // an absent bound or a non-Integer value slot.
+    private static Long readBound(CoreInstance mult, String boundName)
+    {
+        CoreInstance bound = mult.getValueForMetaPropertyToOne(boundName);
+        if (bound == null)
+        {
+            return null;
+        }
+        CoreInstance v = bound.getValueForMetaPropertyToOne("value");
+        if (v == null)
+        {
+            return null;
+        }
+        try
+        {
+            return Long.parseLong(v.getName());
+        }
+        catch (NumberFormatException nfe)
+        {
+            return null;
+        }
+    }
+
+    // Render a single cell to its canonical CSV form. Mirrors the Rust
+    // runtime's `render_cell`: null/absent → empty (no quotes); Integer
+    // / Boolean / dates verbatim; Float forced to carry a decimal point;
+    // Decimal suffixed with D; String verbatim (no surrounding quotes).
+    // The canonical form drops the legacy single-quote wrap and the
+    // `''` null sentinel in favour of bare-empty fields, matching what
+    // `stringToTDS` accepts back through its bare-empty / `null` literal
+    // round-trip.
     private static String renderCell(CoreInstance value, GenericType columnType)
     {
         if (value == null)
         {
-            return "''";
+            return "";
         }
         Type rawType = columnType == null ? null : (Type) columnType._rawType();
         String typeName = rawType == null ? "String" : rawType.getName();
@@ -507,7 +705,7 @@ public class TDSExtension implements InlineDSL
                 return value.getName();
             case "String":
             default:
-                return "'" + value.getName().replace("'", "\\'") + "'";
+                return value.getName();
         }
     }
 }

@@ -86,7 +86,7 @@ public class Cast extends NativeFunction
                 }
                 else
                 {
-                    throw new PureExecutionException(functionExpressionCallStack.peek().getSourceInformation(), "Cast exception: " + GenericType.print(sourceGenericType, processorSupport) + " cannot be cast to " + GenericType.print(targetGenericType, processorSupport), functionExpressionCallStack);
+                    throw new PureExecutionException(functionExpressionCallStack.peek().getSourceInformation(), "Cast exception: " + printGenericForError(sourceGenericType, processorSupport) + " cannot be cast to " + printGenericForError(targetGenericType, processorSupport), functionExpressionCallStack);
                 }
             }
             else if (processorSupport.type_subTypeOf(sourceRawType, relationType) && processorSupport.type_subTypeOf(targetRawType, relationType))
@@ -96,7 +96,7 @@ public class Cast extends NativeFunction
                 Pair<ListIterable<? extends Column<?, ?>>, ListIterable<? extends Column<?, ?>>> cols = _RelationType.alignColumnSets(source._columns(), target._columns(), processorSupport);
                 if (!cols.getOne().zip(cols.getTwo()).allSatisfy(pair -> canBeCastTo(_Column.getColumnType(pair.getOne())._rawType(), _Column.getColumnType(pair.getTwo())._rawType(), processorSupport)))
                 {
-                    throw new PureExecutionException(functionExpressionCallStack.peek().getSourceInformation(), "Cast exception: " + GenericType.print(sourceGenericType, processorSupport) + " cannot be cast to " + GenericType.print(targetGenericType, processorSupport), functionExpressionCallStack);
+                    throw new PureExecutionException(functionExpressionCallStack.peek().getSourceInformation(), "Cast exception: " + printGenericForError(sourceGenericType, processorSupport) + " cannot be cast to " + printGenericForError(targetGenericType, processorSupport), functionExpressionCallStack);
                 }
                 Instance.setValuesForProperty(inst, M3Properties.values, valuesParam.getValueForMetaPropertyToMany(M3Properties.values).collect(r ->
                 {
@@ -132,7 +132,7 @@ public class Cast extends NativeFunction
                 CoreInstance valGenericType = Instance.extractGenericTypeFromInstance(val, processorSupport);
                 if (!GenericTypeMatch.genericTypeMatches(targetGenericType, valGenericType, true, ParameterMatchBehavior.MATCH_ANYTHING, ParameterMatchBehavior.MATCH_ANYTHING, processorSupport))
                 {
-                    throw new PureExecutionException(functionExpressionCallStack.peek().getSourceInformation(), "Cast exception: " + GenericType.print(valGenericType, processorSupport) + " cannot be cast to " + GenericType.print(targetGenericType, processorSupport), functionExpressionCallStack);
+                    throw new PureExecutionException(functionExpressionCallStack.peek().getSourceInformation(), "Cast exception: " + printGenericForError(valGenericType, processorSupport) + " cannot be cast to " + printGenericForError(targetGenericType, processorSupport), functionExpressionCallStack);
                 }
             }
             Instance.setValuesForProperty(inst, M3Properties.values, valuesParam.getValueForMetaPropertyToMany(M3Properties.values), processorSupport);
@@ -143,6 +143,70 @@ public class Cast extends NativeFunction
     private boolean canBeCastTo(CoreInstance sourceRawType, CoreInstance targetRawType, ProcessorSupport processorSupport)
     {
         return Type.getGeneralizationResolutionOrder(targetRawType, processorSupport).contains(sourceRawType);
+    }
+
+    /**
+     * Render a GenericType for the `Cast exception` message. For a
+     * relation-type-shaped generic type (`RelationType<(cols)>` wrapper
+     * OR a bare structural `RelationType<…>`), emit the canonical
+     * `(n:T, n:T)` form: column name + bare type name, with the
+     * multiplicity bracket elided for both `[0..1]` (the column
+     * default) and `[1]` (Pure-runtime parity with the Rust runtime's
+     * `format_mult_bounds_for_error` and the compiled engine's
+     * `renderRelationDesc`). Falls back to standard `GenericType.print`
+     * for non-relation types.
+     */
+    private static String printGenericForError(CoreInstance genericType, ProcessorSupport processorSupport)
+    {
+        if (genericType == null)
+        {
+            return "";
+        }
+        CoreInstance rawType = Instance.getValueForMetaPropertyToOneResolved(genericType, M3Properties.rawType, processorSupport);
+        // Unwrap `Relation<RT>` / `RelationType<RT>` wrapper to the inner
+        // structural RelationType; bare RelationType<…> is already the
+        // structural form.
+        CoreInstance structural = null;
+        if (rawType instanceof RelationType)
+        {
+            structural = rawType;
+        }
+        else if (rawType != null)
+        {
+            CoreInstance relationMeta = processorSupport.package_getByUserPath(M3Paths.Relation);
+            if (relationMeta != null && processorSupport.type_subTypeOf(rawType, relationMeta))
+            {
+                CoreInstance typeArg = Instance.getValueForMetaPropertyToOneResolved(genericType, M3Properties.typeArguments, processorSupport);
+                if (typeArg != null)
+                {
+                    CoreInstance taRaw = Instance.getValueForMetaPropertyToOneResolved(typeArg, M3Properties.rawType, processorSupport);
+                    if (taRaw instanceof RelationType)
+                    {
+                        structural = taRaw;
+                    }
+                }
+            }
+        }
+        if (!(structural instanceof RelationType))
+        {
+            return GenericType.print(genericType, processorSupport);
+        }
+        StringBuilder out = new StringBuilder("(");
+        boolean first = true;
+        for (Column<?, ?> col : ((RelationType<?>) structural)._columns())
+        {
+            if (!first)
+            {
+                out.append(", ");
+            }
+            first = false;
+            String name = col._name();
+            org.finos.legend.pure.m3.coreinstance.meta.pure.metamodel.type.generics.GenericType colType = _Column.getColumnType(col);
+            CoreInstance colRaw = colType == null ? null : colType._rawType();
+            String typeName = colRaw == null ? "?" : colRaw.getName();
+            out.append(name).append(':').append(typeName);
+        }
+        return out.append(')').toString();
     }
 
     private CoreInstance managePrimitiveTypeExtension(InstantiationContext instantiationContext, ExecutionSupport executionSupport, ProcessorSupport processorSupport, CoreInstance valuesParam, CoreInstance targetGenericType, CoreInstance inst, SourceInformation sourceInformation, MutableStack<CoreInstance> functionExpressionCallStack) throws PureExecutionException

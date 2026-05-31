@@ -512,9 +512,16 @@ pub enum ExprKind {
         element: ElementId,
     },
 
-    /// `@(name:Type[mult], …)` — anonymous relation type at expression
-    /// position. Materialises a `meta::pure::metamodel::relation::RelationType`
-    /// heap object whose `columns` slot carries one `Column` per spec.
+    /// `@(name:Type[mult], …)` or bare `(name:Type[mult], …)` — anonymous
+    /// relation type at expression position. Materialises a
+    /// `meta::pure::metamodel::relation::RelationType` heap object whose
+    /// `columns` slot carries one `Column` per spec, then wraps it in an
+    /// `InstanceValue<Type[1]>` so `@(cols)->genericType().rawType`
+    /// reflection works (mirrors Java's
+    /// `AntlrContextToM3CoreInstance.atomicExpression` line 1098). Bare
+    /// `(cols)` (reachable via the `M3CoreParser.g4 atomicExpression:
+    /// ... | type` alternative) and `@(cols)` lower identically — Java
+    /// routes both through the same processor branch.
     RelationLiteral {
         /// Column triples in source order.
         columns: Vec<RelationColumnLowered>,

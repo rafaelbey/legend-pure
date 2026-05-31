@@ -1,5 +1,6 @@
 ---
 source: crates/parser/tests/test_type_system.rs
+assertion_line: 42
 expression: file
 ---
 SourceFile {
