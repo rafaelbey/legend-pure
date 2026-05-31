@@ -152,7 +152,21 @@ public class TDSExtensionCompiled implements CompiledExtension
             if (returnRawType != null && Type.isExtendedPrimitiveType(returnRawType, ps))
             {
                 SourceInformation sourceInformation = functionExpression.getSourceInformation();
-                String runnable = Cast.buildRunnableForExtendedPrimitiveType(cellRead, returnGT, sourceInformation, ps);
+                // `buildRunnableForExtendedPrimitiveType` emits
+                // `<typeImpl>._validate(<sourceObject>, ...)` per
+                // supertype that carries a constraint. The generated
+                // `_validate` signatures are typed (`_validate(Long this,
+                // …)` for SmallInt extends Integer), so the
+                // `<sourceObject>` substituted by the runnable MUST be
+                // typed too — passing the bare `Object`-returning
+                // `cellAt(...)` call here makes javac fail with
+                // `incompatible types: Object cannot be converted to
+                // Long`. Engine's RelationExtensionCompiled hook
+                // sidesteps this by passing a TYPED expression
+                // (`(returnType)((RowContainer)…).apply(name)`); mirror
+                // that here.
+                String typedCellRead = "(" + returnType + ")" + cellRead;
+                String runnable = Cast.buildRunnableForExtendedPrimitiveType(typedCellRead, returnGT, sourceInformation, ps);
                 String interfaceString = TypeProcessor.pureTypeToJava(returnGT, false, false, true, ps);
                 String typeName = returnRawType.getName();
                 return "((" + returnType + ")" +
