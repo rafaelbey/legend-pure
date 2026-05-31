@@ -127,37 +127,95 @@ public class TDSExtensionInterpreted extends BaseInterpretedExtension
             return ValueSpecificationBootstrap.wrapValueSpecification(
                     org.eclipse.collections.api.factory.Lists.mutable.empty(), false, processorSupport);
         }
-        CoreInstance wrappedValue = ValueSpecificationBootstrap.wrapValueSpecification(value, false, processorSupport);
 
-        // Extended-primitive columns (`SmallInt extends Integer`, …)
-        // need their constraint(s) evaluated on every cell read. The
-        // engine's `Cast` does this for `cast(@SmallInt)`; mirror that
-        // here so `$row.col` honours the type's invariant — without
-        // this, an out-of-range value reads back silently and
-        // testSimpleWithCastMap (SmallInt = 7 vs `$this < 256`) would
-        // pass when it should fail.
-        CoreInstance columnType = function.getValueForMetaPropertyToOne(M3Properties.classifierGenericType);
-        if (columnType != null)
+        // Re-classify the cell value based on the column's declared
+        // type. Two cases this fixes:
+        //
+        // 1. `Number` columns — the abstract supertype of Integer /
+        //    Float / Decimal. The stored cell value's classifier may
+        //    be `Number` (or even `String` for header-less #TDS
+        //    inputs), which downstream `NumericUtilities.toJavaNumber`
+        //    doesn't recognise as a primitive. Infer the concrete
+        //    classifier from the literal's shape (mirrors the compiled
+        //    `TDSTupleSupport.cellAt`'s `parseNumber`).
+        //
+        // 2. Extended-primitive columns (`SmallInt extends Integer`,
+        //    …) — the cast that introduces the extended type
+        //    (`stringToTDS(...)->cast(@TDS<(val:SmallInt[1])>)`)
+        //    doesn't re-classify the row cells, so the value's
+        //    classifier stays at whatever was inferred at parse time
+        //    (e.g. `String` or `Integer`). `Cast.evaluateConstraints`
+        //    then walks the supertype chain of `SmallInt` but the
+        //    constraint body's `$this` binds to a String-classified
+        //    value — the walk silently no-ops. Re-classifying the
+        //    cell to the column's extended-primitive type makes
+        //    `$this` bind correctly and the constraint actually fires
+        //    (testSimpleWithCastMap with SmallInt against `$this < 256`).
+        CoreInstance columnGT = _Column.getColumnType((org.finos.legend.pure.m3.coreinstance.meta.pure.metamodel.relation.Column<?, ?>) function);
+        CoreInstance rawColType = columnGT == null ? null : columnGT.getValueForMetaPropertyToOne(M3Properties.rawType);
+        CoreInstance effectiveValue = value;
+        if (rawColType != null)
         {
-            CoreInstance columnGT = _Column.getColumnType((org.finos.legend.pure.m3.coreinstance.meta.pure.metamodel.relation.Column<?, ?>) function);
-            if (columnGT != null)
+            CoreInstance targetClassifier = ("Number".equals(rawColType.getName()))
+                    ? inferConcreteNumericType(value.getName(), processorSupport)
+                    : rawColType;
+            if (targetClassifier != null && targetClassifier != value.getClassifier())
             {
-                CoreInstance rawColType = columnGT.getValueForMetaPropertyToOne(M3Properties.rawType);
-                if (rawColType != null && Type.isExtendedPrimitiveType(rawColType, processorSupport))
-                {
-                    Cast.evaluateConstraints(
-                            wrappedValue,
-                            columnGT,
-                            interpreted,
-                            instantiationContext,
-                            functionExpressionCallStack,
-                            functionExpressionCallStack.peek().getSourceInformation(),
-                            executionSupport,
-                            processorSupport);
-                }
+                // newCoreInstance reuses the literal verbatim and
+                // re-classifies; primitive value instances carry no
+                // source information by convention (matches what
+                // `TDSExtension.makeCellValue` produces).
+                effectiveValue = processorSupport.newCoreInstance(value.getName(), targetClassifier, null);
             }
         }
+        CoreInstance wrappedValue = ValueSpecificationBootstrap.wrapValueSpecification(effectiveValue, false, processorSupport);
+
+        // Extended-primitive constraint check. Mirrors the compiled
+        // hook's `castExtendedPrimitive` wrap and the engine's `Cast`
+        // path for `cast(@SmallInt)`. The re-classified value above
+        // ensures the walk's `$this` carries the right classifier so
+        // the constraint body actually evaluates (rather than no-oping
+        // against a mismatched type).
+        if (rawColType != null && Type.isExtendedPrimitiveType(rawColType, processorSupport))
+        {
+            Cast.evaluateConstraints(
+                    wrappedValue,
+                    columnGT,
+                    interpreted,
+                    instantiationContext,
+                    functionExpressionCallStack,
+                    functionExpressionCallStack.peek().getSourceInformation(),
+                    executionSupport,
+                    processorSupport);
+        }
         return wrappedValue;
+    }
+
+    /**
+     * Pick the concrete numeric M3 primitive (Integer / Float /
+     * Decimal) implied by a literal's shape. Same rule as the compiled
+     * {@code TDSTupleSupport.parseNumber}: a {@code D}/{@code d} suffix
+     * means Decimal; a {@code .}, {@code e}, or {@code E} means Float;
+     * otherwise Integer. Used by the {@code Number}-typed-column read
+     * path to give the cell a concrete classifier downstream
+     * {@code NumericUtilities.toJavaNumber} actually recognises.
+     */
+    private static CoreInstance inferConcreteNumericType(String literal, ProcessorSupport processorSupport)
+    {
+        if (literal == null || literal.isEmpty())
+        {
+            return processorSupport.package_getByUserPath(M3Paths.Integer);
+        }
+        char last = literal.charAt(literal.length() - 1);
+        if (last == 'D' || last == 'd')
+        {
+            return processorSupport.package_getByUserPath(M3Paths.Decimal);
+        }
+        if (literal.indexOf('.') >= 0 || literal.indexOf('e') >= 0 || literal.indexOf('E') >= 0)
+        {
+            return processorSupport.package_getByUserPath(M3Paths.Float);
+        }
+        return processorSupport.package_getByUserPath(M3Paths.Integer);
     }
 
     private static CoreInstance pickTdsTupleRow(CoreInstance candidate, ProcessorSupport processorSupport)
