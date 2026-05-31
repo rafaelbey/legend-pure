@@ -29,18 +29,13 @@ import java.util.List;
  */
 public class PureRustEvaluationException extends PureRustException
 {
-    /** Top-level error kind. Mirrors Rust's {@code PureExceptionKind} variants. */
     public enum Kind
     {
-        /** A runtime error (type mismatch, property-not-found, etc). */
         EXECUTION_ERROR,
-        /** An assertion failure from {@code fail()} / {@code assert()}. */
         ASSERTION_FAILED,
-        /** A constraint violation (class invariant, function pre / post). */
         CONSTRAINT_VIOLATION,
     }
 
-    /** Constraint axis. Only meaningful when {@link #getKind()} == CONSTRAINT_VIOLATION. */
     public enum ConstraintKind
     {
         /** Class invariant. */
@@ -104,7 +99,6 @@ public class PureRustEvaluationException extends PureRustException
         this.ownerFqn = ownerFqn;
     }
 
-    /** @return the top-level error kind; never {@code null}. */
     public Kind getKind()
     {
         return this.kind;
