@@ -23,11 +23,15 @@ import org.finos.legend.pure.m3.navigation.Instance;
 import org.finos.legend.pure.m3.navigation.M3Paths;
 import org.finos.legend.pure.m3.navigation.M3Properties;
 import org.finos.legend.pure.m3.navigation.ProcessorSupport;
+import org.finos.legend.pure.m3.navigation.type.Type;
 import org.finos.legend.pure.m4.coreinstance.CoreInstance;
+import org.finos.legend.pure.m4.coreinstance.SourceInformation;
 import org.finos.legend.pure.runtime.java.compiled.extension.CompiledExtension;
 import org.finos.legend.pure.runtime.java.compiled.generation.ProcessorContext;
-import org.finos.legend.pure.runtime.java.compiled.generation.processors.type.TypeProcessor;
+import org.finos.legend.pure.runtime.java.compiled.generation.processors.NativeFunctionProcessor;
 import org.finos.legend.pure.runtime.java.compiled.generation.processors.natives.Native;
+import org.finos.legend.pure.runtime.java.compiled.generation.processors.natives.essentials.lang.cast.Cast;
+import org.finos.legend.pure.runtime.java.compiled.generation.processors.type.TypeProcessor;
 import org.finos.legend.pure.runtime.java.compiled.generation.processors.valuespecification.ValueSpecificationProcessor;
 import org.finos.legend.pure.runtime.java.extension.dsl.tds.compiled.natives.StringToTDS;
 import org.finos.legend.pure.runtime.java.extension.dsl.tds.compiled.natives.TdsToCsv;
@@ -130,7 +134,33 @@ public class TDSExtensionCompiled implements CompiledExtension
             String returnType = TypeProcessor.typeToJavaObjectSingle(returnGT, true, ps);
             CoreInstance returnRawType = (returnGT == null) ? null : Instance.getValueForMetaPropertyToOneResolved(returnGT, M3Properties.rawType, ps);
             String columnTypeName = (returnRawType == null) ? "String" : returnRawType.getName();
-            return "(" + returnType + ")" + TDS_TUPLE_SUPPORT + ".cellAt((org.finos.legend.pure.m4.coreinstance.CoreInstance)(" + processedReceiver + "), " + index + ", \"" + columnTypeName + "\")";
+            String cellRead = TDS_TUPLE_SUPPORT + ".cellAt((org.finos.legend.pure.m4.coreinstance.CoreInstance)(" + processedReceiver + "), " + index + ", \"" + columnTypeName + "\")";
+
+            // Extended-primitive columns (`SmallInt extends Integer`,
+            // `OP8 extends OP(8)`, …) need their constraint(s)
+            // evaluated on every cell read. Mirror the cast path the
+            // engine uses for `cast(@SmallInt)`:
+            //   `castExtendedPrimitive(cellRead, T.class, "T", runnable, si)`
+            // where the runnable walks the supertype chain and fires
+            // `_validate(...)` for every level that carries a
+            // constraint. Without this an out-of-range value reads
+            // back silently — testSimpleWithCastMap (SmallInt = 7
+            // against `$this < 256`) would pass when it should fail.
+            // Skipped for the bootstrap primitives (Integer, Float,
+            // String, …) — they carry no constraints and the cast
+            // wrapper would be a no-op.
+            if (returnRawType != null && Type.isExtendedPrimitiveType(returnRawType, ps))
+            {
+                SourceInformation sourceInformation = functionExpression.getSourceInformation();
+                String runnable = Cast.buildRunnableForExtendedPrimitiveType(cellRead, returnGT, sourceInformation, ps);
+                String interfaceString = TypeProcessor.pureTypeToJava(returnGT, false, false, true, ps);
+                String typeName = returnRawType.getName();
+                return "((" + returnType + ")" +
+                        "CompiledSupport.castExtendedPrimitive(" + cellRead + ", " +
+                        interfaceString + ".class, \"" + typeName + "\", " + runnable + ", " +
+                        NativeFunctionProcessor.buildM4LineColumnSourceInformation(sourceInformation) + "))";
+            }
+            return "(" + returnType + ")" + cellRead;
         };
     }
 

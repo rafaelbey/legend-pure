@@ -26,6 +26,8 @@ import org.finos.legend.pure.m3.navigation.M3Paths;
 import org.finos.legend.pure.m3.navigation.M3Properties;
 import org.finos.legend.pure.m3.navigation.ProcessorSupport;
 import org.finos.legend.pure.m3.navigation.ValueSpecificationBootstrap;
+import org.finos.legend.pure.m3.navigation.relation._Column;
+import org.finos.legend.pure.m3.navigation.type.Type;
 import org.finos.legend.pure.m4.coreinstance.CoreInstance;
 import org.finos.legend.pure.runtime.java.extension.dsl.tds.interpreted.natives.StringToTDS;
 import org.finos.legend.pure.runtime.java.extension.dsl.tds.interpreted.natives.TdsToCsv;
@@ -35,6 +37,7 @@ import org.finos.legend.pure.runtime.java.interpreted.VariableContext;
 import org.finos.legend.pure.runtime.java.interpreted.extension.BaseInterpretedExtension;
 import org.finos.legend.pure.runtime.java.interpreted.extension.InterpretedExtension;
 import org.finos.legend.pure.runtime.java.interpreted.natives.InstantiationContext;
+import org.finos.legend.pure.runtime.java.interpreted.natives.essentials.lang.cast.Cast;
 import org.finos.legend.pure.runtime.java.interpreted.profiler.Profiler;
 
 public class TDSExtensionInterpreted extends BaseInterpretedExtension
@@ -124,7 +127,37 @@ public class TDSExtensionInterpreted extends BaseInterpretedExtension
             return ValueSpecificationBootstrap.wrapValueSpecification(
                     org.eclipse.collections.api.factory.Lists.mutable.empty(), false, processorSupport);
         }
-        return ValueSpecificationBootstrap.wrapValueSpecification(value, false, processorSupport);
+        CoreInstance wrappedValue = ValueSpecificationBootstrap.wrapValueSpecification(value, false, processorSupport);
+
+        // Extended-primitive columns (`SmallInt extends Integer`, …)
+        // need their constraint(s) evaluated on every cell read. The
+        // engine's `Cast` does this for `cast(@SmallInt)`; mirror that
+        // here so `$row.col` honours the type's invariant — without
+        // this, an out-of-range value reads back silently and
+        // testSimpleWithCastMap (SmallInt = 7 vs `$this < 256`) would
+        // pass when it should fail.
+        CoreInstance columnType = function.getValueForMetaPropertyToOne(M3Properties.classifierGenericType);
+        if (columnType != null)
+        {
+            CoreInstance columnGT = _Column.getColumnType((org.finos.legend.pure.m3.coreinstance.meta.pure.metamodel.relation.Column<?, ?>) function);
+            if (columnGT != null)
+            {
+                CoreInstance rawColType = columnGT.getValueForMetaPropertyToOne(M3Properties.rawType);
+                if (rawColType != null && Type.isExtendedPrimitiveType(rawColType, processorSupport))
+                {
+                    Cast.evaluateConstraints(
+                            wrappedValue,
+                            columnGT,
+                            interpreted,
+                            instantiationContext,
+                            functionExpressionCallStack,
+                            functionExpressionCallStack.peek().getSourceInformation(),
+                            executionSupport,
+                            processorSupport);
+                }
+            }
+        }
+        return wrappedValue;
     }
 
     private static CoreInstance pickTdsTupleRow(CoreInstance candidate, ProcessorSupport processorSupport)

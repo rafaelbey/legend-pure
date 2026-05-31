@@ -80,6 +80,17 @@ public class TDSTupleSupport
                 return Double.valueOf(value.getName());
             case "Decimal":
                 return new BigDecimal(value.getName());
+            case "Number":
+                // `Number` is the abstract supertype of Integer / Float /
+                // Decimal. Columns declared as `Number` can carry any
+                // of those at runtime, so infer the concrete numeric
+                // type from the stored literal's shape — a `D`/`d`
+                // suffix means Decimal, a `.`/`e`/`E` means Float,
+                // otherwise Integer. Without this case the cell would
+                // fall to the default String arm and downstream
+                // arithmetic (`row.col + 1`) would hit a `String` and
+                // throw a ClassCastException.
+                return parseNumber(value.getName());
             case "Boolean":
                 return Boolean.valueOf(value.getName());
             case "StrictDate":
@@ -87,8 +98,19 @@ public class TDSTupleSupport
             case "DateTime":
                 return DateFunctions.parsePureDate(value.getName());
             case "String":
-            default:
                 return value.getName();
+            default:
+                // Extended-primitive columns (`SmallInt extends Integer`,
+                // `OP8 extends OP(8)`, …) come through here with the
+                // declared type's bare name. The codegen wraps this
+                // call with `CompiledSupport.castExtendedPrimitive`
+                // (via `TDSExtensionCompiled`'s
+                // `buildRunnableForExtendedPrimitiveType` chain) so the
+                // constraint(s) fire after the read. The read itself
+                // returns the underlying numeric value (or string)
+                // parsed via the base primitive's parser — the codegen
+                // wrapper is responsible for the constraint check.
+                return parseNumber(value.getName());
         }
     }
 
@@ -104,5 +126,34 @@ public class TDSTupleSupport
             // BigInteger as a Number for Integer-typed columns.
             return new BigInteger(literal);
         }
+    }
+
+    /**
+     * Infer the concrete numeric type from the literal's shape and
+     * return the appropriate boxed Java number:
+     * <ul>
+     *   <li><code>D</code>/<code>d</code> suffix &rarr; {@link BigDecimal}</li>
+     *   <li>contains <code>.</code>, <code>e</code>, or <code>E</code> &rarr; {@link Double}</li>
+     *   <li>otherwise &rarr; {@link Long} (or {@link BigInteger} when out-of-range)</li>
+     * </ul>
+     * Mirrors the inference the CSV parser applies in
+     * {@code dsl-tds/csv.rs::infer_column}.
+     */
+    private static Number parseNumber(String literal)
+    {
+        if (literal == null || literal.isEmpty())
+        {
+            return null;
+        }
+        char last = literal.charAt(literal.length() - 1);
+        if (last == 'D' || last == 'd')
+        {
+            return new BigDecimal(literal.substring(0, literal.length() - 1));
+        }
+        if (literal.indexOf('.') >= 0 || literal.indexOf('e') >= 0 || literal.indexOf('E') >= 0)
+        {
+            return Double.valueOf(literal);
+        }
+        return parseInteger(literal);
     }
 }
