@@ -63,6 +63,13 @@ A few questions stand out before any Rust implementation:
   load (no resolution step). The cost is no shared artifact across
   stacks. **Recommended starting point.**
 
+> **Update 2026-10-06:** Java has since added a second, newer format —
+> PELT (`.pelt` per element + per-module `.pmf/.psr/.pxr/.pbr/.pfn`),
+> which is now legend-engine's production metadata path. The
+> interop/mimic analysis against *that* format lives in
+> [`docs/deferred/pelt_vs_purem.md`](../../../docs/deferred/pelt_vs_purem.md);
+> the `.par` discussion below is kept for history.
+
 [java-bin]: ../../../../legend-pure-core/legend-pure-m4/src/main/java/org/finos/legend/pure/m4/serialization/binary/BinaryRepositorySerializer.java
 
 ## What gets serialized
