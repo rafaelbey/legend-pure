@@ -1,5 +1,9 @@
 # legend-pure-runtime-rust-evaluator
 
+> **Not in the Maven reactor.** Removed in Step 0 of
+> `legend-pure-rust/docs/rust-evaluator-mvp.md` (the Rust crate it loads is on the
+> archive tag); Step 2 brings it back with the fished JNI crate.
+
 A Java JNI bridge over the Rust Pure runtime, plus a typed-binding
 toolchain that turns curated Pure functions and `Class`es into idiomatic
 Java methods and interfaces.

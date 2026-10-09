@@ -47,9 +47,9 @@
         <module>legend-pure-runtime-java-engine-compiled</module>
         <module>legend-pure-runtime-java-engine-interpreted</module>
         <module>legend-pure-runtime-java-engine-shared</module>
-        <!-- bindings-ap must build before rust-evaluator: the latter
-             references it via <annotationProcessorPaths>. -->
-        <module>legend-pure-runtime-rust-evaluator-bindings-ap</module>
-        <module>legend-pure-runtime-rust-evaluator</module>
+        <!-- legend-pure-runtime-rust-evaluator-bindings-ap and
+             legend-pure-runtime-rust-evaluator are removed from the reactor
+             while legend-pure-rust/ is rebuilt (legend-pure-rust/docs/rust-evaluator-mvp.md,
+             Step 0); Step 2 adds them back. -->
     </modules>
 </project>

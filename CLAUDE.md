@@ -4,40 +4,38 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repository Shape
 
-Two parallel implementations of Legend Pure live side-by-side at the root:
+Two implementations of Legend Pure live side-by-side at the root:
 
 - **Java/Maven stack** (upstream FINOS) — `legend-pure-core`, `legend-pure-dsl`,
   `legend-pure-maven`, `legend-pure-runtime`, `legend-pure-store`. Entry point: root `pom.xml`.
-- **Rust rewrite** — `legend-pure-rust/` (Cargo workspace). The active fork branch
-  `legend-pure-rust` reimplements parsing, compilation, and a tree-walking interpreter in
-  Rust. **When working inside that directory, see `legend-pure-rust/CLAUDE.md` for the
-  Rust-specific guide.**
+- **Rust evaluator** — `legend-pure-rust/` (Cargo workspace, two crates:
+  `crates/metamodel` and `crates/evaluator`). **The plan for everything Rust is
+  `legend-pure-rust/docs/rust-evaluator-mvp.md`**; `legend-pure-rust/CLAUDE.md` is the
+  working guide. Read the plan's §0 before touching that directory.
 
-Most current development targets the Rust workspace. The Java modules still compile and run
-tests — `.pure` source in `legend-pure-core/legend-pure-m3-core/src/main/resources/platform/`
-is the canonical platform definition consumed by **both** stacks.
+The earlier Rust workspace (parser, compiler, LSP, DSL crates, CLI, binary snapshot
+format) is frozen at tag `archive/pre-evaluator-extract-2026-10` and branch
+`legend-pure-rust-archive`. Nothing from it is current; pieces are fished back one at a
+time when the plan asks for them.
 
-## Current State (April 2026)
+`.pure` source in `legend-pure-core/legend-pure-m3-core/src/main/resources/platform/`
+is the canonical platform definition. The Rust metamodel crate embeds exactly one file
+from it, `platform/pure/grammar/m3.pure`, as its bootstrap.
 
-### Rust Workspace — Active Development
-- **Parser** — ✅ Complete. Full Pure grammar coverage, 400+ tests, 0 parser errors.
-- **Compiler** — ✅ Platform compile clean. 0 errors on 236 files / 1338 elements.
-  Five-phase dispatch engine with generic type+multiplicity substitution.
-- **Runtime** — 🚧 Active. Tree-walking interpreter with ~50 native functions,
-  persistent data structures (`im-rc`), RAII-driven `Rc<RefCell<HeapEntry>>`
-  heap, lazy call stack. Passing platform PCT subset.
-- **CLI** — ✅ Shipped. All 17 subcommands implemented (`parse`, `emit`,
-  `build`, `compile`, `check`, `lsp`, `dap`, `mcp`, `test`, `run`, `coverage`,
-  `init`, `java-bindings`, `completions`, `repl`, `snapshot`, `version`).
-  `plan` / `package` / `publish` were removed 2026-05-16; design context for
-  when their prerequisites land lives in `legend-pure-rust/docs/deferred/`.
+## Current State (October 2026)
+
+### Rust Workspace — Evaluator MVP, Step 0 done
+- Step 0 (extract the evaluator and its metamodel into a clean workspace) is complete.
+- Step 1 (prove the evaluator over the bootstrap with hand-built nodes, fishing
+  natives one at a time) is next. Steps 2–7 are in the plan.
+- Build and test: `cargo build --workspace`, `cargo test --workspace` inside
+  `legend-pure-rust/`. CI: `.github/workflows/rust.yml`.
 
 ### Java Stack — Maintenance Mode
 - Stable. All tests pass. Used by FINOS `legend-engine` as a compiled dependency.
 - No active feature work in this repository.
-
-### Backlog
-→ `legend-pure-rust/BACKLOG.md` — unified backlog for the Rust workspace.
+- The two `legend-pure-runtime-rust-evaluator*` modules are present but removed from
+  the Maven reactor until the plan's Step 2 re-adds them.
 
 ## Java Stack — Build & Test
 
@@ -93,4 +91,4 @@ build and fails if results diverge. This is the integration-test contract — do
 - `docs/architecture/compiler-pipeline.md` — parse → post-process → validate → serialize → codegen.
 - `docs/architecture/overview.md` — position in the Legend ecosystem, stack diagrams.
 - `docs/reference/` — Pure language, Legend grammar, Mapping, Relational, Maven plugin refs.
-- `legend-pure-rust/CLAUDE.md` — dedicated guide for the Rust workspace.
+- `legend-pure-rust/docs/rust-evaluator-mvp.md` — the Rust plan; `legend-pure-rust/CLAUDE.md` — the Rust working guide.

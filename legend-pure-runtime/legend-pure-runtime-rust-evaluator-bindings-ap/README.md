@@ -1,5 +1,9 @@
 # legend-pure-runtime-rust-evaluator-bindings-ap
 
+> **Not in the Maven reactor.** Removed in Step 0 of
+> `legend-pure-rust/docs/rust-evaluator-mvp.md` (the Rust crate it loads is on the
+> archive tag); Step 2 brings it back with the fished JNI crate.
+
 Annotation processor that emits typed Java bindings for the Pure
 runtime by loading the `libpure_rust_jni` cdylib and calling into the
 `legend-pure-java-codegen` Rust crate.

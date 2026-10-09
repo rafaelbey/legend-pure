@@ -1,6 +1,7 @@
 # A Pure Evaluator in Rust — MVP Proposal
 
-> **Status: proposal, October 2026 (revised 2026-10-08).** This document is
+> **Status: in execution, October 2026 (revised 2026-10-09). Step 0 executed
+> 2026-10-09; archive tag `archive/pre-evaluator-extract-2026-10`.** This document is
 > self-contained. It assumes the reader knows Legend Pure and legend-engine as
 > they exist in Java today and nothing else. It describes what a minimum viable
 > Rust evaluator is, which existing technologies it plugs into, and a sequence
@@ -319,8 +320,9 @@ repository-level `CLAUDE.md` and tooling pointers stay valid.
 **Gate.** `cargo build --workspace` succeeds and `cargo tree -e normal
 --depth 1` lists only the six dependencies above; the Appendix B grep returns
 nothing (the `m3.pure` include path matches none of its patterns);
-`cargo test --workspace` compiles (the two seed tests that call `plus` and
-`times` fail until Step 1 fishes them); both `CLAUDE.md` files
+`cargo test --workspace` compiles and passes except the two seed tests that
+call `plus` and `times`, which `rust.yml` skips by name until Step 1 fishes
+them; both `CLAUDE.md` files
 (repository root and `legend-pure-rust/`) name `docs/rust-evaluator-mvp.md` as
 the single source of truth and describe nothing from the archive as current;
 `rust.yml` runs green on the new workspace; `mvn -T 4 install -DskipTests`
@@ -910,8 +912,11 @@ legend-pure-rust/
 
 **Files outside the workspace that Step 0 touches.** `CLAUDE.md` at the
 repository root (rewrite two sections), `.github/workflows/rust.yml` (new
-command list), `legend-pure-runtime/pom.xml` (two `<module>` lines removed).
-Nothing else in the Java tree changes.
+command list), `legend-pure-runtime/pom.xml` (two `<module>` lines removed),
+`docs/architecture/modules.md` and `docs/guides/getting-started.md` (their
+Rust sections), and a note at the top of the two
+`legend-pure-runtime-rust-evaluator*` READMEs. Nothing else in the Java tree
+changes.
 
 **Gates, as commands.**
 

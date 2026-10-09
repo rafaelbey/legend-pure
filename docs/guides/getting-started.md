@@ -236,38 +236,28 @@ so that ANTLR4-generated and platform-generated Java files are present in
 
 ## 9. Rust Workspace Quick Start
 
-The Rust workspace (`legend-pure-rust/`) is the active development target.
+The Rust workspace (`legend-pure-rust/`) holds a Pure evaluator built per
+`legend-pure-rust/docs/rust-evaluator-mvp.md`.
 
 ### Prerequisites
 
 | Tool | Required version |
 |------|-----------------|
 | **Rust** | Latest stable (edition 2024) — install via [rustup.rs](https://rustup.rs/) |
-| **cargo-llvm-cov** | For coverage — `cargo install cargo-llvm-cov` |
-| **cargo-insta** | For snapshot testing — `cargo install cargo-insta` |
 
-### Build and Test
+### Build and test
 
 ```bash
 cd legend-pure-rust
-cargo build --workspace       # Build all crates
-cargo test --workspace        # Run all 739 tests
-cargo lint-lib                # Strict: no unwrap/expect in library code
-cargo lint                    # Standard clippy
-cargo fmt --check             # Format check
+cargo build --workspace
+cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
+cargo fmt --check
 ```
 
-### Install the CLI
-
-```bash
-cargo install --path crates/cli
-legend parse model.pure       # Parse a Pure file
-legend check src/             # Check for syntax errors
-legend --help                 # All commands
-```
-
-See `legend-pure-rust/CLAUDE.md` for full development guide, code conventions,
-and `legend-pure-rust/BACKLOG.md` for active work items.
+See `legend-pure-rust/CLAUDE.md` for the development guide and the plan for what
+comes next. The earlier Rust workspace (parser, compiler, tooling) is on tag
+`archive/pre-evaluator-extract-2026-10`.
 
 ---
 
