@@ -376,7 +376,9 @@ impl NativeRegistry {
     /// starts empty.
     #[must_use]
     pub fn standard() -> Self {
-        Self::new()
+        let mut registry = Self::new();
+        arithmetic::register(&mut registry);
+        registry
     }
 }
 
@@ -476,6 +478,9 @@ pub fn force_thunk(
     }
     ctx.evaluate(spec)
 }
+
+/// Arithmetic natives: `plus`, `times` (the rest stay on the archive).
+pub mod arithmetic;
 
 /// Heap shapes for reflection over functions and multiplicities
 /// (helpers only; no natives registered).

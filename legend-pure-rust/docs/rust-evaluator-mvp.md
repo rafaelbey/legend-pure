@@ -322,7 +322,7 @@ repository-level `CLAUDE.md` and tooling pointers stay valid.
 nothing (the `m3.pure` include path matches none of its patterns);
 `cargo test --workspace` compiles and passes except the two seed tests that
 call `plus` and `times`, which `rust.yml` skips by name until Step 1 fishes
-them; both `CLAUDE.md` files
+them (done in Step 1 milestone 1, where the skips are removed); both `CLAUDE.md` files
 (repository root and `legend-pure-rust/`) name `docs/rust-evaluator-mvp.md` as
 the single source of truth and describe nothing from the archive as current;
 `rust.yml` runs green on the new workspace; `mvn -T 4 install -DskipTests`
