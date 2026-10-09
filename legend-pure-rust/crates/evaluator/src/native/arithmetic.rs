@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Arithmetic natives fished so far: `plus` and `times`.
+//! Arithmetic natives fished so far: `plus`, `minus` and `times`.
 //!
 //! Both are **eager** — the native forces every argument up front via
 //! `ctx.evaluate`. Helpers return `PureRuntimeError`; `?` on each call
-//! promotes that into the `PureException` the trait requires. `minus`,
+//! promotes that into the `PureException` the trait requires.
 //! `divide`, `abs`, `mod` and `rem` stay on the archive until a test asks.
 
 use legend_pure_metamodel::types::ValueSpec;
@@ -127,6 +127,83 @@ fn plus_fold(values: Vec<Value>) -> Result<Value, PureRuntimeError> {
     iter.try_fold(first, |acc, next| plus_pair(&acc, &next))
 }
 
+/// Pure `minus(Number[1], Number[1]): Number[1]` — subtraction.
+#[derive(Debug)]
+pub struct Minus;
+
+impl NativeFunction for Minus {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        // Pure's sole `minus` signature is `(Number[*]):Number[1]`. The
+        // compiler lowers `a - b` / `-x` to `minus([a, b])` / `minus([x])`
+        // so the native always receives a single argument. Normalise via
+        // `to_collection()` — this also handles the legacy direct-scalar
+        // call shape some tests still emit from `->eval(x)`.
+        expect_args("minus", &values, 1)?;
+        let items: Vec<Value> = values[0].to_collection().iter().cloned().collect();
+        Ok(Evaluated::new(minus_fold(items)?))
+    }
+}
+
+/// Unary negation on a single numeric value. Unit-tagged values
+/// negate the payload and keep the unit tag intact.
+fn minus_unary(v: &Value) -> Result<Value, PureRuntimeError> {
+    match v {
+        Value::Integer(a) => Ok(Value::Integer(-a)),
+        Value::Float(a) => Ok(Value::Float(-a)),
+        Value::Decimal(a) => Ok(Value::Decimal(-*a)),
+        Value::UnitInstance { unit_id, inner } => {
+            let negated = minus_unary(inner)?;
+            Ok(Value::UnitInstance {
+                unit_id: *unit_id,
+                inner: Box::new(negated),
+            })
+        }
+        other => Err(PureRuntimeError::EvaluationError(format!(
+            "minus: unsupported type {}",
+            other.type_name()
+        ))),
+    }
+}
+
+/// Pairwise subtraction with the same Integer → Float → Decimal lattice
+/// as [`plus_pair`].
+fn minus_pair(a: &Value, b: &Value) -> Result<Value, PureRuntimeError> {
+    match promote_pair(a, b) {
+        Some((Value::Integer(a), Value::Integer(b))) => Ok(Value::Integer(a.wrapping_sub(b))),
+        Some((Value::Float(a), Value::Float(b))) => Ok(Value::Float(a - b)),
+        Some((Value::Decimal(a), Value::Decimal(b))) => Ok(Value::Decimal(a - b)),
+        _ => Err(PureRuntimeError::EvaluationError(format!(
+            "minus: unsupported types {} and {}",
+            a.type_name(),
+            b.type_name()
+        ))),
+    }
+}
+
+/// Fold a collection of numerics through pairwise subtraction, mirroring
+/// Java Pure's `Minus.execute` switch on size:
+/// - empty → `Integer(0)`
+/// - size 1 → unary negate (`0 - x = -x`)
+/// - size ≥ 2 → left-fold subtract: `[x, y, z, …]` → `x - y - z - …`
+fn minus_fold(values: Vec<Value>) -> Result<Value, PureRuntimeError> {
+    let mut iter = values.into_iter();
+    let Some(first) = iter.next() else {
+        return Ok(Value::Integer(0));
+    };
+    match iter.next() {
+        None => minus_unary(&first),
+        Some(second) => {
+            let initial = minus_pair(&first, &second)?;
+            iter.try_fold(initial, |acc, next| minus_pair(&acc, &next))
+        }
+    }
+}
+
 /// Pure `times(Number[1], Number[1]): Number[1]` — multiplication.
 #[derive(Debug)]
 pub struct Times;
@@ -182,6 +259,11 @@ pub fn register(registry: &mut NativeRegistry) {
     registry.register("plus_Float_MANY__Float_1_", Plus);
     registry.register("plus_Decimal_MANY__Decimal_1_", Plus);
     registry.register("plus_Number_MANY__Number_1_", Plus);
+
+    registry.register("minus_Integer_MANY__Integer_1_", Minus);
+    registry.register("minus_Float_MANY__Float_1_", Minus);
+    registry.register("minus_Decimal_MANY__Decimal_1_", Minus);
+    registry.register("minus_Number_MANY__Number_1_", Minus);
 
     registry.register("times_Integer_MANY__Integer_1_", Times);
     registry.register("times_Float_MANY__Float_1_", Times);
@@ -258,6 +340,17 @@ mod tests {
             r.into_value(),
             Value::Decimal(Decimal::from_str("13.75").unwrap())
         );
+    }
+
+    #[test]
+    fn minus_integers() {
+        let r = Minus
+            .execute(
+                &[crate::native::lit_collection(vec![lit_int(10), lit_int(3)])],
+                &mut MockCtx,
+            )
+            .unwrap();
+        assert_eq!(r.into_value(), Value::Integer(7));
     }
 
     #[test]

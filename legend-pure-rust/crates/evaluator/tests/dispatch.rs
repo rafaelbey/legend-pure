@@ -151,22 +151,29 @@ fn native_declared_in_the_model_dispatches_to_the_registry() {
 fn native_declared_but_not_fished_is_function_not_found() {
     let mut b = ModelBuilder::new();
     let id = b.function(
-        "meta::pure::functions::math::minus",
+        "meta::pure::functions::math::divide",
         native_function(
-            "minus",
-            vec![param("numbers", named(NUMBER_ID), Multiplicity::ZeroOrMany)],
+            "divide",
+            vec![
+                param("a", named(NUMBER_ID), Multiplicity::PureOne),
+                param("b", named(NUMBER_ID), Multiplicity::PureOne),
+            ],
             named(NUMBER_ID),
             Multiplicity::PureOne,
         ),
     );
     let model = b.finish();
+    assert_eq!(
+        model.get_node(id).name,
+        "divide_Number_1__Number_1__Number_1_"
+    );
     let registry = NativeRegistry::standard();
     let mut eval = Evaluator::new(&model, &registry);
-    let call = expr::call_resolved(id, "minus", vec![expr::collection(vec![expr::int(2)])]);
+    let call = expr::call_resolved(id, "divide", vec![expr::int(2), expr::int(1)]);
     let err = eval.eval(&call).unwrap_err();
     assert_eq!(
         function_not_found(&err),
-        Some("minus_Number_MANY__Number_1_")
+        Some("divide_Number_1__Number_1__Number_1_")
     );
 }
 
