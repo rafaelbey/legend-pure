@@ -313,6 +313,31 @@ impl ModelBuilder {
         id
     }
 
+    /// Mutable access to an element added through this builder, for the
+    /// few shapes that are built in two steps (a measure and its units
+    /// reference each other).
+    ///
+    /// # Panics
+    ///
+    /// Panics if `id` was not allocated by this builder.
+    pub fn element_mut(&mut self, id: ElementId) -> &mut Element {
+        let ElementId::InstanceId {
+            chunk_id,
+            local_idx,
+            ..
+        } = id
+        else {
+            panic!("{id:?} is a package, not a builder-allocated element")
+        };
+        assert_eq!(
+            chunk_id, TEST_CHUNK_ID,
+            "{id:?} was not allocated by this builder"
+        );
+        self.model.chunks[usize::from(TEST_CHUNK_ID)]
+            .elements
+            .get_mut(local_idx)
+    }
+
     /// Rebuild the derived indexes and hand over the model.
     #[must_use]
     pub fn finish(mut self) -> PureModel {

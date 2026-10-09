@@ -20,7 +20,10 @@ use legend_pure_evaluator::eval::Evaluator;
 use legend_pure_evaluator::native::NativeRegistry;
 use legend_pure_evaluator::value::Value;
 use legend_pure_metamodel::bootstrap::{INTEGER_ID, STRING_ID};
-use legend_pure_metamodel::model::Element;
+use legend_pure_metamodel::ids::ElementId;
+use legend_pure_metamodel::model::{DSLInstance, Element};
+use legend_pure_metamodel::nodes::measure::Measure;
+use legend_pure_metamodel::nodes::unit::Unit;
 use legend_pure_metamodel::types::Multiplicity;
 
 #[test]
@@ -166,5 +169,147 @@ fn multiplicity_reference_materialises_a_multiplicity_object() {
             .iter()
             .next(),
         Some(&Value::Integer(1))
+    );
+}
+
+#[test]
+fn primitive_type_and_class_names_read_through_element_reflection() {
+    let mut b = ModelBuilder::new();
+    let person = b.class("my::Person", class(Vec::new(), Vec::new()));
+    let model = b.finish();
+    let registry = NativeRegistry::standard();
+    let mut eval = Evaluator::new(&model, &registry);
+    assert_eq!(
+        eval.eval(&expr::prop(expr::element_ref(STRING_ID), "name"))
+            .unwrap(),
+        Value::String("String".into())
+    );
+    assert_eq!(
+        eval.eval(&expr::prop(expr::element_ref(person), "name"))
+            .unwrap(),
+        Value::String("Person".into())
+    );
+}
+
+#[test]
+fn measure_and_unit_reflect_their_canonical_unit_and_local_name() {
+    let mut b = ModelBuilder::new();
+    let mass = b.add(
+        "my::Mass",
+        Element::Measure(Measure {
+            canonical_unit: None,
+            non_canonical_units: Vec::new(),
+        }),
+    );
+    // Units are named `Measure~Unit` in the model; the evaluator reports
+    // the local part after `~`.
+    let kilogram = b.add(
+        "my::Mass~Kilogram",
+        Element::Unit(Unit {
+            measure: mass,
+            conversion_expression: None,
+        }),
+    );
+    let gram = b.add(
+        "my::Mass~Gram",
+        Element::Unit(Unit {
+            measure: mass,
+            conversion_expression: None,
+        }),
+    );
+    if let Element::Measure(m) = b.element_mut(mass) {
+        m.canonical_unit = Some(kilogram);
+        m.non_canonical_units.push(gram);
+    }
+    let model = b.finish();
+    let registry = NativeRegistry::standard();
+    let mut eval = Evaluator::new(&model, &registry);
+    assert_eq!(
+        eval.eval(&expr::prop(expr::element_ref(mass), "canonicalUnit"))
+            .unwrap(),
+        Value::Element(kilogram)
+    );
+    assert_eq!(
+        eval.eval(&expr::prop(expr::element_ref(mass), "nonCanonicalUnits"))
+            .unwrap(),
+        Value::Element(gram)
+    );
+    assert_eq!(
+        eval.eval(&expr::prop(expr::element_ref(kilogram), "name"))
+            .unwrap(),
+        Value::String("Kilogram".into())
+    );
+}
+
+#[test]
+fn dsl_instance_is_an_element_the_evaluator_can_name() {
+    let mut b = ModelBuilder::new();
+    let diagram = b.add(
+        "my::D",
+        Element::DSLInstance(DSLInstance {
+            dsl_name: "Diagram".into(),
+            classifier_fqn: "meta::pure::metamodel::diagram::Diagram".into(),
+            data: Vec::new(),
+        }),
+    );
+    let model = b.finish();
+    assert_eq!(model.resolve_fqn_str("my::D"), Some(diagram));
+    let registry = NativeRegistry::standard();
+    let mut eval = Evaluator::new(&model, &registry);
+    assert_eq!(
+        eval.eval(&expr::element_ref(diagram)).unwrap(),
+        Value::Element(diagram)
+    );
+    assert_eq!(
+        eval.eval(&expr::prop(expr::element_ref(diagram), "name"))
+            .unwrap(),
+        Value::String("D".into())
+    );
+}
+
+#[test]
+fn packages_are_elements_too() {
+    let mut b = ModelBuilder::new();
+    let person = b.class("my::deep::Person", class(Vec::new(), Vec::new()));
+    let model = b.finish();
+    // Packages are not resolved by path; reach them from an element.
+    let pkg_id = model.get_node(person).parent_package;
+    let pkg = model.get_package(pkg_id);
+    assert_eq!(pkg.name, "deep");
+    assert_eq!(pkg.children_elements, vec![person]);
+    let as_element = ElementId::Package(pkg_id);
+    assert_eq!(model.element_name(as_element), "deep");
+    assert!(matches!(model.get_element(as_element), Element::Package(p) if *p == pkg_id));
+}
+
+#[test]
+fn unknown_property_on_an_instance_reads_as_unit() {
+    let mut b = ModelBuilder::new();
+    b.class(
+        "my::Person",
+        class(
+            Vec::new(),
+            vec![property("name", named(STRING_ID), Multiplicity::PureOne)],
+        ),
+    );
+    let model = b.finish();
+    let registry = NativeRegistry::standard();
+    let mut eval = Evaluator::new(&model, &registry);
+    let obj = eval.heap_mut().alloc_dynamic("my::Person");
+    eval.heap_mut()
+        .mutate_add(&obj, "name", &[Value::String("Ann".into())])
+        .unwrap();
+    eval.context_mut().push_scope();
+    eval.context_mut().set("p", Value::Object(obj));
+    assert_eq!(
+        eval.eval(&expr::prop(expr::var("p"), "name")).unwrap(),
+        Value::String("Ann".into())
+    );
+    // The archived evaluator treats an unknown property on a heap object
+    // as an unset `[0..1]` slot rather than an error; record that here so
+    // a change in the contract shows up.
+    assert_eq!(
+        eval.eval(&expr::prop(expr::var("p"), "nope")).unwrap(),
+        Value::Unit
     );
 }

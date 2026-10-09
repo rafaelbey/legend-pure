@@ -1,7 +1,8 @@
 # A Pure Evaluator in Rust — MVP Proposal
 
-> **Status: in execution, October 2026 (revised 2026-10-09). Step 0 executed
-> 2026-10-09; archive tag `archive/pre-evaluator-extract-2026-10`.** This document is
+> **Status: in execution, October 2026 (revised 2026-10-09). Steps 0 and 1
+> executed 2026-10-09; archive tag `archive/pre-evaluator-extract-2026-10`;
+> next is Step 2.** This document is
 > self-contained. It assumes the reader knows Legend Pure and legend-engine as
 > they exist in Java today and nothing else. It describes what a minimum viable
 > Rust evaluator is, which existing technologies it plugs into, and a sequence

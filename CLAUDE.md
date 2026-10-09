@@ -24,10 +24,12 @@ from it, `platform/pure/grammar/m3.pure`, as its bootstrap.
 
 ## Current State (October 2026)
 
-### Rust Workspace — Evaluator MVP, Step 0 done
-- Step 0 (extract the evaluator and its metamodel into a clean workspace) is complete.
-- Step 1 (prove the evaluator over the bootstrap with hand-built nodes, fishing
-  natives one at a time) is next. Steps 2–7 are in the plan.
+### Rust Workspace — Evaluator MVP, Steps 0 and 1 done
+- Step 0 (extract the evaluator and its metamodel into a clean workspace) and Step 1
+  (the evaluator proven over the bootstrap with hand-built nodes; 25 native
+  signatures fished) are complete.
+- Step 2 (values across JNI and a PCT run that starts red) is next. Steps 2–7 are in
+  the plan.
 - Build and test: `cargo build --workspace`, `cargo test --workspace` inside
   `legend-pure-rust/`. CI: `.github/workflows/rust.yml`.
 
