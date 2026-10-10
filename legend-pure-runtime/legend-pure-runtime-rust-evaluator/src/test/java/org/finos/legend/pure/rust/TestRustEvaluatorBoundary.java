@@ -23,6 +23,7 @@ import org.finos.legend.pure.m3.execution.test.TestCollection;
 import org.finos.legend.pure.m3.navigation.M3Properties;
 import org.finos.legend.pure.m3.navigation.PrimitiveUtilities;
 import org.finos.legend.pure.m3.navigation.ProcessorSupport;
+import org.finos.legend.pure.m3.navigation.PackageableElement.PackageableElement;
 import org.finos.legend.pure.m3.navigation.ValueSpecificationBootstrap;
 import org.finos.legend.pure.m3.navigation._package._Package;
 import org.finos.legend.pure.m3.pct.shared.model.ReportScope;
@@ -50,6 +51,7 @@ public class TestRustEvaluatorBoundary
     private static final String LET_FUNCTION = "meta::pure::functions::lang::letFunction_String_1__T_m__T_m_";
     private static final String ASSERT = "meta::pure::functions::asserts::assert_Boolean_1__Function_1__Boolean_1_";
     private static final String CLASS = "meta::pure::metamodel::type::Class";
+    private static final String LAMBDA_FUNCTION = "meta::pure::metamodel::function::LambdaFunction";
 
     private static PureRustEvaluator evaluator;
     private static ProcessorSupport ps;
@@ -187,8 +189,44 @@ public class TestRustEvaluatorBoundary
         PureRustEvaluationException e = Assert.assertThrows(PureRustEvaluationException.class,
                 () -> evaluator.start(pctTest, Lists.mutable.with(wrap(adapter))));
         Assert.assertEquals(PureRustEvaluationException.Kind.FUNCTION_NOT_FOUND, e.getKind());
-        String expectedPath = org.finos.legend.pure.m3.navigation.PackageableElement.PackageableElement.getUserPathForPackageableElement(pctTest, "::");
+        String expectedPath = PackageableElement.getUserPathForPackageableElement(pctTest, "::");
         Assert.assertEquals("FunctionNotFound: " + expectedPath, e.getMessage());
+    }
+
+    /**
+     * The body of every PCT test hands a lambda to its adapter; until Step 3
+     * lowers Java lambdas through the bridge, that lambda is Unsupported, and
+     * this is the message the Rust_JNI manifests record.
+     */
+    @Test
+    public void aJavaLambdaIsUnsupportedUntilTheBridgeLowersIt()
+    {
+        CoreInstance lambda = findLambda(firstPctTest());
+        Assert.assertNotNull(lambda);
+        PureRustEvaluationException e = Assert.assertThrows(PureRustEvaluationException.class,
+                () -> evaluator.start(lambda, Lists.immutable.empty()));
+        Assert.assertEquals(PureRustEvaluationException.Kind.UNSUPPORTED, e.getKind());
+        Assert.assertEquals("Unsupported: evaluating a Java LambdaFunction through the bridge", e.getMessage());
+    }
+
+    private static CoreInstance findLambda(CoreInstance node)
+    {
+        if (LAMBDA_FUNCTION.equals(PackageableElement.getUserPathForPackageableElement(node.getClassifier())))
+        {
+            return node;
+        }
+        for (String property : new String[]{M3Properties.expressionSequence, M3Properties.parametersValues, M3Properties.values})
+        {
+            for (CoreInstance child : node.getValueForMetaPropertyToMany(property))
+            {
+                CoreInstance found = findLambda(child);
+                if (found != null)
+                {
+                    return found;
+                }
+            }
+        }
+        return null;
     }
 
     @Test

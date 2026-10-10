@@ -103,6 +103,10 @@
             <artifactId>legend-pure-m3-core</artifactId>
         </dependency>
         <dependency>
+            <groupId>org.finos.legend.pure</groupId>
+            <artifactId>legend-pure-runtime-java-engine-interpreted</artifactId>
+        </dependency>
+        <dependency>
             <groupId>org.eclipse.collections</groupId>
             <artifactId>eclipse-collections-api</artifactId>
         </dependency>
@@ -111,17 +115,50 @@
             <artifactId>junit</artifactId>
             <scope>test</scope>
         </dependency>
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-core</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>
         <plugins>
+            <!--
+                The Rust_JNI adapter reports (ADAPTER_<scope>_interpreted_Rust_JNI.json)
+                come from the committed manifests, not from a test run, so this
+                step needs no Rust library.
+            -->
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>exec-maven-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>GeneratePCTReport</id>
+                        <phase>process-test-classes</phase>
+                        <goals>
+                            <goal>java</goal>
+                        </goals>
+                        <configuration>
+                            <mainClass>org.finos.legend.pure.runtime.java.interpreted.testHelper.PCTReportGenerator</mainClass>
+                            <arguments>
+                                <argument>${project.build.directory}/classes/pct-reports/</argument>
+                                <argument>org.finos.legend.pure.rust.pct.Test_RustJni_EssentialFunctions_PCT</argument>
+                                <argument>org.finos.legend.pure.rust.pct.Test_RustJni_GrammarFunctions_PCT</argument>
+                            </arguments>
+                            <includeProjectDependencies>true</includeProjectDependencies>
+                            <classpathScope>test</classpathScope>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
                 <configuration>
                     <systemPropertyVariables>
                         <legend.pure.rust.libdir>${legend.rust.libdir}</legend.pure.rust.libdir>
-                        <legend.pct.rust.reportDir>${project.build.directory}/pct-rust</legend.pct.rust.reportDir>
+                        <legend.pct.rust.manifestDir>${project.basedir}/src/test/resources</legend.pct.rust.manifestDir>
                     </systemPropertyVariables>
                 </configuration>
             </plugin>
