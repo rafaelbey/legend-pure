@@ -1,297 +1,40 @@
 # legend-pure-runtime-rust-evaluator
 
-> **Not in the Maven reactor.** Removed in Step 0 of
-> `legend-pure-rust/docs/rust-evaluator-mvp.md` (the Rust crate it loads is on the
-> archive tag); Step 2 brings it back with the fished JNI crate.
+The Java side of the JNI boundary to the Rust Pure evaluator in
+`legend-pure-rust/` (Step 2 of `legend-pure-rust/docs/rust-evaluator-mvp.md`).
 
-A Java JNI bridge over the Rust Pure runtime, plus a typed-binding
-toolchain that turns curated Pure functions and `Class`es into idiomatic
-Java methods and interfaces.
+## Surface
 
-## What you get
+The only value currency across the boundary is `org.finos.legend.pure.m4.coreinstance.CoreInstance`,
+in both directions.
 
-| Surface                         | Where                                           | Purpose |
-| ------------------------------- | ----------------------------------------------- | ------- |
-| `PureRustEvaluator`             | `org.finos.legend.pure.rust`                    | Loads the platform model in a Rust context, exposes `evaluate`, `getClassifier`, and `create` (materialise a fresh heap object). `Closeable` — wires `Cleaner` so native resources free even if you forget. |
-| `PureRustInstance`              | `org.finos.legend.pure.rust`                    | Opaque handle to a heap object; supports `getProperty(name, args...)` and `getClassifier()`. |
-| `PureRustResult`                | `org.finos.legend.pure.rust`                    | Internal marshalling shape. Not user-facing. |
-| `PureRustException` / `…EvaluationException` | `org.finos.legend.pure.rust`       | Native errors propagate as these. |
-| Generated facade `PureFunctions` (or your custom name) | configurable Java root package | One static method per Pure function listed in the manifest. Names are `<pure_pkg>_<mangled FQN>`, e.g. `meta_pure_functions_math_plus_Integer_MANY__Integer_1_(Iterable<Long> values, PureRustEvaluator eval)`. |
-| Generated interfaces            | `<root>.<pure-package>.<ClassName>`             | One Java interface per reachable user `Class` (and `Enumeration`). Properties become methods — `[1]` abstract, `[0..1]` defaults to `Optional.empty()`, `[*]` defaults to `Collections.emptyList()`. Interfaces extend their Pure supertypes' generated interfaces, register their classifier on first init, and inherit two sentinel accessors (`$instancePointer()`, `$evaluator()`) from `PureRegistered`. |
-| `PureProxyFactory`              | `org.finos.legend.pure.rust.proxy`              | `wrap`/`unwrap` between native handles and proxies, plus `create(userImpl, iface, eval)` to materialise a hand-written `implements` of a generated interface as a real heap object. |
-| `PureInvocationHandler`         | `org.finos.legend.pure.rust.proxy`              | `InvocationHandler` backing every proxy. Routes property reads through `PureRustInstance.getProperty(...)` and re-wraps results using the declared `Method.getGenericReturnType()` so element types of `Iterable<X>` survive erasure. |
-| `Any`                           | `org.finos.legend.pure.rust.proxy`              | Universal supertype every generated interface extends (transitively). Mirrors Pure's `meta::pure::metamodel::type::Any`. Adds `$rustInstance()` for falling back to dynamic dispatch via `PureRustInstance.getProperty(...)`. Used as the proxy fallback when the runtime classifier isn't registered to a more-specific generated interface — so `wrap(...)` always returns a typed proxy, never a bare `PureRustInstance`. |
-| `PureRegistered`                | `org.finos.legend.pure.rust.proxy`              | Marker supertype of `Any`; declares the `$instancePointer()` / `$evaluator()` sentinels every proxy answers. |
-| `PureLambda` (placeholder)      | `org.finos.legend.pure.rust.proxy`              | Anchors v2 function-typed-parameter support. |
+| Class | Role |
+|---|---|
+| `PureRustEvaluator` | A `FunctionExecution` over the Rust evaluator: `init(runtime, message)` binds it to a `PureRuntime`; `start(function, arguments)` takes graph nodes (arguments wrapped as `InstanceValue`s, as the interpreted engine expects) and returns an `InstanceValue`; `create(classifierPath, names, values)` allocates a Rust object; `liveHandleCount()` reports Rust-side handles still alive; `close()` frees everything. |
+| `RustNodeBridge` | The Java half of the node bridge, called from Rust: describes a node in one call (kind, classifier path, primitive payload, keys), reads property values on demand, and materialises Rust values through the `ModelRepository` factories and `_Package.getByUserPath`. |
+| `RustCoreInstance` | A Rust heap object seen from Java as a read-only `CoreInstance`; its classifier is the Java graph node for the Rust classifier path. One proxy per Rust handle; `close()` releases it. |
+| `PureRustEvaluationException` | Typed failure: `getKind()` is one of `EXECUTION_ERROR`, `ASSERTION_FAILED`, `CONSTRAINT_VIOLATION`, `FUNCTION_NOT_FOUND`, `UNSUPPORTED`; `getMessage()` starts with the kind's display name (`FunctionNotFound: …`). An `ASSERTION_FAILED` carries a `PureAssertFailException` as its cause. |
 
-## Quickstart
+Crossing in: primitives (Boolean, Integer, Float, Decimal, String, every Date kind, StrictTime) become
+Rust values; a packageable element whose path the Rust model knows becomes that element; enum values
+of known enumerations become enum values; every other node becomes a lazily read Java-backed heap
+object. Crossing out: primitives through the repository factories, elements and enum values by path,
+Java-backed nodes as their original object, other Rust objects as `RustCoreInstance`. Functions, maps
+and unit instances raise `UNSUPPORTED` until a test needs them.
 
-```java
-PureRustEvaluator eval = new PureRustEvaluator();
-
-// 1. Call a generated wrapper. Pure FQN + types are resolved at codegen,
-//    so the call site is a regular Java method invocation.
-Long sum = PureFunctions.meta_pure_functions_math_plus_Integer_MANY__Integer_1_(
-    java.util.List.of(1L, 2L, 3L), eval);
-
-// 2. Receive a Pure object via evaluate(...) and traverse it through the
-//    typed proxy. The classifier registry picks the most-specific
-//    generated interface so subtypes work via instanceof.
-Person bob = eval.evaluate("user_test::makePerson_String_1__Person_1_", "Bob");
-String first = bob.firstName();
-for (Address a : bob.addresses()) { System.out.println(a.street()); }
-
-// 2b. If the runtime classifier isn't registered for a specific
-//     interface (or you only have an Object reference), you still get a
-//     typed Any proxy — drop down to dynamic dispatch via $rustInstance().
-Any opaque = eval.evaluate("some::function::returning::Any_Any_1_", x);
-String classifier = opaque.$rustInstance().getClassifier();
-Object firstName = opaque.$rustInstance().getProperty("firstName");
-
-// 3. Build a fresh heap object from a hand-written implementation of a
-//    generated interface. Only override the fields you care about — the
-//    rest fall through to the [0..1]/[*] defaults.
-Person alice = PureProxyFactory.create(new Person() {
-    public String firstName() { return "Alice"; }
-}, Person.class, eval);
-
-eval.close();
-```
-
-## Generated bindings — what gets emitted
-
-Bindings are produced by the `PureBindingsProcessor` annotation
-processor in the sibling
-[`legend-pure-runtime-rust-evaluator-bindings-ap`](../legend-pure-runtime-rust-evaluator-bindings-ap/)
-module. The processor is wired into this module's `mvn compile` via
-the standard `<annotationProcessorPaths>` mechanism:
-
-```xml
-<plugin>
-  <artifactId>maven-compiler-plugin</artifactId>
-  <configuration>
-    <annotationProcessorPaths>
-      <path>
-        <groupId>${project.groupId}</groupId>
-        <artifactId>legend-pure-runtime-rust-evaluator-bindings-ap</artifactId>
-        <version>${project.version}</version>
-      </path>
-    </annotationProcessorPaths>
-    <compilerArgs>
-      <arg>-Apure.cdylib.path=${legend.cdylib.path}</arg>
-    </compilerArgs>
-  </configuration>
-</plugin>
-```
-
-The marker class
-[`org.finos.legend.pure.rust.bootstrap.M3Bootstrap`](src/main/java/org/finos/legend/pure/rust/bootstrap/M3Bootstrap.java)
-carries the `@PureBindings` annotation that points at the manifest:
-
-```java
-@PureBindings(bindingsFile = "pure-bindings/m3-bindings.jpure")
-public final class M3Bootstrap {}
-```
-
-The manifest path is a **classpath resource**, resolved from
-`target/classes/` after Maven copies the file out of
-`src/main/resources/`. At compile time the AP loads
-`libpure_rust_jni.{dylib,so,dll}` (path resolved from
-`-Apure.cdylib.path`), reads the manifest via
-`Filer.getResource(StandardLocation.CLASS_OUTPUT, …)`, parses its
-header directives, calls into the Rust `legend-pure-java-codegen`
-crate to walk the model, and emits each produced source through
-`Filer` (which puts it under `target/generated-sources/annotations/`
-and feeds it into the same javac round). No `cargo` subprocess fork,
-no extra `<build-helper>` plugin to wire the generated source root.
-
-### Manifest format (`.jpure`)
-
-Each manifest is a UTF-8 text file with directive lines + an FQN
-body:
-
-```
-# Comments and blank lines ignored.
-@pkg: org.finos.legend.pure.rust.generated
-@functions-class: PureFunctions          # optional override
-
-# Pure FQNs — one per line. Auto-dispatched by element kind:
-#   Function     → static method on the facade class
-#   Class        → Java interface (with property closure walked)
-#   Association  → both endpoint classes seeded
-meta::pure::metamodel::type::Class
-meta::pure::functions::math::plus_Integer_MANY__Integer_1_
-```
-
-The `.jpure` extension marks the file as a Pure-bindings manifest
-(distinct from a generic text file). The default M3 manifest covers
-the metamodel surface (`Class`, `GenericType`, `Function`,
-`Property`, `Multiplicity`, `Profile`, `Stereotype`, …) plus a few
-reflection helpers (`type()`, `genericType()`, `elementToPath()`,
-`pathToElement()`).
-
-### Cross-module composition (`@import:`)
-
-Downstream modules build on the M3 bindings without re-emitting
-them. Add `@import:` to your manifest pointing at another module's
-`.jpure` resource (which must be on your compile classpath via a
-`provided`-scope dependency):
-
-```
-# my-dsl.jpure — bindings for an example DSL on top of M3.
-@pkg: org.example.dsl.generated
-@import: pure-bindings/m3-bindings.jpure
-
-org::example::dsl::Mapping
-org::example::dsl::PropertyMapping
-```
-
-The processor recursively reads each imported manifest, builds a
-Pure-FQN → Java-FQN map, and the codegen routes references to those
-types at the imported Java FQN (e.g. references to
-`meta::pure::metamodel::PackageableElement` resolve to
-`org.finos.legend.pure.rust.generated.PackageableElement`) instead
-of re-emitting them locally.
-
-To add more Pure surface to the bindings, append FQNs to the manifest
-and re-run `mvn compile`. To skip generation entirely (e.g. on a host
-without a built cdylib), pass `-Dmaven.compiler.proc=none`.
-
-### Why the cdylib at compile time?
-
-The annotation processor reuses the **same Rust codegen library** the
-`legend java-bindings` CLI calls into, by loading
-`libpure_rust_jni.{dylib,so,dll}` and invoking a JNI shim. That keeps
-the codegen logic single-sourced in the Rust crate (where its 16-test
-suite covers the emission rules) instead of forcing a parallel Java
-port.
-
-For local development that means the cdylib must already be built
-*before* `mvn compile`:
+## Build and test
 
 ```bash
-cargo build -p legend-pure-parser-jni
+cd legend-pure-rust && cargo build --workspace          # produces target/debug/libpure_rust_jni.{dylib,so,dll}
+cd .. && JAVA_HOME=$(/usr/libexec/java_home -v 17) \
+  mvn test -pl legend-pure-runtime/legend-pure-runtime-rust-evaluator -Dcheckstyle.skip=true
 ```
 
-The pom defaults `legend.cdylib.path` to
-`${project.basedir}/../../legend-pure-rust/target/debug/libpure_rust_jni<EXT>`
-where `<EXT>` is filled in by an OS-detection profile (`.dylib` on
-macOS, `.so` on Linux, `.dll` on Windows). Override with
-`-Dlegend.cdylib.path=…` if you've built the cdylib elsewhere or
-cross-compiled it for a different target arch.
+Surefire passes the library directory to the tests as the system property
+`legend.pure.rust.libdir`; without it `PureRustEvaluator` falls back to
+`System.loadLibrary("pure_rust_jni")`. When the library is absent the module's
+tests are skipped (profile `rust-cdylib-missing-*`), so `mvn install` stays green on
+hosts and CI without a Rust toolchain. Override with `-DskipTests=false` to force a run.
 
-> **Note.** The current build expects the developer host to ship its
-> own cdylib. A future phase will bundle pre-built `.dylib` / `.so` /
-> `.dll` for the common arch matrix into the AP JAR (under
-> `META-INF/native/<os>-<arch>/`) and extract them automatically via a
-> `NativeLibraryLoader` so downstream Java consumers no longer need a
-> Rust toolchain.
-
-### Type mapping summary
-
-| Pure                         | Java                                  |
-| ---------------------------- | ------------------------------------- |
-| `Boolean`                    | `Boolean`                             |
-| `Integer`                    | `Long`                                |
-| `Float`                      | `Double`                              |
-| `Decimal`                    | `java.math.BigDecimal`                |
-| `Number`                     | `Number`                              |
-| `String`                     | `String`                              |
-| `StrictDate`, `LatestDate`   | `java.time.LocalDate`                 |
-| `DateTime`                   | `java.time.OffsetDateTime` (UTC)      |
-| `StrictTime`                 | `java.time.OffsetTime` (UTC)          |
-| `Date` (abstract supertype)  | `java.time.temporal.Temporal`         |
-| `Any`, `Nil`                 | `Object`                              |
-| user `Class`                 | generated interface                   |
-| user `Enumeration`           | generated `enum`                      |
-| `Function<{…}>` / Relation   | rejected by codegen (deferred to v2)  |
-
-### Multiplicity rules
-
-| Pure         | Java                       | Default body for hand-written impls |
-| ------------ | -------------------------- | ----------------------------------- |
-| `[1]`        | `T`                        | abstract — user must supply         |
-| `[0..1]`     | `java.util.Optional<T>`    | `Optional.empty()`                  |
-| `[*]`, `[1..*]`, `[m..n]` | `Iterable<T>`  | `Collections.emptyList()`           |
-
-Generated proxies always route through `PureInvocationHandler`, so the
-default bodies are never invoked for proxies — they exist solely to make
-hand-written `implements` of an interface easier to write.
-
-## Materialising user implementations
-
-`PureProxyFactory.create(userImpl, iface, eval)` walks every 0-arg
-property method on `iface`, invokes it on `userImpl`, recursively
-materialises any nested `PureRegistered` values that aren't already
-proxies, and calls `nativeNew` on the JNI side to allocate a fresh
-dynamic heap object with those properties. The returned proxy reads
-back through the heap, so any subsequent `getProperty(...)` calls go
-through the runtime — including from generated qualified properties.
-
-Cycle / sharing detection is handled by an `IdentityHashMap` keyed by
-user-object identity, so a self-referencing or shared graph
-(`bob.spouse = alice; alice.spouse = bob`) materialises into a single
-heap pair instead of looping.
-
-Qualified properties (methods with parameters) are skipped — their
-semantics is computed, not stored. Override them in the proxy chain by
-supplying a different evaluator, or by re-materialising via a derived
-interface that doesn't declare them.
-
-## Build prerequisites
-
-| Tool       | Required version | Notes                                              |
-| ---------- | ---------------- | -------------------------------------------------- |
-| JDK        | 11 or 17         | Repo enforces via toolchains.                      |
-| Maven      | 3.6+             |                                                    |
-| Cargo / rustc | edition 2024  | The Rust workspace at `legend-pure-rust/` builds the JNI shared library `libpure_rust_jni.{dylib,so,dll}` and the `legend` CLI. |
-
-`mvn compile` from this module:
-
-1. Triggers `PureBindingsProcessor` (annotation-processor-paths)
-   inside javac. The processor `System.load`s the cdylib via
-   `-Apure.cdylib.path`, calls into the Rust codegen, and emits each
-   produced source through `Filer.createSourceFile`.
-2. javac picks up the Filer-emitted sources from
-   `target/generated-sources/annotations/` (auto-registered) and
-   compiles them in the same round as the hand-written runtime
-   classes under `--release 11`.
-
-The shared library that `PureRustEvaluator` loads via
-`System.loadLibrary("pure_rust_jni")` must be on `java.library.path`
-when you actually *call* the evaluator at runtime. The AP also needs
-the cdylib at *compile* time (see above). The same artifact services
-both: build it once with `cargo build -p legend-pure-parser-jni` then
-either install onto `~/Library/Java/Extensions/` (macOS) and let
-`-Apure.cdylib.path` resolve to the workspace's `target/debug/`
-default, or pass `-Djava.library.path=…/legend-pure-rust/target/debug/`
-explicitly when you run the evaluator at runtime.
-
-## Tests
-
-JUnit 5 lives under `src/test/java/`. Run with the platform model on the
-classpath via the parent Maven build, or directly:
-
-```bash
-mvn -pl legend-pure-runtime/legend-pure-runtime-rust-evaluator test \
-    -Djava.library.path=…/legend-pure-rust/target/debug
-```
-
-The Rust-side codegen suite (`-p legend-pure-java-codegen`) carries a
-`javac --release 11` round-trip that compiles the generated set
-together with the runtime support classes; that test runs as part of
-`cargo test`.
-
-## See also
-
-- [`legend-pure-runtime-rust-evaluator-bindings-ap/`](../legend-pure-runtime-rust-evaluator-bindings-ap/)
-  — the annotation processor that drives codegen.
-- `legend-pure-rust/crates/java-codegen/` — the codegen library
-  (single source of truth, called by both the AP and the
-  `legend java-bindings` developer CLI).
-- `legend-pure-rust/crates/jni/` — the Rust side of this bridge,
-  including the `nativeGenerateBindings` JNI export.
-- `legend-pure-rust/BACKLOG.md` — open follow-ups (function-typed
-  parameters, generic type-arg propagation, streaming `[*]` returns,
-  full live-evaluator JUnit round-trip, multi-platform cdylib
-  bundling).
+The bindings annotation processor module (`…-bindings-ap`) is out of the reactor:
+its generator is the archived Rust `java-codegen` crate. It returns with typed proxies.

@@ -34,6 +34,14 @@ public class PureRustEvaluationException extends PureRustException
         EXECUTION_ERROR,
         ASSERTION_FAILED,
         CONSTRAINT_VIOLATION,
+        /**
+         * The function path or mangled native key is unknown to the Rust side.
+         */
+        FUNCTION_NOT_FOUND,
+        /**
+         * A language feature or value kind whose runtime is not available yet.
+         */
+        UNSUPPORTED,
     }
 
     public enum ConstraintKind
@@ -97,6 +105,17 @@ public class PureRustEvaluationException extends PureRustException
         this.constraintId = constraintId;
         this.constraintKind = parseConstraintKind(constraintKindStr);
         this.ownerFqn = ownerFqn;
+    }
+
+    /**
+     * A failure of kind {@link Kind#UNSUPPORTED} raised on the Java side.
+     *
+     * @param what the unsupported thing, completing "Unsupported: ..."
+     * @return the exception to throw
+     */
+    public static PureRustEvaluationException unsupported(String what)
+    {
+        return new PureRustEvaluationException("Unsupported: " + what, Kind.UNSUPPORTED.name(), null, null, null, null, null);
     }
 
     public Kind getKind()

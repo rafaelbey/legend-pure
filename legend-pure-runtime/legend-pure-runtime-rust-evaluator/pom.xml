@@ -32,114 +32,97 @@
         <maven.compiler.source>11</maven.compiler.source>
         <maven.compiler.target>11</maven.compiler.target>
         <!--
-            Absolute path to the libpure_rust_jni cdylib that the
-            annotation processor System.loads at compile time. Defaults
-            to the developer-host build under the workspace's debug dir.
-            The legend.cdylib.ext property is supplied by the OS-detection
-            profiles below; build with cargo build -p legend-pure-parser-jni
-            before mvn compile.
+            Directory holding the libpure_rust_jni cdylib produced by
+            cargo build (whole workspace) in legend-pure-rust/. Tests receive it
+            as the system property legend.pure.rust.libdir; when the library
+            is absent the profiles below skip this module's tests so the
+            reactor stays green on hosts and CI without a Rust toolchain.
         -->
-        <legend.cdylib.path>${project.basedir}/../../legend-pure-rust/target/debug/libpure_rust_jni${legend.cdylib.ext}</legend.cdylib.path>
+        <legend.rust.libdir>${project.basedir}/../../legend-pure-rust/target/debug</legend.rust.libdir>
     </properties>
 
     <profiles>
+        <!--
+            Activation ANDs the OS family with the absence of the platform
+            library name (${basedir} interpolates in activation,
+            ${project.basedir} does not). The property is the standard
+            `skipTests`, so a command-line -DskipTests=false still wins.
+        -->
         <profile>
-            <id>os-mac</id>
+            <id>rust-cdylib-missing-mac</id>
             <activation>
                 <os>
                     <family>mac</family>
                 </os>
+                <file>
+                    <missing>${basedir}/../../legend-pure-rust/target/debug/libpure_rust_jni.dylib</missing>
+                </file>
             </activation>
             <properties>
-                <legend.cdylib.ext>.dylib</legend.cdylib.ext>
+                <skipTests>true</skipTests>
             </properties>
         </profile>
         <profile>
-            <id>os-linux</id>
+            <id>rust-cdylib-missing-linux</id>
             <activation>
                 <os>
                     <family>unix</family>
                     <name>Linux</name>
                 </os>
+                <file>
+                    <missing>${basedir}/../../legend-pure-rust/target/debug/libpure_rust_jni.so</missing>
+                </file>
             </activation>
             <properties>
-                <legend.cdylib.ext>.so</legend.cdylib.ext>
+                <skipTests>true</skipTests>
             </properties>
         </profile>
         <profile>
-            <id>os-win</id>
+            <id>rust-cdylib-missing-windows</id>
             <activation>
                 <os>
                     <family>windows</family>
                 </os>
+                <file>
+                    <missing>${basedir}/../../legend-pure-rust/target/debug/pure_rust_jni.dll</missing>
+                </file>
             </activation>
             <properties>
-                <legend.cdylib.ext>.dll</legend.cdylib.ext>
+                <skipTests>true</skipTests>
             </properties>
         </profile>
     </profiles>
 
     <dependencies>
         <dependency>
+            <groupId>org.finos.legend.pure</groupId>
+            <artifactId>legend-pure-m4</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.finos.legend.pure</groupId>
+            <artifactId>legend-pure-m3-core</artifactId>
+        </dependency>
+        <dependency>
             <groupId>org.eclipse.collections</groupId>
             <artifactId>eclipse-collections-api</artifactId>
         </dependency>
         <dependency>
-            <groupId>org.eclipse.collections</groupId>
-            <artifactId>eclipse-collections</artifactId>
-        </dependency>
-        <!--
-            The annotation processor JAR carries the @PureBindings
-            annotation that M3Bootstrap imports. We need the API at
-            compile time but not at runtime: scope=provided keeps it
-            off this module's transitive classpath and out of the
-            runtime artifact.
-        -->
-        <dependency>
-            <groupId>${project.groupId}</groupId>
-            <artifactId>legend-pure-runtime-rust-evaluator-bindings-ap</artifactId>
-            <version>${project.version}</version>
-            <scope>provided</scope>
-        </dependency>
-        <dependency>
-            <groupId>org.junit.jupiter</groupId>
-            <artifactId>junit-jupiter-api</artifactId>
-            <version>5.11.3</version>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>org.junit.jupiter</groupId>
-            <artifactId>junit-jupiter</artifactId>
-            <version>5.11.3</version>
+            <groupId>junit</groupId>
+            <artifactId>junit</artifactId>
             <scope>test</scope>
         </dependency>
     </dependencies>
 
     <build>
         <plugins>
-            <!--
-                Java bindings are generated by an annotation processor
-                that loads libpure_rust_jni and calls into the Rust
-                java-codegen crate. The processor JAR is on
-                annotationProcessorPaths only — not on the runtime
-                classpath of this module. To skip generation entirely
-                (e.g. on a host without a built cdylib), pass
-                -Dmaven.compiler.proc=none.
-            -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-compiler-plugin</artifactId>
+                <artifactId>maven-surefire-plugin</artifactId>
                 <configuration>
-                    <annotationProcessorPaths>
-                        <path>
-                            <groupId>${project.groupId}</groupId>
-                            <artifactId>legend-pure-runtime-rust-evaluator-bindings-ap</artifactId>
-                            <version>${project.version}</version>
-                        </path>
-                    </annotationProcessorPaths>
-                    <compilerArgs>
-                        <arg>-Apure.cdylib.path=${legend.cdylib.path}</arg>
-                    </compilerArgs>
+                    <systemPropertyVariables>
+                        <legend.pure.rust.libdir>${legend.rust.libdir}</legend.pure.rust.libdir>
+                        <legend.pct.rust.reportDir>${project.build.directory}/pct-rust</legend.pct.rust.reportDir>
+                    </systemPropertyVariables>
                 </configuration>
             </plugin>
         </plugins>

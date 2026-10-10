@@ -12,296 +12,224 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::cell::RefCell;
-use std::collections::HashMap;
+//! The evaluator session behind one Java `PureRustEvaluator`.
 
+use std::rc::Rc;
+
+use im_rc::Vector as PVector;
+use legend_pure_evaluator::error::{PureException, PureRuntimeError};
 use legend_pure_evaluator::eval::Evaluator;
 use legend_pure_evaluator::heap::{HeapEntry, ObjectHandle};
 use legend_pure_evaluator::native::NativeRegistry;
 use legend_pure_evaluator::value::Value;
 use legend_pure_metamodel::model::PureModel;
-use slotmap::{SlotMap, new_key_type};
+use smol_str::SmolStr;
 
-new_key_type! {
-    /// Stable opaque handle exposed across the JNI boundary.
-    ///
-    /// `JniHandle::data().as_ffi()` is an `i64` Java holds; the table
-    /// maps it back to the strong [`ObjectHandle`] that keeps the
-    /// underlying `Rc<RefCell<HeapEntry>>` alive while Java retains
-    /// the integer.
-    pub struct JniHandle;
+use crate::bridge::{BridgeShared, JniHandleTable};
+use crate::java_node::JavaNode;
+
+/// Classifier of a `.par` native-function node: the only Java function
+/// shape that is callable before any lowering exists.
+const NATIVE_FUNCTION: &str = "meta::pure::metamodel::function::NativeFunction";
+
+fn ffi_error(message: String) -> PureException {
+    PureException::execution(
+        PureRuntimeError::EvaluationError(message),
+        legend_pure_metamodel::source_info::SourceInfo::new("<ffi>", 0, 0, 0, 0),
+        Vec::new(),
+    )
 }
 
-/// Pure-side bookkeeping for objects exposed to Java.
-///
-/// `Rc<RefCell<HeapEntry>>` has no integer form and no stable address
-/// (the `Rc` may drop), so the JNI cannot hand its raw representation
-/// to Java directly. Instead, every Pure→Java emission registers the
-/// handle here and returns a [`JniHandle`] (encoded as `i64`); every
-/// Java→Pure callback resolves the integer back to the retained
-/// `ObjectHandle`.
-///
-/// Java code drops references explicitly via [`Self::release`]; without
-/// that call the entry leaks for the [`JniContext`]'s lifetime — same
-/// as the pre-Rc heap behaviour, where slotmap rows lived for the
-/// evaluator's lifetime. Wiring Java's `AutoCloseable`/finalizer to
-/// `release` is a follow-up.
-pub struct JniHandleTable {
-    live: SlotMap<JniHandle, ObjectHandle>,
-    /// Reverse index keyed by the Rc's pointer address, so emitting the
-    /// same metamodel handle twice (e.g. `Class.all().each(c | c.name)`)
-    /// returns the same `JniHandle` instead of growing the table.
-    by_ptr: HashMap<*const RefCell<HeapEntry>, JniHandle>,
-}
-
-impl JniHandleTable {
-    pub fn new() -> Self {
-        Self {
-            live: SlotMap::with_key(),
-            by_ptr: HashMap::new(),
-        }
-    }
-
-    /// Register a handle and return its stable `JniHandle`. Idempotent —
-    /// the same `Rc` pointer always maps to the same `JniHandle`.
-    pub fn register(&mut self, handle: ObjectHandle) -> JniHandle {
-        let key_ptr = std::rc::Rc::as_ptr(&handle);
-        if let Some(&existing) = self.by_ptr.get(&key_ptr) {
-            return existing;
-        }
-        let h = self.live.insert(handle);
-        self.by_ptr.insert(key_ptr, h);
-        h
-    }
-
-    /// Look up the [`ObjectHandle`] for a `JniHandle`. Returns `None` if
-    /// the entry was released or never registered.
-    pub fn lookup(&self, h: JniHandle) -> Option<&ObjectHandle> {
-        self.live.get(h)
-    }
-
-    /// Drop the strong reference for `h`. After this call, Java should
-    /// not reuse the integer; future `lookup` returns `None`.
-    ///
-    /// Currently unused inside Rust — Java is the consumer (via the
-    /// public FFI surface on [`JniContext::release`]). The plan's
-    /// follow-up item is to wire Java's `AutoCloseable` to call this.
-    /// Number of live entries.
-    #[must_use]
-    pub fn live_count(&self) -> usize {
-        self.live.len()
-    }
-
-    pub fn release(&mut self, h: JniHandle) {
-        if let Some(handle) = self.live.remove(h) {
-            self.by_ptr.remove(&std::rc::Rc::as_ptr(&handle));
-        }
-    }
-
-    /// Encode a `JniHandle` as the `i64` Java holds.
-    ///
-    /// The reinterpret-cast keeps the bit pattern; Java treats it as an
-    /// opaque token, so sign-bit reinterpretation is harmless.
-    #[allow(clippy::cast_possible_wrap)]
-    #[must_use]
-    pub fn to_i64(h: JniHandle) -> i64 {
-        slotmap::Key::data(&h).as_ffi() as i64
-    }
-
-    /// Decode an `i64` from Java back into a `JniHandle`.
-    ///
-    /// Inverse of [`Self::to_i64`] — same bit-pattern reinterpretation.
-    #[allow(clippy::cast_sign_loss)]
-    #[must_use]
-    pub fn from_i64(v: i64) -> JniHandle {
-        let kd = slotmap::KeyData::from_ffi(v as u64);
-        JniHandle::from(kd)
-    }
-}
-
-impl Default for JniHandleTable {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
+/// Model, registry and evaluator behind raw pointers (freed in `Drop`),
+/// plus the state shared with every Java-backed node.
 pub struct JniContext {
     model: *mut PureModel,
     registry: *mut NativeRegistry,
     evaluator: *mut Evaluator<'static>,
-    /// Strong-Rc table keyed by the integer Java holds.
-    pub handles: RefCell<JniHandleTable>,
+    /// Shared with every [`JavaNode`].
+    pub shared: Rc<BridgeShared>,
 }
 
 impl JniContext {
-    /// Box the model, the registry and an evaluator over both; the raw
-    /// pointers are freed in `Drop`. One root scope is pushed on the
-    /// variable context so `letFunction` has somewhere to bind: a Java
-    /// session is one scope, and bindings persist across `evaluate` calls.
-    pub fn new(model: PureModel, registry: NativeRegistry) -> Self {
+    /// Box the model and registry, build an evaluator over both, and wire
+    /// the bridge state. The evaluator starts with no scope: every
+    /// [`start`](Self::start) pushes and pops its own, as one execution.
+    pub fn new(
+        model: PureModel,
+        registry: NativeRegistry,
+        vm: jni::JavaVM,
+        bridge: jni::objects::GlobalRef,
+        methods: crate::bridge::BridgeMethods,
+    ) -> Self {
         let model_ptr = Box::into_raw(Box::new(model));
         let registry_ptr = Box::into_raw(Box::new(registry));
-        let mut evaluator = Evaluator::new(unsafe { &*model_ptr }, unsafe { &*registry_ptr });
-        evaluator.context_mut().push_scope();
+        let evaluator = Evaluator::new(unsafe { &*model_ptr }, unsafe { &*registry_ptr });
         let evaluator_ptr = Box::into_raw(Box::new(evaluator)).cast::<Evaluator<'static>>();
-
+        let shared = Rc::new(BridgeShared {
+            vm,
+            bridge,
+            methods,
+            model: model_ptr.cast_const(),
+            java_nodes: std::cell::RefCell::new(std::collections::HashMap::new()),
+            handles: std::cell::RefCell::new(JniHandleTable::new()),
+            last_error: std::cell::RefCell::new(None),
+        });
         Self {
             model: model_ptr,
             registry: registry_ptr,
             evaluator: evaluator_ptr,
-            handles: RefCell::new(JniHandleTable::new()),
+            shared,
         }
     }
 
-    /// Handles the JNI table currently keeps alive.
-    #[must_use]
-    pub fn live_handle_count(&self) -> usize {
-        self.handles.borrow().live_count()
+    fn evaluator(&mut self) -> &mut Evaluator<'static> {
+        unsafe { &mut *self.evaluator }
     }
 
-    /// Evaluate a function by path with already-marshalled arguments.
+    /// Run a function with already-crossed arguments, one scope per call.
     ///
-    /// Resolution order: a model element (`my::pkg::f` or its mangled
-    /// form) applied through `apply_callable`; else an exact native
-    /// registry key (`plus_Number_MANY__Number_1_`) through
-    /// [`Evaluator::call`], which reports `FunctionNotFound` on a miss.
-    /// There is no prefix fallback, so a missing model path can never be
-    /// masked by a native with the same simple name.
-    pub fn evaluate(
-        &mut self,
-        function_path: &str,
-        args: &[Value],
-    ) -> Result<Value, legend_pure_evaluator::error::PureException> {
+    /// A model element runs through `apply_callable`; a Java `NativeFunction`
+    /// node whose name is a registered key runs through `call_native`;
+    /// anything else is `FunctionNotFound` with the node's user path.
+    ///
+    /// # Errors
+    /// Whatever the evaluator raises, or a failure recorded while a Java
+    /// node was read.
+    pub fn start(&mut self, function: &Value, args: &[Value]) -> Result<Value, PureException> {
         let evaluator = unsafe { &mut *self.evaluator };
-        let segments: Vec<smol_str::SmolStr> = function_path
-            .split("::")
-            .map(smol_str::SmolStr::new)
-            .collect();
-        let element_id = evaluator
-            .model()
-            .resolve_function_by_path(&segments)
-            .or_else(|| evaluator.model().resolve_by_path(&segments));
-        match element_id {
-            Some(id) => evaluator.apply_callable(&Value::Element(id), args),
-            None => evaluator.call(function_path, args),
-        }
-    }
-
-    /// Emit a Pure object to Java. Registers `handle` in the table and
-    /// returns the encoded `i64` Java should pass back on subsequent
-    /// callbacks.
-    pub fn emit_handle(&self, handle: ObjectHandle) -> i64 {
-        let jh = self.handles.borrow_mut().register(handle);
-        JniHandleTable::to_i64(jh)
-    }
-
-    /// Resolve a Java-supplied `i64` back to the strong `ObjectHandle`.
-    fn resolve_i64(&self, raw: i64) -> Option<ObjectHandle> {
-        let jh = JniHandleTable::from_i64(raw);
-        self.handles.borrow().lookup(jh).cloned()
-    }
-
-    pub fn get_property(
-        &mut self,
-        complex_ptr: i64,
-        property_name: &str,
-        _args: &[Value],
-    ) -> Result<Value, legend_pure_evaluator::error::PureException> {
-        use legend_pure_evaluator::error::{PureException, PureRuntimeError};
-        let ffi_err = |msg: String| {
-            PureException::execution(
-                PureRuntimeError::EvaluationError(msg),
-                legend_pure_metamodel::source_info::SourceInfo::new("<ffi>", 0, 0, 0, 0),
-                Vec::new(),
-            )
+        evaluator.context_mut().push_scope();
+        let result = match function {
+            Value::Element(_) => evaluator.apply_callable(function, args),
+            Value::Object(handle) => match java_function(handle) {
+                Some((classifier, name, _)) if classifier == NATIVE_FUNCTION => {
+                    evaluator.call_native(&name, args)
+                }
+                Some((_, _, user_path)) => Err(PureException::from(
+                    PureRuntimeError::FunctionNotFound(user_path),
+                )),
+                None => Err(ffi_error("start: the function is not a graph node".into())),
+            },
+            other => Err(ffi_error(format!(
+                "start: expected a function node, got {other:?}"
+            ))),
         };
-        let handle = self
-            .resolve_i64(complex_ptr)
-            .ok_or_else(|| ffi_err(format!("Stale or unknown JNI handle: {complex_ptr}")))?;
-        let evaluator = unsafe { &mut *self.evaluator };
-
-        let values = evaluator
-            .heap()
-            .get_property_values(&handle, property_name)
-            .map_err(|e| ffi_err(e.to_string()))?;
-        if values.is_empty() {
-            return Err(ffi_err(format!("Property '{property_name}' not found")));
+        evaluator.context_mut().pop_scope();
+        if let Some(message) = self.shared.take_error() {
+            return Err(ffi_error(message));
         }
-        let collected: Vec<Value> = values.iter().cloned().collect();
-        Ok(Value::from_vec(collected))
+        result
     }
 
-    /// Allocate a new dynamic heap object with the given classifier and
-    /// seed it with the supplied properties. Returns the encoded `i64`
-    /// instance pointer Java should treat as opaque.
+    fn resolve_i64(&self, raw: i64) -> Option<ObjectHandle> {
+        self.shared
+            .handles
+            .borrow()
+            .lookup(JniHandleTable::from_i64(raw))
+            .cloned()
+    }
+
+    fn stale(raw: i64) -> PureException {
+        ffi_error(format!("Stale or unknown JNI handle: {raw}"))
+    }
+
+    /// Every value of a property of a Rust object held for Java; empty when
+    /// the property is unset (re-wrapping reads optional slots on every
+    /// value, so an absent property is not an error).
     ///
-    /// Java passes properties as parallel `(name, value)` arrays; each
-    /// `value` is a Pure-side `Value` — already a flat `Value::Object`
-    /// for instances, a primitive, or a `Value::Collection` for
-    /// `[*]`-cardinality fields. We unpack the latter so `mutate_set`
-    /// stores the flat list.
+    /// # Errors
+    /// Stale handle.
+    pub fn get_property_values(
+        &mut self,
+        raw: i64,
+        name: &str,
+    ) -> Result<PVector<Value>, PureException> {
+        let handle = self.resolve_i64(raw).ok_or_else(|| Self::stale(raw))?;
+        let values = self
+            .evaluator()
+            .heap()
+            .get_property_values(&handle, name)
+            .map_err(PureException::from)?;
+        if let Some(message) = self.shared.take_error() {
+            return Err(ffi_error(message));
+        }
+        Ok(values)
+    }
+
+    /// Property names of a Rust object held for Java.
+    ///
+    /// # Errors
+    /// Stale handle.
+    pub fn property_names(&mut self, raw: i64) -> Result<Vec<SmolStr>, PureException> {
+        let handle = self.resolve_i64(raw).ok_or_else(|| Self::stale(raw))?;
+        self.evaluator()
+            .heap()
+            .property_names(&handle)
+            .map_err(PureException::from)
+    }
+
+    /// Classifier user path of a Rust object held for Java.
+    ///
+    /// # Errors
+    /// Stale handle.
+    pub fn get_classifier(&mut self, raw: i64) -> Result<String, PureException> {
+        let handle = self.resolve_i64(raw).ok_or_else(|| Self::stale(raw))?;
+        self.evaluator()
+            .heap()
+            .classifier(&handle)
+            .map(|s| s.to_string())
+            .map_err(PureException::from)
+    }
+
+    /// Allocate a dynamic object with the given property values and hand
+    /// Java its handle.
+    ///
+    /// # Errors
+    /// A property the heap refuses.
     pub fn new_object(
         &mut self,
-        classifier_fqn: &str,
-        properties: &[(String, Value)],
-    ) -> Result<i64, String> {
-        let evaluator = unsafe { &mut *self.evaluator };
-        let handle = evaluator.heap_mut().alloc_dynamic(classifier_fqn);
-        for (name, value) in properties {
-            let values = match value {
-                Value::Unit => Vec::new(),
-                Value::Collection(pv) => pv.iter().cloned().collect::<Vec<_>>(),
-                v => vec![v.clone()],
-            };
+        classifier: &str,
+        properties: &[(String, Vec<Value>)],
+    ) -> Result<i64, PureException> {
+        let handle = self.evaluator().heap_mut().alloc_dynamic(classifier);
+        for (name, values) in properties {
             handle
                 .borrow_mut()
-                .mutate_set(name, &values)
-                .map_err(|e| format!("setting `{name}` on `{classifier_fqn}`: {e}"))?;
+                .mutate_set(name, values)
+                .map_err(PureException::from)?;
         }
         Ok(self.emit_handle(handle))
     }
 
-    pub fn get_classifier(&mut self, complex_ptr: i64) -> Result<String, String> {
-        let handle = self
-            .resolve_i64(complex_ptr)
-            .ok_or_else(|| format!("Stale or unknown JNI handle: {complex_ptr}"))?;
-        let evaluator = unsafe { &mut *self.evaluator };
-
-        let classifier = evaluator
-            .heap()
-            .classifier(&handle)
-            .map_err(|e| e.to_string())?;
-        Ok(classifier.to_string())
+    /// Register a Rust object for Java and return its id.
+    pub fn emit_handle(&self, handle: ObjectHandle) -> i64 {
+        JniHandleTable::to_i64(self.shared.handles.borrow_mut().register(handle))
     }
 
-    /// Look up the metamodel handle for a compiled element and emit it
-    /// as a JNI integer.
-    pub fn object_for_element(
-        &self,
-        element_id: legend_pure_metamodel::ids::ElementId,
-    ) -> Option<i64> {
-        let evaluator = unsafe { &*self.evaluator };
-        evaluator
-            .heap()
-            .object_for_element(element_id)
-            .map(|h| self.emit_handle(h))
+    /// Drop the strong reference Java held for `raw`. Idempotent.
+    pub fn release(&self, raw: i64) {
+        self.shared
+            .handles
+            .borrow_mut()
+            .release(JniHandleTable::from_i64(raw));
     }
 
-    /// Reverse-lookup: resolve a Java `i64` back to its compiled
-    /// `ElementId`, if any.
-    pub fn element_for_object(
-        &self,
-        complex_ptr: i64,
-    ) -> Option<legend_pure_metamodel::ids::ElementId> {
-        let handle = self.resolve_i64(complex_ptr)?;
-        legend_pure_evaluator::heap::RuntimeHeap::element_for_object(&handle)
+    /// Live handles in both directions.
+    #[must_use]
+    pub fn live_handle_count(&self) -> usize {
+        self.shared.live_count()
     }
+}
 
-    /// Drop the JNI table's strong reference for `complex_ptr`. Idempotent
-    /// — re-releasing a handle is a no-op.
-    pub fn release(&self, complex_ptr: i64) {
-        let jh = JniHandleTable::from_i64(complex_ptr);
-        self.handles.borrow_mut().release(jh);
+/// `(classifier, name, user path)` of a Java-backed node, or `None` when
+/// the handle is not one. The user path falls back to the name.
+fn java_function(handle: &ObjectHandle) -> Option<(SmolStr, SmolStr, SmolStr)> {
+    match &*handle.borrow() {
+        HeapEntry::Typed(obj) => obj.as_any().downcast_ref::<JavaNode>().map(|n| {
+            let name = n.name.clone().unwrap_or_default();
+            let path = n.user_path.clone().unwrap_or_else(|| name.clone());
+            (n.classifier.clone(), name, path)
+        }),
+        HeapEntry::Dynamic(_) => None,
     }
 }
 
