@@ -39,8 +39,6 @@
             reactor stays green on hosts and CI without a Rust toolchain.
         -->
         <legend.rust.libdir>${project.basedir}/../../legend-pure-rust/target/debug</legend.rust.libdir>
-        <!-- -Dlegend.pct.rust.rebase=true rewrites the committed PCT manifests from the run -->
-        <legend.pct.rust.rebase>false</legend.pct.rust.rebase>
     </properties>
 
     <profiles>
@@ -108,14 +106,10 @@
             <groupId>org.eclipse.collections</groupId>
             <artifactId>eclipse-collections-api</artifactId>
         </dependency>
-        <!-- compile scope: PureTestBuilderRust builds JUnit 3 suites from main sources, as the interpreted module does -->
         <dependency>
             <groupId>junit</groupId>
             <artifactId>junit</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>com.fasterxml.jackson.core</groupId>
-            <artifactId>jackson-databind</artifactId>
+            <scope>test</scope>
         </dependency>
     </dependencies>
 
@@ -128,8 +122,6 @@
                     <systemPropertyVariables>
                         <legend.pure.rust.libdir>${legend.rust.libdir}</legend.pure.rust.libdir>
                         <legend.pct.rust.reportDir>${project.build.directory}/pct-rust</legend.pct.rust.reportDir>
-                        <legend.pct.rust.manifestDir>${project.basedir}/src/test/resources/pct-rust</legend.pct.rust.manifestDir>
-                        <legend.pct.rust.rebase>${legend.pct.rust.rebase}</legend.pct.rust.rebase>
                     </systemPropertyVariables>
                 </configuration>
             </plugin>
