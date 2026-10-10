@@ -32,6 +32,10 @@ use crate::java_node::JavaNode;
 /// shape that is callable before any lowering exists.
 const NATIVE_FUNCTION: &str = "meta::pure::metamodel::function::NativeFunction";
 
+/// Classifier of a Java lambda: lowering it through the bridge is Step 3,
+/// so until then it is refused as unsupported rather than "not found".
+const LAMBDA_FUNCTION: &str = legend_pure_evaluator::m3_paths::LAMBDA_FUNCTION;
+
 fn ffi_error(message: String) -> PureException {
     PureException::execution(
         PureRuntimeError::EvaluationError(message),
@@ -89,7 +93,8 @@ impl JniContext {
     /// Run a function with already-crossed arguments, one scope per call.
     ///
     /// A model element runs through `apply_callable`; a Java `NativeFunction`
-    /// node whose name is a registered key runs through `call_native`;
+    /// node whose name is a registered key runs through `call_native`; a Java
+    /// `LambdaFunction` is `Unsupported` until the bridge can lower it;
     /// anything else is `FunctionNotFound` with the node's user path.
     ///
     /// # Errors
@@ -103,6 +108,11 @@ impl JniContext {
             Value::Object(handle) => match java_function(handle) {
                 Some((classifier, name, _)) if classifier == NATIVE_FUNCTION => {
                     evaluator.call_native(&name, args)
+                }
+                Some((classifier, _, _)) if classifier == LAMBDA_FUNCTION => {
+                    Err(PureException::from(PureRuntimeError::Unsupported(
+                        "evaluating a Java LambdaFunction through the bridge",
+                    )))
                 }
                 Some((_, _, user_path)) => Err(PureException::from(
                     PureRuntimeError::FunctionNotFound(user_path),
