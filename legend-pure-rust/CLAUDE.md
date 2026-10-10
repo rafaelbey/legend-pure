@@ -36,6 +36,29 @@ RUSTDOCFLAGS=-Dwarnings cargo doc --workspace --no-deps
 
 CI (`.github/workflows/rust.yml` at the repository root) runs exactly these.
 
+## PCT through the Java harness (Step 2)
+
+The platform PCT corpus runs through the Rust evaluator as the `Rust_JNI`
+adapter of the interpreted Java engine: the test's lambda crosses the boundary
+as a `CoreInstance`, nothing else changes in the harness. The number each
+suite prints is the progress metric.
+
+```bash
+cargo build --workspace                                   # the cdylib the Java module loads
+cd .. && JAVA_HOME=$(/usr/libexec/java_home -v 17) \
+  mvn -pl legend-pure-runtime/legend-pure-runtime-rust-evaluator clean verify
+#   -> Rust_JNI essential: 0 / 327, Rust_JNI grammar: 0 / 136 (plus 9 boundary tests)
+# after a change that moves tests: regenerate the manifests, review the diff, verify again
+JAVA_HOME=$(/usr/libexec/java_home -v 17) \
+  mvn test -pl legend-pure-runtime/legend-pure-runtime-rust-evaluator \
+  -Dtest=RebaseRustJniManifests -DfailIfNoTests=false
+```
+
+The manifests under that module's `src/test/resources/platform/` are generated,
+never edited by hand. A lambda reaching `JniContext::start` is `Unsupported`
+until the lowering lands (plan, Step 2 "Next"). Root Maven installs on this
+machine need `clean` (the PAR plugin trips on a stale descriptor otherwise).
+
 ## The six rules (plan §0)
 
 1. Only the evaluator and the language metamodel it needs live here.

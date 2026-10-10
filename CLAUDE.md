@@ -24,20 +24,29 @@ from it, `platform/pure/grammar/m3.pure`, as its bootstrap.
 
 ## Current State (October 2026)
 
-### Rust Workspace — Evaluator MVP, Steps 0 and 1 done
-- Step 0 (extract the evaluator and its metamodel into a clean workspace) and Step 1
-  (the evaluator proven over the bootstrap with hand-built nodes; 25 native
-  signatures fished) are complete.
-- Step 2 (values across JNI and a PCT run that starts red) is next. Steps 2–7 are in
-  the plan.
+### Rust Workspace — Evaluator MVP, Steps 0–2 done
+- Step 0 (extract the evaluator and its metamodel into a clean workspace), Step 1
+  (the evaluator proven over the bootstrap with hand-built nodes; 26 native
+  signatures fished) and Step 2 (the JNI boundary with `CoreInstance` as the only
+  currency, and the platform PCT corpus running red through the `Rust_JNI` adapter)
+  are complete.
+- PCT state: `Rust_JNI essential: 0 / 327`, `Rust_JNI grammar: 0 / 136`; every test
+  is `Unsupported` until Java lambdas are lowered through the bridge, which is next
+  (plan, Step 2 "Next"). Steps 3–7 are in the plan.
 - Build and test: `cargo build --workspace`, `cargo test --workspace` inside
-  `legend-pure-rust/`. CI: `.github/workflows/rust.yml`.
+  `legend-pure-rust/`; then `mvn -pl legend-pure-runtime/legend-pure-runtime-rust-evaluator
+  clean verify` for the boundary tests and the PCT suites. CI: `.github/workflows/rust.yml`.
 
 ### Java Stack — Maintenance Mode
 - Stable. All tests pass. Used by FINOS `legend-engine` as a compiled dependency.
 - No active feature work in this repository.
-- The two `legend-pure-runtime-rust-evaluator*` modules are present but removed from
-  the Maven reactor until the plan's Step 2 re-adds them.
+- `legend-pure-runtime-rust-evaluator` is in the reactor (its tests skip when the Rust
+  cdylib is absent); `…-bindings-ap` stays out. The platform declares the native
+  `evalRust` and the `Rust_JNI` PCT adapter; the compiled engine implements `evalRust`
+  as a stub that throws at run time, the interpreted engine through the rust-evaluator
+  module's extension.
+- Root installs on this machine need `mvn clean install` (the PAR plugin trips on a
+  stale descriptor otherwise); JDK 17 via `JAVA_HOME`.
 
 ## Java Stack — Build & Test
 
