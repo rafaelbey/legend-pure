@@ -507,6 +507,38 @@ JAVA_HOME=$(/usr/libexec/java_home -v 17) \
   -Dtest=RebaseRustJniManifests -DfailIfNoTests=false
 ```
 
+**Deferred: the cost of the bridge (profile first, decided 2026-10-10).**
+Property fetches on a `JavaNode` are already lazy; what is eager is the
+per-value `NodeDescription`, read through about fifteen JNI field calls plus
+a string copy per text field, and the `getKeys()` array built for every
+node. Numbers cross as decimal text both ways, `RustNodeBridge.nodes` pins
+every described node until `close`, and every lazy read re-attaches the
+thread. None of it matters while tests stop at the lambda; once lowering
+walks whole bodies through `propertyValues`, profile the PCT run and pick
+from these, roughly in order of payoff per line:
+
+- *Columnar description*: `describe` / `propertyValues` return one `long[]`
+  (kind, id, classifier id, date components) plus a `String[]` of the
+  payloads that exist — two array reads per call instead of fifteen field
+  reads per value.
+- *Intern repeated strings*: classifier paths, property keys and element
+  paths get a small integer on the Java side, sent once; Rust mirrors the
+  table.
+- *Drop the eager keys array*: fetch `property_names` on demand.
+- *Reuse the live `JNIEnv`*: the evaluator runs inside the `nativeStart`
+  frame; a thread-local env removes the attach per read.
+- *Subtree prefetch for code, laziness for data*: lowering touches every
+  node of a body, so `describeSubtree(id)` returning the whole body in one
+  columnar payload (or a `byte[]` in the PELT element encoding, once Step 3
+  can decode it) beats per-value crossing; instances of user classes
+  (Steps 6–7) keep per-property laziness because a request touches few of
+  their properties.
+- *Cache element resolution*: `resolve_function_by_path` walks the model on
+  every packageable-element crossing.
+
+Not worth doing: deferring the classifier itself (dispatch asks for it at
+once).
+
 **Deviations from the plan as first written** (recorded, as rule 6 asks).
 The archived JNI crate's tagged-union marshalling was not fished:
 `CoreInstance` crosses instead, so every Pure type is covered without a second
