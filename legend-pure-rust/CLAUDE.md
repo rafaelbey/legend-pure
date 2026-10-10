@@ -9,12 +9,13 @@ the plan wins and this file gets fixed.
 
 ## What is here
 
-Two crates, nothing else:
+Three crates, nothing else:
 
 | Crate | Package | Holds |
 |---|---|---|
 | `crates/metamodel` | `legend-pure-metamodel` | Element tables (`PureModel`, `Element`, `nodes/`), the expression tree (`types::ValueSpec`, `types::ExprKind`), the M3 bootstrap (`bootstrap`, embeds `m3.pure` at compile time), function-name mangling (`fqn`). |
-| `crates/evaluator` | `legend-pure-evaluator` | Values, heap, variable context, dispatch (`eval`), the native registry (`native`, fished one at a time), hooks, builder. |
+| `crates/evaluator` | `legend-pure-evaluator` | Values, heap, variable context, dispatch (`eval`), the native registry (`native`, fished one at a time), hooks, builder, the `builders` test helpers. |
+| `crates/jni` | `legend-pure-jni` (cdylib `libpure_rust_jni`) | The JNI boundary behind the Java class `org.finos.legend.pure.rust.PureRustEvaluator` (Step 2): context, value marshalling, handle table, typed exceptions. Unsafe by nature; the only crate without `forbid(unsafe_code)`. |
 
 The previous Rust workspace (parser, compiler, LSP, DSL crates, CLI, binary
 snapshot format) is frozen at tag `archive/pre-evaluator-extract-2026-10` and
@@ -48,8 +49,9 @@ CI (`.github/workflows/rust.yml` at the repository root) runs exactly these.
    function. Plan Appendix A says where everything is.
 
 Allowed dependencies: `smol_str`, `thiserror`, `rust_decimal`, `im-rc`, `jiff`,
-`tracing`. `cargo tree --workspace -e normal --depth 1` must show nothing else,
-and `grep -rnE 'purem|pelt|legend_pure_parser|legend_pure_runtime|serde|linkme|postcard' crates/`
+`tracing`, and for the JNI crate only `jni`, `slotmap`. `cargo tree --workspace
+-e normal --depth 1` must show nothing else, and
+`grep -rnE 'purem|pelt|legend_pure_parser|legend_pure_runtime|serde|linkme|postcard|toml' crates/`
 must return nothing.
 
 ## Conventions
