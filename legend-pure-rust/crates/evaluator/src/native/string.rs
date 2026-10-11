@@ -947,6 +947,26 @@ impl NativeFunction for Replace {
     }
 }
 
+/// Pure `reverseString(String[1]): String[1]` — reverse the characters of
+/// a string. Reversal is per Unicode scalar (`char`), not per byte, so
+/// multi-byte characters are preserved intact.
+#[derive(Debug)]
+pub struct ReverseString;
+
+impl NativeFunction for ReverseString {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("reverseString", &values, 1)?;
+        let s = values[0].as_string()?;
+        let reversed: String = s.chars().rev().collect();
+        Ok(Evaluated::new(Value::String(SmolStr::new(reversed))))
+    }
+}
+
 fn i64_arg(v: &Value, ctx: &str) -> Result<i64, PureException> {
     match v {
         Value::Integer(n) => Ok(*n),
@@ -985,6 +1005,7 @@ pub fn register(registry: &mut NativeRegistry) {
     );
     registry.register("substring_String_1__Integer_1__String_1_", Substring);
     registry.register("replace_String_1__String_1__String_1__String_1_", Replace);
+    registry.register("reverseString_String_1__String_1_", ReverseString);
 }
 
 #[cfg(test)]
@@ -1264,6 +1285,53 @@ mod tests {
                 .execute(&[lit_str("a"), lit_str("b"), lit_int(1)], &mut MockCtx)
                 .is_err()
         );
+    }
+
+    // -- reverseString --
+
+    #[test]
+    fn reverse_string_ascii() {
+        assert_eq!(
+            ReverseString
+                .execute(&[lit_str("hello")], &mut MockCtx)
+                .unwrap()
+                .into_value(),
+            Value::String("olleh".into())
+        );
+    }
+
+    #[test]
+    fn reverse_string_empty() {
+        assert_eq!(
+            ReverseString
+                .execute(&[lit_str("")], &mut MockCtx)
+                .unwrap()
+                .into_value(),
+            Value::String("".into())
+        );
+    }
+
+    #[test]
+    fn reverse_string_unicode_preserves_codepoints() {
+        // "héllo" contains a 2-byte UTF-8 char; reversing per byte would
+        // produce invalid UTF-8. Reversing per char gives "olléh".
+        assert_eq!(
+            ReverseString
+                .execute(&[lit_str("héllo")], &mut MockCtx)
+                .unwrap()
+                .into_value(),
+            Value::String("olléh".into())
+        );
+    }
+
+    #[test]
+    fn reverse_string_wrong_arg_count() {
+        assert!(ReverseString.execute(&[], &mut MockCtx).is_err());
+    }
+
+    #[test]
+    fn reverse_string_type_mismatch() {
+        assert!(ReverseString.execute(&[lit_int(1)], &mut MockCtx).is_err());
     }
 
     // -- replace --

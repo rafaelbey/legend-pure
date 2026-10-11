@@ -66,6 +66,7 @@ const FISHED: &[&str] = &[
     "substring_String_1__Integer_1__Integer_1__String_1_",
     "substring_String_1__Integer_1__String_1_",
     "replace_String_1__String_1__String_1__String_1_",
+    "reverseString_String_1__String_1_",
     // testing
     "assert_Boolean_1__Function_1__Boolean_1_",
 ];
