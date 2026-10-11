@@ -730,6 +730,25 @@ impl NativeFunction for Filter {
     }
 }
 
+/// Pure `concatenate(Any[*], Any[*]): Any[*]` — concatenate two collections.
+#[derive(Debug)]
+pub struct Concatenate;
+
+impl NativeFunction for Concatenate {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("concatenate", &values, 2)?;
+        let mut a = values[0].to_collection();
+        let b = values[1].to_collection();
+        a.append(b);
+        Ok(Evaluated::new(Value::Collection(Box::new(a))))
+    }
+}
+
 /// Register the fished collection natives.
 pub fn register(registry: &mut NativeRegistry) {
     registry.register("fold_T_MANY__Function_1__V_m__V_m_", Fold);
@@ -759,6 +778,7 @@ pub fn register(registry: &mut NativeRegistry) {
     registry.register("toOne_T_MANY__T_1_", ToOne);
     registry.register("toOne_T_MANY__String_1__T_1_", ToOne);
     registry.register("filter_T_MANY__Function_1__T_MANY_", Filter);
+    registry.register("concatenate_T_MANY__T_MANY__T_MANY_", Concatenate);
 }
 
 #[cfg(test)]
@@ -1190,5 +1210,16 @@ mod tests {
     #[test]
     fn to_one_multi_errors() {
         assert!(ToOne.execute(&[int_spec(&[1, 2])], &mut MockCtx).is_err());
+    }
+
+    #[test]
+    fn concatenate_collections() {
+        assert_eq!(
+            Concatenate
+                .execute(&[int_spec(&[1, 2]), int_spec(&[3, 4])], &mut MockCtx)
+                .unwrap()
+                .into_value(),
+            int_collection(&[1, 2, 3, 4])
+        );
     }
 }

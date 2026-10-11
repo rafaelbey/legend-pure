@@ -48,6 +48,7 @@ const TO_ONE: &str = "toOne_T_MANY__T_1_";
 const TO_ONE_WITH_MESSAGE: &str = "toOne_T_MANY__String_1__T_1_";
 const FILTER: &str = "filter_T_MANY__Function_1__T_MANY_";
 const NOT: &str = "not_Boolean_1__Boolean_1_";
+const CONCATENATE: &str = "concatenate_T_MANY__T_MANY__T_MANY_";
 const TIMES: &str = "times_Number_MANY__Number_1_";
 const EQ: &str = "eq_Any_1__Any_1__Boolean_1_";
 const PLUS: &str = "plus_Number_MANY__Number_1_";
@@ -526,4 +527,22 @@ fn filter_keeps_the_elements_the_predicate_accepts() {
     );
     assert_eq!(filter(&[1, 2, 3, 2], not_two), [1, 3]);
     assert_eq!(filter(&[], is_lambda(2)), Vec::<i64>::new());
+}
+
+#[test]
+fn concatenate_appends_the_second_collection() {
+    let concatenate = |a: ValueSpec, b: ValueSpec| run(&expr::call(CONCATENATE, vec![a, b]));
+    assert_eq!(
+        as_ints(&concatenate(ints(&[1, 2]), ints(&[3, 4]))),
+        [1, 2, 3, 4]
+    );
+    assert_eq!(as_ints(&concatenate(ints(&[]), expr::int(1))), [1]);
+    assert_eq!(
+        as_ints(&concatenate(ints(&[]), ints(&[]))),
+        Vec::<i64>::new()
+    );
+    // Mixed element types survive side by side.
+    let mixed = concatenate(ints(&[1]), strings(&["a"])).to_collection();
+    assert_eq!(mixed[0], Value::Integer(1));
+    assert_eq!(mixed[1], Value::String("a".into()));
 }
