@@ -17,7 +17,8 @@
 //!
 //! Two helpers the evaluator itself calls live here
 //! (`MultiplicityReference` evaluation and `classifierGenericType` on a
-//! function), next to the meta natives fished so far: `match`. The rest
+//! function), next to the meta natives fished so far: `match`,
+//! `extractEnumValue`. The rest
 //! stay on the archive until a PCT row asks for them (plan, Appendix A
 //! table 3).
 //!
@@ -28,11 +29,14 @@ use legend_pure_metamodel::bootstrap;
 use legend_pure_metamodel::ids::ElementId;
 use legend_pure_metamodel::model::{Element, PureModel};
 use legend_pure_metamodel::types::{TypeExpr, ValueSpec};
+use smol_str::SmolStr;
 
 use crate::date::DatePrecision;
 use crate::error::{PureException, PureRuntimeError};
 use crate::heap::RuntimeHeap;
-use crate::native::{EvalContextTrait, Evaluated, NativeFunction, NativeRegistry, force_all};
+use crate::native::{
+    EvalContextTrait, Evaluated, NativeFunction, NativeRegistry, expect_args, force_all,
+};
 use crate::value::{FunctionValue, Value};
 
 /// Allocate a `meta::pure::metamodel::type::FunctionType` heap wrapper
@@ -530,6 +534,51 @@ fn resolve_value_type(
     }
 }
 
+/// Pure `extractEnumValue<T>(enumeration:Enumeration<T>[1], value:String[1]):T[1]`
+///
+/// Returns `Value::EnumValue { enum_id, member }` so structural equality
+/// matches the same shape the evaluator emits for literal
+/// `MyEnum.MEMBER` accesses.
+#[derive(Debug)]
+pub struct ExtractEnumValue;
+
+impl NativeFunction for ExtractEnumValue {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("extractEnumValue", &values, 2)?;
+        let enum_id = as_element_id(&values[0])?;
+        let name = values[1].as_string()?;
+        let Element::Enumeration(enum_def) = ctx.model().get_element(enum_id) else {
+            return Err(PureRuntimeError::EvaluationError(
+                "extractEnumValue: first argument must reference an Enumeration".into(),
+            )
+            .into());
+        };
+        if !enum_def.values.iter().any(|v| v.name == *name) {
+            return Err(PureRuntimeError::EvaluationError(format!(
+                "extractEnumValue: enumeration has no value '{name}'"
+            ))
+            .into());
+        }
+        Ok(Evaluated::new(Value::EnumValue {
+            enum_id,
+            member: SmolStr::new(name),
+        }))
+    }
+}
+
+/// Extract an `ElementId` from a [`Value::Element`].
+fn as_element_id(v: &Value) -> Result<ElementId, PureException> {
+    match v {
+        Value::Element(id) => Ok(*id),
+        other => Err(PureRuntimeError::type_mismatch("PackageableElement", other).into()),
+    }
+}
+
 /// Register the fished meta natives under their platform keys.
 ///
 /// Not called by `NativeRegistry::standard()` yet: callers that want
@@ -537,4 +586,8 @@ fn resolve_value_type(
 pub fn register(registry: &mut NativeRegistry) {
     registry.register("match_Any_MANY__Function_$1_MANY$__T_m_", Match);
     registry.register("match_Any_MANY__Function_$1_MANY$__P_o__T_m_", Match);
+    registry.register(
+        "extractEnumValue_Enumeration_1__String_1__T_1_",
+        ExtractEnumValue,
+    );
 }

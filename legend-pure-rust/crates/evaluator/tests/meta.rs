@@ -480,3 +480,58 @@ fn eval_without_a_function_is_an_evaluation_error() {
         Some("eval: expected at least 1 argument (the function)")
     );
 }
+
+const EXTRACT_ENUM_VALUE: &str = "extractEnumValue_Enumeration_1__String_1__T_1_";
+const EQUAL: &str = "equal_Any_MANY__Any_MANY__Boolean_1_";
+
+#[test]
+fn extract_enum_value_yields_the_literal_enum_value() {
+    let mut b = ModelBuilder::new();
+    let colour = b.enumeration("my::Colour", &["RED", "GREEN"]);
+    let model = b.finish();
+    let registry = registry();
+    let mut eval = Evaluator::new(&model, &registry);
+    let extract = |name: &str| {
+        expr::call(
+            EXTRACT_ENUM_VALUE,
+            vec![expr::element_ref(colour), expr::string(name)],
+        )
+    };
+    assert_eq!(
+        eval.eval(&extract("GREEN")).unwrap(),
+        Value::EnumValue {
+            enum_id: colour,
+            member: "GREEN".into(),
+        }
+    );
+    // testEqualEnum's shape: equal to the `my::Colour.GREEN` literal.
+    let same = expr::call(
+        EQUAL,
+        vec![extract("GREEN"), expr::enum_value(colour, "GREEN")],
+    );
+    assert_eq!(eval.eval(&same).unwrap(), Value::Boolean(true));
+
+    let err = eval.eval(&extract("BLUE")).unwrap_err();
+    assert_eq!(
+        evaluation_error(&err),
+        Some("extractEnumValue: enumeration has no value 'BLUE'")
+    );
+}
+
+#[test]
+fn extract_enum_value_requires_an_enumeration() {
+    let mut b = ModelBuilder::new();
+    let thing = b.class("my::Thing", class(Vec::new(), Vec::new()));
+    let model = b.finish();
+    let registry = registry();
+    let mut eval = Evaluator::new(&model, &registry);
+    let call = expr::call(
+        EXTRACT_ENUM_VALUE,
+        vec![expr::element_ref(thing), expr::string("RED")],
+    );
+    let err = eval.eval(&call).unwrap_err();
+    assert_eq!(
+        evaluation_error(&err),
+        Some("extractEnumValue: first argument must reference an Enumeration")
+    );
+}
