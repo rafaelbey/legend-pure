@@ -59,6 +59,43 @@ Read this first; everything below assumes it.
 | Step 0 mechanics | Appendix B: archive commands, workspace skeleton, gates. |
 | Decisions still owned by the author | Appendix C. Do not guess these; ask. |
 
+**Where we are, and what comes next (2026-10-11).** Steps 0–2 are done,
+the Java-lambda lowering and natives round 1 with them, and both Java
+engines run the PCT corpus through `Rust_JNI` (interpreted 303 / 327 and
+126 / 136, compiled 300 / 327 and 125 / 136). Two measurement tools exist:
+`BenchmarkPctExpressions` (every PCT test under four modes, with the Rust
+side's own split per call) and the apples-to-apples pair
+(`examples/expressions.rs`, `examples/hot_path.rs`, `BenchmarkNativeExpressions`).
+They say the evaluator alone is 10–20x ahead of the interpreted engine and
+2–13x behind the compiled one, and that the bridge costs about 600 µs per
+call on top. The order from here, each phase with its gate:
+
+1. **Step 2b — the evaluator's own cost** (next; decided 2026-10-11). The
+   eight ranked items of that step, one commit each, measured with the two
+   examples. Gate: the twelve expressions within 3x of the compiled
+   engine's generated method; all four `Rust_JNI` numbers unchanged.
+2. **Natives round 2** (Step 2, "State after the lowering" and "Natives
+   round 1"): the residue by kind — `Map` across the boundary, `zip`
+   results compared by the Java engine, `copy` with key expressions,
+   `genericType` and `deactivate` out of `NotYet`, the compiled engine's
+   five Rust-built objects handed to generated code, the review's round-2
+   items (fallible node reads, qualified properties dispatched through
+   the resolved property, JNI local references and exception discipline).
+   Gate: the manifests shrink, nothing regresses.
+3. **The bridge's cost** (Step 2, "Deferred: the cost of the bridge"):
+   cache the lowered closure per Java lambda object, then the crossing
+   itself (profile `start` first; the menu is listed there). Gate:
+   `BenchmarkPctExpressions` median through `Rust_JNI` within 2x of the
+   interpreted engine's own adapter.
+4. **Step 3 and Step 4** — read PELT, the `Directory` trait, the static
+   graph: the per-call re-lowering disappears for everything static.
+5. **Steps 5–7** as written.
+
+Before any push: the review's decision list (files from the archived
+direction, the uncommitted `pom.xml` release change, the archive tag and
+branch on `origin`, the merge from `master` and the manifest rebase after
+it) is the author's.
+
 **Definition of done for the MVP.** The `Rust_JNI` PCT adapter (built in
 Step 2, red) reports pass rates for the platform and at least
 one `legend-engine-pure-code-functions-*` module from PELT-loaded code with a
