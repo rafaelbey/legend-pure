@@ -223,6 +223,37 @@ impl NativeFunction for Sign {
     }
 }
 
+/// Pure `sqrt(Number[1]):Float[1]` — square root.
+///
+/// Negative inputs throw the platform-pinned error
+/// `"Unable to compute sqrt of <input>"` (mirrors
+/// `legend-pure-runtime-java-engine-interpreted/.../Sqrt.java:53`,
+/// which throws on `Double.isNaN(result)` rather than letting the
+/// IEEE-754 NaN propagate).
+#[derive(Debug)]
+pub struct Sqrt;
+
+impl NativeFunction for Sqrt {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("sqrt", &values, 1)?;
+        let x = number_to_f64("sqrt", &values[0])?;
+        let r = x.sqrt();
+        if r.is_nan() {
+            return Err(PureRuntimeError::EvaluationError(format!(
+                "Unable to compute sqrt of {}",
+                java_number_string(&values[0])
+            ))
+            .into());
+        }
+        Ok(Evaluated::new(Value::Float(r)))
+    }
+}
+
 /// Pure `cbrt(Number[1]):Float[1]` — cube root.
 #[derive(Debug)]
 pub struct Cbrt;
@@ -434,6 +465,7 @@ pub fn register(registry: &mut NativeRegistry) {
     registry.register("sign_Number_1__Integer_1_", Sign);
 
     // analytic
+    registry.register("sqrt_Number_1__Float_1_", Sqrt);
     registry.register("cbrt_Number_1__Float_1_", Cbrt);
     registry.register("exp_Number_1__Float_1_", Exp);
     registry.register("log_Number_1__Float_1_", Log);
@@ -632,6 +664,41 @@ mod tests {
     #[test]
     fn sign_type_mismatch() {
         assert!(Sign.execute(&[lit_str("x")], &mut MockCtx).is_err());
+    }
+
+    #[test]
+    fn sqrt_positive() {
+        let r = Sqrt.execute(&[lit_int(16)], &mut MockCtx).unwrap();
+        assert_eq!(r.into_value(), Value::Float(4.0));
+    }
+
+    #[test]
+    fn sqrt_zero() {
+        let r = Sqrt.execute(&[lit_float(0.0)], &mut MockCtx).unwrap();
+        assert_eq!(r.into_value(), Value::Float(0.0));
+    }
+
+    #[test]
+    fn sqrt_negative_throws_unable_to_compute() {
+        // Java parity: instead of returning NaN per IEEE-754, sqrt
+        // throws "Unable to compute sqrt of -1.0" so platform PCT
+        // tests like `testSquareRootError` can assertError on it.
+        let err = Sqrt.execute(&[lit_float(-1.0)], &mut MockCtx).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("Unable to compute sqrt of -1.0"),
+            "expected error containing 'Unable to compute sqrt of -1.0', got: {msg}"
+        );
+    }
+
+    #[test]
+    fn sqrt_wrong_arg_count() {
+        assert!(Sqrt.execute(&[], &mut MockCtx).is_err());
+    }
+
+    #[test]
+    fn sqrt_type_mismatch() {
+        assert!(Sqrt.execute(&[lit_str("x")], &mut MockCtx).is_err());
     }
 
     #[test]

@@ -30,6 +30,7 @@ use rust_decimal::Decimal;
 const ROUND: &str = "round_Number_1__Integer_1_";
 const ROUND_DECIMAL: &str = "round_Decimal_1__Integer_1__Decimal_1_";
 const ROUND_FLOAT: &str = "round_Float_1__Integer_1__Float_1_";
+const SQRT: &str = "sqrt_Number_1__Float_1_";
 const TO_DECIMAL: &str = "toDecimal_Number_1__Decimal_1_";
 const LESS_THAN: &str = "lessThan_Number_1__Number_1__Boolean_1_";
 const COMPARE: &str = "compare_T_1__T_1__Integer_1_";
@@ -218,4 +219,19 @@ fn compare_is_total_across_types_through_the_evaluator() {
         (Value::Integer(a), Value::Integer(b)) => assert_eq!(a, -b),
         other => panic!("expected two Integers, got {other:?}"),
     }
+}
+
+#[test]
+fn sqrt_of_a_negative_reports_java_s_text() {
+    // testSquareRoot
+    assert_eq!(
+        run(&expr::call(SQRT, vec![expr::int(9)])),
+        Value::Float(3.0)
+    );
+    // testSquareRootError pins Java's text verbatim, the input rendered
+    // as Java's Double.toString.
+    assert_eq!(
+        evaluation_error(&expr::call(SQRT, vec![expr::float(-1.0)])),
+        "Unable to compute sqrt of -1.0"
+    );
 }

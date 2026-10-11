@@ -67,6 +67,7 @@ const FISHED: &[&str] = &[
     "round_Decimal_1__Integer_1__Decimal_1_",
     "round_Float_1__Integer_1__Float_1_",
     "sign_Number_1__Integer_1_",
+    "sqrt_Number_1__Float_1_",
     "cbrt_Number_1__Float_1_",
     "exp_Number_1__Float_1_",
     "log_Number_1__Float_1_",
