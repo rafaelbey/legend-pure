@@ -27,8 +27,8 @@ use std::rc::Rc;
 use std::str::FromStr;
 
 use jni::JNIEnv;
-use jni::objects::{JObject, JObjectArray, JString, JValue};
-use jni::signature::ReturnType;
+use jni::objects::{JFieldID, JObject, JObjectArray, JString, JValue};
+use jni::signature::{Primitive, ReturnType};
 use legend_pure_evaluator::date::{PureDate, StrictTime, TimePrecision};
 use legend_pure_evaluator::error::{PureException, PureRuntimeError};
 use legend_pure_evaluator::heap::{HeapEntry, ObjectHandle, RuntimeHeap, TypedObject};
@@ -37,7 +37,7 @@ use legend_pure_metamodel::source_info::SourceInfo;
 use smol_str::SmolStr;
 
 use crate::PVector;
-use crate::bridge::{BridgeShared, JniHandleTable};
+use crate::bridge::{BridgeShared, DescriptionFields, JniHandleTable};
 use crate::failure::{ffi_error, in_local_frame, jni_failure, unsupported};
 
 /// Kind tags of a `NodeDescription`, mirrored from the Java constants.
@@ -113,9 +113,11 @@ pub struct Description {
 fn string_field(
     env: &mut JNIEnv,
     obj: &JObject,
-    name: &str,
+    field: JFieldID,
 ) -> jni::errors::Result<Option<String>> {
-    let v = env.get_field(obj, name, "Ljava/lang/String;")?.l()?;
+    let v = env
+        .get_field_unchecked(obj, field, ReturnType::Object)?
+        .l()?;
     if v.is_null() {
         return Ok(None);
     }
@@ -123,26 +125,39 @@ fn string_field(
     Ok(Some(s))
 }
 
-/// Decode a Java `NodeDescription`.
+/// Decode a Java `NodeDescription` through the field ids resolved once
+/// per context ([`DescriptionFields`]).
 ///
 /// # Errors
 /// Any JNI failure; the caller clears the pending Java exception.
-pub fn read_description(env: &mut JNIEnv, obj: &JObject) -> jni::errors::Result<Description> {
-    let int =
-        |env: &mut JNIEnv, n: &str| -> jni::errors::Result<i32> { env.get_field(obj, n, "I")?.i() };
-    let unsigned = |env: &mut JNIEnv, n: &str| -> jni::errors::Result<u32> {
-        Ok(u32::try_from(env.get_field(obj, n, "I")?.i()?).unwrap_or(0))
+pub fn read_description(
+    env: &mut JNIEnv,
+    fields: &DescriptionFields,
+    obj: &JObject,
+) -> jni::errors::Result<Description> {
+    let int = |env: &mut JNIEnv, field: JFieldID| -> jni::errors::Result<i32> {
+        env.get_field_unchecked(obj, field, ReturnType::Primitive(Primitive::Int))?
+            .i()
     };
-    let kind = int(env, "kind")?;
-    let id = env.get_field(obj, "id", "J")?.j()?;
-    let definition = env.get_field(obj, "definition", "J")?.j()?;
-    let classifier = string_field(env, obj, "classifier")?.map(SmolStr::new);
-    let name = string_field(env, obj, "name")?.map(SmolStr::new);
-    let user_path = string_field(env, obj, "userPath")?.map(SmolStr::new);
-    let payload = string_field(env, obj, "payload")?;
-    let subsecond = string_field(env, obj, "subsecond")?;
+    let long = |env: &mut JNIEnv, field: JFieldID| -> jni::errors::Result<i64> {
+        env.get_field_unchecked(obj, field, ReturnType::Primitive(Primitive::Long))?
+            .j()
+    };
+    let unsigned = |env: &mut JNIEnv, field: JFieldID| -> jni::errors::Result<u32> {
+        Ok(u32::try_from(int(env, field)?).unwrap_or(0))
+    };
+    let kind = int(env, fields.kind)?;
+    let id = long(env, fields.id)?;
+    let definition = long(env, fields.definition)?;
+    let classifier = string_field(env, obj, fields.classifier)?.map(SmolStr::new);
+    let name = string_field(env, obj, fields.name)?.map(SmolStr::new);
+    let user_path = string_field(env, obj, fields.user_path)?.map(SmolStr::new);
+    let payload = string_field(env, obj, fields.payload)?;
+    let subsecond = string_field(env, obj, fields.subsecond)?;
     let mut keys = Vec::new();
-    let keys_obj = env.get_field(obj, "keys", "[Ljava/lang/String;")?.l()?;
+    let keys_obj = env
+        .get_field_unchecked(obj, fields.keys, ReturnType::Array)?
+        .l()?;
     if !keys_obj.is_null() {
         let arr = JObjectArray::from(keys_obj);
         let len = env.get_array_length(&arr)?;
@@ -152,15 +167,15 @@ pub fn read_description(env: &mut JNIEnv, obj: &JObject) -> jni::errors::Result<
             keys.push(SmolStr::new(s));
         }
     }
-    let source = match string_field(env, obj, "sourceId")? {
+    let source = match string_field(env, obj, fields.source_id)? {
         // Java's anchor (`line`/`column`) is the span's start on this
         // side; the evaluator and `assertError` both read the anchor.
         Some(source_id) => Some(SourceInfo::new(
             source_id,
-            unsigned(env, "line")?,
-            unsigned(env, "column")?,
-            unsigned(env, "endLine")?,
-            unsigned(env, "endColumn")?,
+            unsigned(env, fields.line)?,
+            unsigned(env, fields.column)?,
+            unsigned(env, fields.end_line)?,
+            unsigned(env, fields.end_column)?,
         )),
         None => None,
     };
@@ -171,13 +186,13 @@ pub fn read_description(env: &mut JNIEnv, obj: &JObject) -> jni::errors::Result<
         name,
         user_path,
         payload,
-        year: int(env, "year")?,
-        month: int(env, "month")?,
-        day: int(env, "day")?,
-        hour: int(env, "hour")?,
-        minute: int(env, "minute")?,
-        second: int(env, "second")?,
-        precision: int(env, "precision")?,
+        year: int(env, fields.year)?,
+        month: int(env, fields.month)?,
+        day: int(env, fields.day)?,
+        hour: int(env, fields.hour)?,
+        minute: int(env, fields.minute)?,
+        second: int(env, fields.second)?,
+        precision: int(env, fields.precision)?,
         subsecond,
         keys,
         source,
@@ -461,7 +476,7 @@ impl JavaNode {
                     let obj = env
                         .get_object_array_element(&arr, i)
                         .map_err(|e| jni_failure(env, shared, &what, &e))?;
-                    let d = read_description(env, &obj)
+                    let d = read_description(env, &shared.fields, &obj)
                         .map_err(|e| jni_failure(env, shared, &what, &e))?;
                     description_to_value(shared, d)
                 })?;

@@ -263,6 +263,7 @@ impl JniContext {
         vm: jni::JavaVM,
         bridge: jni::objects::GlobalRef,
         methods: crate::bridge::BridgeMethods,
+        fields: crate::bridge::DescriptionFields,
     ) -> Self {
         let model_ptr = Box::into_raw(Box::new(model));
         let registry_ptr = Box::into_raw(Box::new(registry));
@@ -274,6 +275,7 @@ impl JniContext {
             vm,
             bridge,
             methods,
+            fields,
             model: model_ptr.cast_const(),
             java_nodes: std::cell::RefCell::new(std::collections::HashMap::new()),
             handles: std::cell::RefCell::new(JniHandleTable::new()),

@@ -47,7 +47,7 @@ use legend_pure_evaluator::native::NativeRegistry;
 use legend_pure_evaluator::value::Value;
 use legend_pure_metamodel::model::PureModel;
 
-use crate::bridge::{BridgeMethods, CORE_INSTANCE_CLASS};
+use crate::bridge::{BridgeMethods, CORE_INSTANCE_CLASS, DescriptionFields};
 use crate::context::JniContext;
 use crate::exception::{ExceptionPayload, pure_exception_to_payload};
 use crate::failure::{ffi_error, in_local_frame, jni_failure};
@@ -150,7 +150,7 @@ fn cross_in(env: &mut JNIEnv, ctx: &JniContext, obj: &JObject) -> Result<Value, 
         let desc_obj = described
             .and_then(|v| v.l())
             .map_err(|e| jni_failure(env, shared, "describe", &e))?;
-        let d = java_node::read_description(env, &desc_obj)
+        let d = java_node::read_description(env, &shared.fields, &desc_obj)
             .map_err(|e| jni_failure(env, shared, "describe", &e))?;
         java_node::description_to_value(shared, d)
     })
@@ -247,14 +247,19 @@ pub extern "system" fn Java_org_finos_legend_pure_rust_PureRustEvaluator_nativeI
     _class: JClass<'local>,
     bridge: JObject<'local>,
 ) -> jlong {
-    let wiring =
-        (|| -> jni::errors::Result<(jni::JavaVM, jni::objects::GlobalRef, BridgeMethods)> {
-            let vm = env.get_java_vm()?;
-            let global = env.new_global_ref(&bridge)?;
-            let methods = BridgeMethods::resolve(&mut env)?;
-            Ok((vm, global, methods))
-        })();
-    let (vm, global, methods) = match wiring {
+    let wiring = (|| -> jni::errors::Result<(
+        jni::JavaVM,
+        jni::objects::GlobalRef,
+        BridgeMethods,
+        DescriptionFields,
+    )> {
+        let vm = env.get_java_vm()?;
+        let global = env.new_global_ref(&bridge)?;
+        let methods = BridgeMethods::resolve(&mut env)?;
+        let fields = DescriptionFields::resolve(&mut env)?;
+        Ok((vm, global, methods, fields))
+    })();
+    let (vm, global, methods, fields) = match wiring {
         Ok(w) => w,
         Err(e) => {
             let failure = failure::jni_failure_unwired(&mut env, "bridge wiring", &e);
@@ -265,7 +270,9 @@ pub extern "system" fn Java_org_finos_legend_pure_rust_PureRustEvaluator_nativeI
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let model = PureModel::bootstrapped();
         let registry = NativeRegistry::standard();
-        Session::into_raw(JniContext::new(model, registry, vm, global, methods))
+        Session::into_raw(JniContext::new(
+            model, registry, vm, global, methods, fields,
+        ))
     }));
     match result {
         Ok(ptr) => ptr,

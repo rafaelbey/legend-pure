@@ -28,7 +28,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Weak;
 
-use jni::objects::{GlobalRef, JMethodID, JValue};
+use jni::objects::{GlobalRef, JFieldID, JMethodID, JValue};
 use jni::signature::{Primitive, ReturnType};
 use jni::{JNIEnv, JavaVM};
 use legend_pure_evaluator::error::PureException;
@@ -208,6 +208,71 @@ impl BridgeMethods {
     }
 }
 
+/// The fields of the Java `NodeDescription`, resolved once per context:
+/// reading a description is then one JNI call per field, with no class or
+/// field lookup by name.
+#[allow(missing_docs)]
+pub struct DescriptionFields {
+    pub kind: JFieldID,
+    pub id: JFieldID,
+    pub definition: JFieldID,
+    pub classifier: JFieldID,
+    pub name: JFieldID,
+    pub user_path: JFieldID,
+    pub payload: JFieldID,
+    pub year: JFieldID,
+    pub month: JFieldID,
+    pub day: JFieldID,
+    pub hour: JFieldID,
+    pub minute: JFieldID,
+    pub second: JFieldID,
+    pub precision: JFieldID,
+    pub subsecond: JFieldID,
+    pub keys: JFieldID,
+    pub source_id: JFieldID,
+    pub line: JFieldID,
+    pub column: JFieldID,
+    pub end_line: JFieldID,
+    pub end_column: JFieldID,
+}
+
+impl DescriptionFields {
+    /// Resolve every field id on the description class.
+    ///
+    /// # Errors
+    /// Any JNI lookup failure (the Java class is older than this binary).
+    pub fn resolve(env: &mut JNIEnv) -> jni::errors::Result<Self> {
+        let cls = env.find_class(DESCRIPTION_CLASS)?;
+        let string = "Ljava/lang/String;";
+        let mut field = |name: &str, sig: &str| -> jni::errors::Result<JFieldID> {
+            env.get_field_id(&cls, name, sig)
+        };
+        Ok(Self {
+            kind: field("kind", "I")?,
+            id: field("id", "J")?,
+            definition: field("definition", "J")?,
+            classifier: field("classifier", string)?,
+            name: field("name", string)?,
+            user_path: field("userPath", string)?,
+            payload: field("payload", string)?,
+            year: field("year", "I")?,
+            month: field("month", "I")?,
+            day: field("day", "I")?,
+            hour: field("hour", "I")?,
+            minute: field("minute", "I")?,
+            second: field("second", "I")?,
+            precision: field("precision", "I")?,
+            subsecond: field("subsecond", string)?,
+            keys: field("keys", "[Ljava/lang/String;")?,
+            source_id: field("sourceId", string)?,
+            line: field("line", "I")?,
+            column: field("column", "I")?,
+            end_line: field("endLine", "I")?,
+            end_column: field("endColumn", "I")?,
+        })
+    }
+}
+
 /// Everything a Java-backed node needs to reach back into Java.
 pub struct BridgeShared {
     /// The JVM, so a node read outside a native call can attach.
@@ -216,6 +281,8 @@ pub struct BridgeShared {
     pub bridge: GlobalRef,
     /// Cached method ids.
     pub methods: BridgeMethods,
+    /// Cached field ids of the description record.
+    pub fields: DescriptionFields,
     /// The context's model (see [`model`](Self::model)).
     pub model: *const PureModel,
     /// Java-to-Rust identity: bridge id → the one heap entry wrapping it.
