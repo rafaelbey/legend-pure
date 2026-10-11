@@ -26,6 +26,7 @@
 
 use legend_pure_metamodel::types::ValueSpec;
 
+use crate::date::{PureDate, TimePrecision};
 use crate::error::{PureException, PureRuntimeError};
 use crate::native::{
     EvalContextTrait, Evaluated, NativeFunction, NativeRegistry, expect_args, force_all,
@@ -297,6 +298,248 @@ impl NativeFunction for Adjust {
     }
 }
 
+fn i64_to_i16_arg(name: &str, n: i64) -> Result<i16, PureRuntimeError> {
+    i16::try_from(n)
+        .map_err(|_| PureRuntimeError::EvaluationError(format!("{name}: year {n} out of range")))
+}
+
+/// Saturating i64-to-i8 cast for date components, used by
+/// [`DateConstruct`]. Out-of-range inputs always trip jiff's
+/// validation downstream — the saturation only changes what jiff
+/// receives, not what surfaces in the error message
+/// ([`translate_date_error`] reads the original `i64` from the
+/// untouched `values[]` slice).
+fn i64_to_i8_arg_lenient(_name: &str, n: i64) -> i8 {
+    #[allow(clippy::cast_possible_truncation)]
+    let clamped = n.clamp(i64::from(i8::MIN), i64::from(i8::MAX)) as i8;
+    clamped
+}
+
+/// Split the `second:Number[1]` argument of the 6-arg `date(...)`
+/// constructor into integer seconds, subsecond nanoseconds, and
+/// (when applicable) the source's subsecond-digit count.
+///
+/// Returns `(seconds, nanos, subsec_digits)`:
+/// - `Integer` → `(n, 0, None)` (no subsecond precision)
+/// - `Float`   → split via trunc/fract; digit count derived from
+///   nanos (3/6/9, like `PureDate::from_civil_datetime`). When the
+///   fractional part is exactly zero the user still wrote a Float
+///   literal (`11.0`) and expects 1-digit subsecond rendering, so
+///   `subsec_digits` is `Some(1)`.
+/// - `Decimal` → split via `trunc()`/scale-aware extraction; the
+///   `Decimal::scale()` method gives the original literal's exact
+///   trailing-digit count, so `59.999D` → `Some(3)` and `11.0D` →
+///   `Some(1)`.
+///
+/// Mirrors Java Pure's `date(.., Number)` overload at
+/// `legend-pure-core/.../platform/pure/essential/date/creation/date.pure:21`.
+fn decompose_second(v: &Value) -> Result<(i64, i32, Option<u8>), PureException> {
+    use rust_decimal::Decimal;
+    use rust_decimal::prelude::ToPrimitive;
+    match v {
+        Value::Integer(n) => Ok((*n, 0, None)),
+        Value::Float(f) => {
+            let trunc = f.trunc();
+            let frac = f - trunc;
+            #[allow(clippy::cast_possible_truncation)]
+            let nanos = (frac * 1_000_000_000.0).round() as i32;
+            // Float literals always opt in to subsecond rendering;
+            // pick digit count from trailing zero analysis (3/6/9),
+            // falling back to 1 when nanos is exactly zero.
+            let digits = if nanos == 0 {
+                1
+            } else if nanos % 1_000_000 == 0 {
+                3
+            } else if nanos % 1_000 == 0 {
+                6
+            } else {
+                9
+            };
+            #[allow(clippy::cast_possible_truncation)]
+            let s = trunc as i64;
+            Ok((s, nanos, Some(digits)))
+        }
+        Value::Decimal(d) => {
+            let int_part = d.trunc();
+            let frac_part = (*d) - int_part;
+            // scale() is the literal's trailing-digit count — exact
+            // (Decimal preserves it through arithmetic).
+            #[allow(clippy::cast_possible_truncation)]
+            let scale = d.scale().min(9) as u8;
+            let nanos_dec = frac_part * Decimal::from(1_000_000_000_i64);
+            let nanos = nanos_dec.round().to_i32().unwrap_or(0);
+            let s = int_part.to_i64().unwrap_or(0);
+            // Even Decimal literals with scale=0 (e.g. `11D`) signal
+            // "Number" — but the platform 6-arg overload's expected
+            // shape includes subsecond precision when the input is
+            // not Integer. Match Float's "always subsecond" rule.
+            let digits = if scale == 0 { 1 } else { scale };
+            Ok((s, nanos, Some(digits)))
+        }
+        other => Err(PureRuntimeError::type_mismatch("Number", other).into()),
+    }
+}
+
+/// Translate a `PureRuntimeError` from a `PureDate` constructor
+/// (which wraps `jiff::Error`) into the Java-Pure
+/// `"Invalid <component>: <value>"` shape that platform
+/// `assertError` tests pin. Falls back to the original message when
+/// the jiff text doesn't match a known shape.
+///
+/// Input mapping mirrors `DateConstruct`'s positional contract:
+/// `values[0]=year, [1]=month, [2]=day, [3]=hour, [4]=minute, [5]=second`.
+/// Pulled values are the original `i64` inputs, so out-of-range
+/// arguments surface verbatim instead of the saturated value jiff
+/// rejected.
+fn translate_date_error(err: PureRuntimeError, values: &[Value]) -> PureRuntimeError {
+    let msg = err.to_string();
+    let Some(after_param) = msg.split("parameter '").nth(1) else {
+        return err;
+    };
+    let Some(name) = after_param.split('\'').next() else {
+        return err;
+    };
+    let value_at =
+        |idx: usize| -> Option<i64> { values.get(idx).and_then(|v| v.as_integer().ok()) };
+    match name {
+        "month" => {
+            if let Some(v) = value_at(1) {
+                return PureRuntimeError::EvaluationError(format!("Invalid month: {v}"));
+            }
+        }
+        "day" => {
+            // Java echoes the rejected `<year>-<month>-<day>` triple.
+            if let (Some(y), Some(m), Some(d)) = (value_at(0), value_at(1), value_at(2)) {
+                return PureRuntimeError::EvaluationError(format!(
+                    "Invalid day: {y:04}-{m:02}-{d}"
+                ));
+            }
+        }
+        "hour" => {
+            if let Some(v) = value_at(3) {
+                return PureRuntimeError::EvaluationError(format!("Invalid hour: {v}"));
+            }
+        }
+        "minute" => {
+            if let Some(v) = value_at(4) {
+                return PureRuntimeError::EvaluationError(format!("Invalid minute: {v}"));
+            }
+        }
+        "second" => {
+            if let Some(v) = value_at(5) {
+                return PureRuntimeError::EvaluationError(format!("Invalid second: {v}"));
+            }
+        }
+        _ => {}
+    }
+    err
+}
+
+/// Pure `date(Integer[1], ...): Date[1]` — construct a date from 1–6
+/// Integer components (year; year+month; year+month+day; …; +hour; +min;
+/// +sec). Arity selects precision.
+#[derive(Debug)]
+pub struct DateConstruct;
+
+impl NativeFunction for DateConstruct {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        if values.is_empty() || values.len() > 6 {
+            return Err(PureRuntimeError::EvaluationError(format!(
+                "date: expected 1..=6 arguments, got {}",
+                values.len()
+            ))
+            .into());
+        }
+
+        // Pure-format error messages ("Invalid month: 13", "Invalid
+        // day: 2016-12-32", "Invalid hour: 24", …) are produced by
+        // translating jiff's failure post-hoc rather than
+        // pre-validating every component. Jiff already covers the
+        // full validation surface (range + calendar/leap-year-aware
+        // day check) — duplicating that logic here would mean two
+        // sources of truth for "what makes a date valid" and twice
+        // the work on the exceptional path. See `translate_date_error`.
+        let year_raw = values[0].as_integer()?;
+        // i64-to-i16 narrowing happens up front since jiff::civil
+        // takes i16; the narrow can't fail in a way that surfaces a
+        // Pure-shaped message ("Invalid year: …" isn't pinned by any
+        // platform PCT test, so we leave it to PureRuntimeError).
+        let year = i64_to_i16_arg("date", year_raw)?;
+        if values.len() == 1 {
+            return PureDate::year(year)
+                .map(Value::Date)
+                .map(Evaluated::new)
+                .map_err(|e| translate_date_error(e, &values).into());
+        }
+
+        let month_raw = values[1].as_integer()?;
+        let month = i64_to_i8_arg_lenient("date", month_raw);
+        if values.len() == 2 {
+            return PureDate::year_month(year, month)
+                .map(Value::Date)
+                .map(Evaluated::new)
+                .map_err(|e| translate_date_error(e, &values).into());
+        }
+
+        let day_raw = values[2].as_integer()?;
+        let day = i64_to_i8_arg_lenient("date", day_raw);
+        if values.len() == 3 {
+            return PureDate::strict_date(year, month, day)
+                .map(Value::Date)
+                .map(Evaluated::new)
+                .map_err(|e| translate_date_error(e, &values).into());
+        }
+
+        let hour_raw = values[3].as_integer()?;
+        let hour = i64_to_i8_arg_lenient("date", hour_raw);
+        if values.len() == 4 {
+            return PureDate::datetime(year, month, day, hour, 0, 0, 0, TimePrecision::Hour)
+                .map(Value::Date)
+                .map(Evaluated::new)
+                .map_err(|e| translate_date_error(e, &values).into());
+        }
+
+        let minute_raw = values[4].as_integer()?;
+        let minute = i64_to_i8_arg_lenient("date", minute_raw);
+        if values.len() == 5 {
+            return PureDate::datetime(year, month, day, hour, minute, 0, 0, TimePrecision::Minute)
+                .map(Value::Date)
+                .map(Evaluated::new)
+                .map_err(|e| translate_date_error(e, &values).into());
+        }
+
+        // Platform signature: `date(.., second:Number[1])`. The second
+        // arg is a `Number`, not `Integer` — Float `59.999` and Decimal
+        // `59.999D` both decompose into 59 seconds + 999_000_000 nanos.
+        // `testDateFromSubSecond` exercises this path.
+        let (second_int, subsec_nanos, sub_digits) = decompose_second(&values[5])?;
+        let second = i64_to_i8_arg_lenient("date", second_int);
+        let precision = if let Some(d) = sub_digits {
+            TimePrecision::Subsecond(d)
+        } else {
+            TimePrecision::Second
+        };
+        PureDate::datetime(
+            year,
+            month,
+            day,
+            hour,
+            minute,
+            second,
+            subsec_nanos,
+            precision,
+        )
+        .map(Value::Date)
+        .map(Evaluated::new)
+        .map_err(|e| translate_date_error(e, &values).into())
+    }
+}
+
 /// Register the fished date and time natives under their platform keys.
 pub fn register(registry: &mut NativeRegistry) {
     registry.register(
@@ -304,12 +547,53 @@ pub fn register(registry: &mut NativeRegistry) {
         DateDiff,
     );
     registry.register("adjust_Date_1__Integer_1__DurationUnit_1__Date_1_", Adjust);
+
+    // `date(...)` overloads — the platform declares return types that
+    // narrow with arity (3 Int → StrictDate, 4+ → DateTime, the sixth
+    // argument a Number); one implementation serves every arity.
+    registry.register("date_Integer_1__Date_1_", DateConstruct);
+    registry.register("date_Integer_1__Integer_1__Date_1_", DateConstruct);
+    registry.register(
+        "date_Integer_1__Integer_1__Integer_1__StrictDate_1_",
+        DateConstruct,
+    );
+    registry.register(
+        "date_Integer_1__Integer_1__Integer_1__Integer_1__DateTime_1_",
+        DateConstruct,
+    );
+    registry.register(
+        "date_Integer_1__Integer_1__Integer_1__Integer_1__Integer_1__DateTime_1_",
+        DateConstruct,
+    );
+    registry.register(
+        "date_Integer_1__Integer_1__Integer_1__Integer_1__Integer_1__Number_1__DateTime_1_",
+        DateConstruct,
+    );
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::native::MockCtx;
+    use crate::date::DatePrecision;
+    use crate::native::{MockCtx, lit_int, lit_str};
+
+    // ---- helpers ----
+
+    fn date(y: i16, m: i8, d: i8) -> Value {
+        Value::Date(PureDate::strict_date(y, m, d).unwrap())
+    }
+
+    #[allow(clippy::many_single_char_names)]
+    fn datetime_s(y: i16, m: i8, d: i8, h: i8, mi: i8, s: i8) -> Value {
+        Value::Date(PureDate::datetime(y, m, d, h, mi, s, 0, TimePrecision::Second).unwrap())
+    }
+
+    fn error_message(err: &PureException) -> String {
+        match &err.kind {
+            crate::error::PureExceptionKind::ExecutionError(e) => e.to_string(),
+            other => panic!("expected an execution error, got {other:?}"),
+        }
+    }
 
     // ---- duration_unit ----
 
@@ -356,6 +640,176 @@ mod tests {
         assert!(Adjust.execute(&[], &mut MockCtx).is_err());
     }
 
+    // ---- date(...) construct ----
+
+    #[test]
+    fn date_construct_year() {
+        let r = DateConstruct
+            .execute(&[lit_int(2024)], &mut MockCtx)
+            .unwrap();
+        let Value::Date(pd) = r.into_value() else {
+            panic!("expected Date")
+        };
+        assert_eq!(pd.precision(), DatePrecision::Year);
+        assert_eq!(pd.get_year(), 2024);
+    }
+
+    #[test]
+    fn date_construct_year_month() {
+        let r = DateConstruct
+            .execute(&[lit_int(2024), lit_int(3)], &mut MockCtx)
+            .unwrap();
+        let Value::Date(pd) = r.into_value() else {
+            panic!("expected Date")
+        };
+        assert_eq!(pd.precision(), DatePrecision::Month);
+        assert_eq!(pd.get_month(), Some(3));
+    }
+
+    #[test]
+    fn date_construct_strict_date() {
+        let r = DateConstruct
+            .execute(&[lit_int(2024), lit_int(3), lit_int(15)], &mut MockCtx)
+            .unwrap();
+        assert_eq!(r.into_value(), date(2024, 3, 15));
+    }
+
+    #[test]
+    fn date_construct_hour() {
+        let r = DateConstruct
+            .execute(
+                &[lit_int(2024), lit_int(3), lit_int(15), lit_int(10)],
+                &mut MockCtx,
+            )
+            .unwrap();
+        let Value::Date(pd) = r.into_value() else {
+            panic!("expected Date")
+        };
+        assert_eq!(pd.precision(), DatePrecision::Time(TimePrecision::Hour));
+        assert_eq!(pd.get_hour(), Some(10));
+    }
+
+    #[test]
+    fn date_construct_minute() {
+        let r = DateConstruct
+            .execute(
+                &[
+                    lit_int(2024),
+                    lit_int(3),
+                    lit_int(15),
+                    lit_int(10),
+                    lit_int(30),
+                ],
+                &mut MockCtx,
+            )
+            .unwrap();
+        let Value::Date(pd) = r.into_value() else {
+            panic!("expected Date")
+        };
+        assert_eq!(pd.precision(), DatePrecision::Time(TimePrecision::Minute));
+        assert_eq!(pd.get_minute(), Some(30));
+    }
+
+    #[test]
+    fn date_construct_second() {
+        let r = DateConstruct
+            .execute(
+                &[
+                    lit_int(2024),
+                    lit_int(3),
+                    lit_int(15),
+                    lit_int(10),
+                    lit_int(30),
+                    lit_int(45),
+                ],
+                &mut MockCtx,
+            )
+            .unwrap();
+        assert_eq!(r.into_value(), datetime_s(2024, 3, 15, 10, 30, 45));
+    }
+
+    /// `testDateFromSubSecond`: a Float second carries subsecond precision.
+    #[test]
+    fn date_construct_float_second() {
+        let r = DateConstruct
+            .execute(
+                &[
+                    lit_int(2015),
+                    lit_int(4),
+                    lit_int(16),
+                    lit_int(14),
+                    lit_int(51),
+                    crate::native::lit_float(59.999),
+                ],
+                &mut MockCtx,
+            )
+            .unwrap();
+        let Value::Date(pd) = r.into_value() else {
+            panic!("expected Date")
+        };
+        assert_eq!(
+            pd.precision(),
+            DatePrecision::Time(TimePrecision::Subsecond(3))
+        );
+        assert_eq!(pd.get_second(), Some(59));
+        assert_eq!(pd.get_subsec_nanosecond(), Some(999_000_000));
+    }
+
+    #[test]
+    fn date_construct_empty_errors() {
+        assert!(DateConstruct.execute(&[], &mut MockCtx).is_err());
+    }
+
+    #[test]
+    fn date_construct_too_many_errors() {
+        let args: Vec<_> = (0..7).map(|_| lit_int(1)).collect();
+        assert!(DateConstruct.execute(&args, &mut MockCtx).is_err());
+    }
+
+    #[test]
+    fn date_construct_invalid_month_errors() {
+        assert!(
+            DateConstruct
+                .execute(&[lit_int(2024), lit_int(13)], &mut MockCtx)
+                .is_err()
+        );
+    }
+
+    /// `testNewDateError` pins Java's message text verbatim.
+    #[test]
+    fn date_construct_errors_carry_the_java_messages() {
+        let err = |args: &[ValueSpec]| {
+            error_message(&DateConstruct.execute(args, &mut MockCtx).unwrap_err())
+        };
+        assert_eq!(err(&[lit_int(2016), lit_int(13)]), "Invalid month: 13");
+        assert_eq!(
+            err(&[lit_int(2016), lit_int(12), lit_int(32)]),
+            "Invalid day: 2016-12-32"
+        );
+        assert_eq!(
+            err(&[lit_int(2016), lit_int(12), lit_int(31), lit_int(24)]),
+            "Invalid hour: 24"
+        );
+    }
+
+    #[test]
+    fn date_construct_year_out_of_range() {
+        assert!(
+            DateConstruct
+                .execute(&[lit_int(10_000_000)], &mut MockCtx)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn date_construct_type_mismatch() {
+        assert!(
+            DateConstruct
+                .execute(&[lit_str("2024")], &mut MockCtx)
+                .is_err()
+        );
+    }
+
     // ---- registration ----
 
     #[test]
@@ -369,6 +823,13 @@ mod tests {
         assert!(
             reg.get("dateDiff_Date_1__Date_1__DurationUnit_1__Integer_1_")
                 .is_some()
+        );
+        assert!(reg.get("date_Integer_1__Date_1_").is_some());
+        assert!(
+            reg.get(
+                "date_Integer_1__Integer_1__Integer_1__Integer_1__Integer_1__Number_1__DateTime_1_"
+            )
+            .is_some()
         );
     }
 }
