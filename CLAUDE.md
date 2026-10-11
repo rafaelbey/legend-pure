@@ -8,8 +8,9 @@ Two implementations of Legend Pure live side-by-side at the root:
 
 - **Java/Maven stack** (upstream FINOS) — `legend-pure-core`, `legend-pure-dsl`,
   `legend-pure-maven`, `legend-pure-runtime`, `legend-pure-store`. Entry point: root `pom.xml`.
-- **Rust evaluator** — `legend-pure-rust/` (Cargo workspace, two crates:
-  `crates/metamodel` and `crates/evaluator`). **The plan for everything Rust is
+- **Rust evaluator** — `legend-pure-rust/` (Cargo workspace, three crates:
+  `crates/metamodel`, `crates/evaluator` and `crates/jni`, the cdylib the Java
+  module loads). **The plan for everything Rust is
   `legend-pure-rust/docs/rust-evaluator-mvp.md`**; `legend-pure-rust/CLAUDE.md` is the
   working guide. Read the plan's §0 before touching that directory.
 
@@ -35,7 +36,8 @@ from it, `platform/pure/grammar/m3.pure`, as its bootstrap.
   `Rust_JNI essential: 303 / 327`, `Rust_JNI grammar: 126 / 136`. The module's manifests
   rank what is left by kind: `FunctionNotFound:` (nothing registered),
   `NotImplemented:` (registered under its key, body not fished), `Unsupported:`
-  (lowering or value-shape gap), then bare Pure error texts. Steps 3–7 are in the plan.
+  (lowering or value-shape gap), then bare Pure error texts. Next: natives round 2 on
+  that residue, then Step 3 (PELT); Steps 3–7 are in the plan.
 - Build and test: `cargo build --workspace`, `cargo test --workspace` inside
   `legend-pure-rust/`; then `mvn -pl legend-pure-runtime/legend-pure-runtime-rust-evaluator
   clean verify` for the boundary tests and the PCT suites. CI: `.github/workflows/rust.yml`.
@@ -48,8 +50,8 @@ from it, `platform/pure/grammar/m3.pure`, as its bootstrap.
   `evalRust` and the `Rust_JNI` PCT adapter; the compiled engine implements `evalRust`
   as a stub that throws at run time, the interpreted engine through the rust-evaluator
   module's extension.
-- Root installs on this machine need `mvn clean install` (the PAR plugin trips on a
-  stale descriptor otherwise); JDK 17 via `JAVA_HOME`.
+- Root installs need `mvn clean install` (the PAR plugin trips on a stale descriptor
+  otherwise); JDK 11 or 17.
 
 ## Java Stack — Build & Test
 
@@ -85,8 +87,10 @@ This is the mental model for the entire codebase — every module maps onto a la
 milestoning rewrite, association resolution, matcher loop) → Validator → serialize to
 .par/binary elements → Java codegen (compiled mode) OR tree-walk (interpreted mode)`.
 
-PCT (`@PCT` annotation) runs every annotated function through **both** engines on every
-build and fails if results diverge. This is the integration-test contract — don't bypass it.
+PCT (`<<PCT.test>>` functions in the platform `.pure` sources) runs every tagged test
+through **both** Java engines on every build and fails if results diverge; the `Rust_JNI`
+adapter is a third run of the same corpus. This is the integration-test contract — don't
+bypass it.
 
 ## Java Code Conventions
 

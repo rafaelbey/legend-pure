@@ -1,8 +1,9 @@
 # legend-pure-runtime-rust-evaluator-bindings-ap
 
-> **Not in the Maven reactor.** Removed in Step 0 of
-> `legend-pure-rust/docs/rust-evaluator-mvp.md` (the Rust crate it loads is on the
-> archive tag); Step 2 brings it back with the fished JNI crate.
+> **Not in the Maven reactor, and not planned for the MVP.** Removed in Step 0 of
+> `legend-pure-rust/docs/rust-evaluator-mvp.md`; its generator is the archived
+> `legend-pure-java-codegen` crate (tag `archive/pre-evaluator-extract-2026-10`).
+> Everything below describes the archived design.
 
 Annotation processor that emits typed Java bindings for the Pure
 runtime by loading the `libpure_rust_jni` cdylib and calling into the
@@ -125,7 +126,7 @@ compiles cleanly because `@PureBindings` has `RetentionPolicy.SOURCE`.
 - The cdylib must already exist at `-Apure.cdylib.path` when `mvn
   compile` runs. The runtime module's pom defaults to the workspace's
   `legend-pure-rust/target/debug/libpure_rust_jni.<ext>`; build it
-  with `cargo build -p legend-pure-parser-jni` first.
+  with `cargo build -p legend-pure-parser-jni` first (archived crate name).
 - The cdylib's CPU architecture must match the JVM running javac. The
   current OS-detection profile only varies the file extension, not
   the arch — for cross-platform Java consumers the deferred
@@ -136,7 +137,7 @@ compiles cleanly because `@PureBindings` has `RetentionPolicy.SOURCE`.
 
 - [`legend-pure-runtime-rust-evaluator/README.md`](../legend-pure-runtime-rust-evaluator/README.md)
   — runtime module that consumes this AP.
-- `legend-pure-rust/crates/java-codegen/` — the codegen logic this AP
-  invokes via JNI.
-- `legend-pure-rust/crates/jni/src/codegen.rs` — the
-  `nativeGenerateBindings` JNI export.
+- `crates/java-codegen/` on tag `archive/pre-evaluator-extract-2026-10` — the
+  codegen logic this AP invokes via JNI.
+- `crates/jni/src/codegen.rs` on the same tag — the `nativeGenerateBindings`
+  JNI export.
