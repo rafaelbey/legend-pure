@@ -76,6 +76,7 @@ const FISHED: &[&str] = &[
     "pow_Number_1__Number_1__Number_1_",
     "sin_Number_1__Float_1_",
     "cos_Number_1__Float_1_",
+    "tan_Number_1__Float_1_",
     "toFloat_Number_1__Float_1_",
     "toDecimal_Number_1__Decimal_1_",
     "parseFloat_String_1__Float_1_",

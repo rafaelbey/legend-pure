@@ -376,6 +376,23 @@ impl NativeFunction for Cos {
     }
 }
 
+/// Pure `tan(Number[1]):Float[1]` — tangent of `x` in radians.
+#[derive(Debug)]
+pub struct Tan;
+
+impl NativeFunction for Tan {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("tan", &values, 1)?;
+        let x = number_to_f64("tan", &values[0])?;
+        Ok(Evaluated::new(Value::Float(x.tan())))
+    }
+}
+
 /// Pure `toFloat(Number[1]):Float[1]` — numeric → Float coercion.
 #[derive(Debug)]
 pub struct ToFloat;
@@ -513,6 +530,7 @@ pub fn register(registry: &mut NativeRegistry) {
     // trigonometric
     registry.register("sin_Number_1__Float_1_", Sin);
     registry.register("cos_Number_1__Float_1_", Cos);
+    registry.register("tan_Number_1__Float_1_", Tan);
 
     // numeric conversion
     registry.register("toFloat_Number_1__Float_1_", ToFloat);
@@ -952,6 +970,36 @@ mod tests {
     #[test]
     fn cos_type_mismatch() {
         assert!(Cos.execute(&[lit_bool(true)], &mut MockCtx).is_err());
+    }
+
+    #[test]
+    fn tan_zero() {
+        let r = Tan.execute(&[lit_float(0.0)], &mut MockCtx).unwrap();
+        match r.into_value() {
+            Value::Float(f) => assert!(approx_eq(f, 0.0)),
+            other => panic!("expected Float, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn tan_pi_over_four() {
+        let r = Tan
+            .execute(&[lit_float(std::f64::consts::FRAC_PI_4)], &mut MockCtx)
+            .unwrap();
+        match r.into_value() {
+            Value::Float(f) => assert!(approx_eq(f, 1.0)),
+            other => panic!("expected Float, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn tan_wrong_arg_count() {
+        assert!(Tan.execute(&[], &mut MockCtx).is_err());
+    }
+
+    #[test]
+    fn tan_type_mismatch() {
+        assert!(Tan.execute(&[lit_str("x")], &mut MockCtx).is_err());
     }
 
     #[test]
