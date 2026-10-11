@@ -23,8 +23,29 @@
 //! [`java_number_string`](crate::native::math::java_number_string) lives here because the string natives
 //! (`toString`, `format`) and the math error messages share it.
 
-use crate::native::NativeRegistry;
+use legend_pure_metamodel::types::ValueSpec;
+use rust_decimal::Decimal;
+use rust_decimal::prelude::ToPrimitive;
+
+use crate::error::{PureException, PureRuntimeError};
+use crate::native::{EvalContextTrait, Evaluated, NativeFunction, NativeRegistry, force_all};
 use crate::value::Value;
+
+/// Coerce a numeric `Value` (Integer, Float, or Decimal) to `f64`.
+///
+/// `Value::as_float` handles Integer→Float already but rejects `Decimal`.
+/// The math natives accept `Number`, so this wrapper adds the Decimal case
+/// without mutating `Value::as_float`'s narrower contract.
+fn number_to_f64(func_name: &str, v: &Value) -> Result<f64, PureRuntimeError> {
+    match v {
+        Value::Decimal(d) => d.to_f64().ok_or_else(|| {
+            PureRuntimeError::EvaluationError(format!(
+                "{func_name}: cannot convert Decimal {d} to Float"
+            ))
+        }),
+        _ => v.as_float(),
+    }
+}
 
 /// Render a numeric value using Java's `toString` rules — used in the
 /// error-message text the platform PCT tests pin (`assertError` against
@@ -58,12 +79,159 @@ pub fn java_number_string(v: &Value) -> String {
     }
 }
 
-/// Register the fished mathematical natives.
-pub fn register(_registry: &mut NativeRegistry) {}
+/// Pure `round(Number[1]):Integer[1]`
+/// Pure `round(Decimal[1], scale:Integer[1]):Decimal[1]`
+/// Pure `round(Float[1], scale:Integer[1]):Float[1]`
+///
+/// **Banker's rounding** (half-to-even), matching Java Pure / IEEE 754
+/// default semantics. The platform PCT tests
+/// (`testPositiveFloatRoundHalfEvenDown` etc.) assert `round(16.5) == 16`
+/// and `round(17.5) == 18` — half-away-from-zero would give 17 and 18.
+///
+/// - 1-arg: rounds any `Number` to the nearest `Integer`. For exact
+///   halves, picks the even neighbor (`f64::round_ties_even`).
+/// - 2-arg with `Decimal`: rounds to `scale` decimal places via
+///   `Decimal::round_dp` (banker's rounding by default).
+/// - 2-arg with `Float`: scales by 10^scale, applies `round_ties_even`,
+///   scales back. Returns Float per the platform signature.
+#[derive(Debug)]
+pub struct Round;
+
+impl NativeFunction for Round {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        match values.len() {
+            1 => {
+                let x = number_to_f64("round", &values[0])?;
+                #[allow(clippy::cast_possible_truncation)]
+                Ok(Evaluated::new(Value::Integer(x.round_ties_even() as i64)))
+            }
+            2 => {
+                let scale = scale_arg(&values[1])?;
+                match &values[0] {
+                    Value::Decimal(d) => Ok(Evaluated::new(Value::Decimal(d.round_dp(scale)))),
+                    Value::Float(f) => {
+                        let factor = 10f64.powi(i32::try_from(scale).map_err(|_| {
+                            PureRuntimeError::EvaluationError(format!(
+                                "round: scale {scale} out of i32 range"
+                            ))
+                        })?);
+                        let rounded = (f * factor).round_ties_even() / factor;
+                        Ok(Evaluated::new(Value::Float(rounded)))
+                    }
+                    Value::Integer(i) => {
+                        // Spec says the 2-arg overload only exists for Decimal/Float,
+                        // but the integer case is well-defined and harmless: scale > 0
+                        // returns the same integer; scale < 0 would be a Java-side
+                        // surprise we don't support. Keep parity with Decimal: an
+                        // Integer at any positive scale is itself, returned as Decimal.
+                        if scale == 0 {
+                            Ok(Evaluated::new(Value::Integer(*i)))
+                        } else {
+                            Ok(Evaluated::new(Value::Decimal(Decimal::from(*i))))
+                        }
+                    }
+                    other => Err(PureRuntimeError::type_mismatch("Decimal or Float", other).into()),
+                }
+            }
+            n => Err(PureRuntimeError::EvaluationError(format!(
+                "round: expected 1 or 2 argument(s), got {n}"
+            ))
+            .into()),
+        }
+    }
+}
+
+fn scale_arg(v: &Value) -> Result<u32, PureException> {
+    match v {
+        Value::Integer(n) if *n >= 0 => Ok(u32::try_from(*n).map_err(|_| {
+            PureRuntimeError::EvaluationError(format!("round: scale {n} out of u32 range"))
+        })?),
+        Value::Integer(n) => Err(PureRuntimeError::EvaluationError(format!(
+            "round: scale must be non-negative, got {n}"
+        ))
+        .into()),
+        other => Err(PureRuntimeError::type_mismatch("Integer", other).into()),
+    }
+}
+
+/// Register the fished mathematical natives under their mangled Pure FQNs.
+pub fn register(registry: &mut NativeRegistry) {
+    // rounding
+    registry.register("round_Number_1__Integer_1_", Round);
+    registry.register("round_Decimal_1__Integer_1__Decimal_1_", Round);
+    registry.register("round_Float_1__Integer_1__Float_1_", Round);
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::native::{MockCtx, lit_float, lit_str};
+
+    #[test]
+    fn round_half_to_even() {
+        // Phase 3: switched from half-away-from-zero to banker's rounding
+        // (half-to-even) to match Java Pure / IEEE 754 default. The
+        // platform PCT tests (testPositiveFloatRoundHalfEvenDown etc.)
+        // rely on round(16.5) == 16 and round(17.5) == 18.
+        assert_eq!(
+            Round
+                .execute(&[lit_float(2.5)], &mut MockCtx)
+                .unwrap()
+                .into_value(),
+            Value::Integer(2),
+            "2.5 → 2 (round half to even)"
+        );
+        assert_eq!(
+            Round
+                .execute(&[lit_float(-2.5)], &mut MockCtx)
+                .unwrap()
+                .into_value(),
+            Value::Integer(-2),
+            "-2.5 → -2 (round half to even)"
+        );
+        assert_eq!(
+            Round
+                .execute(&[lit_float(3.5)], &mut MockCtx)
+                .unwrap()
+                .into_value(),
+            Value::Integer(4),
+            "3.5 → 4 (round half to even)"
+        );
+        assert_eq!(
+            Round
+                .execute(&[lit_float(17.5)], &mut MockCtx)
+                .unwrap()
+                .into_value(),
+            Value::Integer(18),
+            "17.5 → 18 (round half to even)"
+        );
+    }
+
+    #[test]
+    fn round_below_half() {
+        assert_eq!(
+            Round
+                .execute(&[lit_float(2.4)], &mut MockCtx)
+                .unwrap()
+                .into_value(),
+            Value::Integer(2)
+        );
+    }
+
+    #[test]
+    fn round_wrong_arg_count() {
+        assert!(Round.execute(&[], &mut MockCtx).is_err());
+    }
+
+    #[test]
+    fn round_type_mismatch() {
+        assert!(Round.execute(&[lit_str("x")], &mut MockCtx).is_err());
+    }
 
     #[test]
     fn java_number_string_matches_java_to_string() {

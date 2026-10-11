@@ -49,6 +49,10 @@ const FISHED: &[&str] = &[
     "copy_T_1__KeyExpression_MANY__T_1_",
     "copy_T_1__String_1__T_1_",
     "copy_T_1__String_1__KeyExpression_MANY__T_1_",
+    // math
+    "round_Number_1__Integer_1_",
+    "round_Decimal_1__Integer_1__Decimal_1_",
+    "round_Float_1__Integer_1__Float_1_",
     // testing
     "assert_Boolean_1__Function_1__Boolean_1_",
 ];
