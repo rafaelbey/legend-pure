@@ -174,6 +174,29 @@ impl NativeFunction for Minute {
     }
 }
 
+/// Pure `second(DateTime[1]): Integer[1]`. Throws "Cannot get second
+/// for `<date>`" when no second component (`testSecondError`).
+#[derive(Debug)]
+pub struct Second;
+
+impl NativeFunction for Second {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("second", &values, 1)?;
+        let d = values[0].as_date()?;
+        match d.get_second() {
+            Some(s) => Ok(Evaluated::new(Value::Integer(i64::from(s)))),
+            None => {
+                Err(PureRuntimeError::EvaluationError(format!("Cannot get second for {d}")).into())
+            }
+        }
+    }
+}
+
 /// Pure `datePart(Date[1]): Date[1]` — drop the time component.
 ///
 /// Per the platform comment on `datePart` (`essential/date/extract/
@@ -808,6 +831,7 @@ pub fn register(registry: &mut NativeRegistry) {
     registry.register("dayOfMonth_Date_1__Integer_1_", DayOfMonth);
     registry.register("hour_Date_1__Integer_1_", Hour);
     registry.register("minute_Date_1__Integer_1_", Minute);
+    registry.register("second_Date_1__Integer_1_", Second);
 
     registry.register("datePart_Date_1__Date_1_", DatePart);
     registry.register(
