@@ -727,3 +727,26 @@ fn cast_to_a_relation_type_is_unsupported() {
         "{err:?}"
     );
 }
+
+/// Keys registered before their implementation is fished fail with
+/// `NotImplemented` naming the key.
+#[test]
+fn not_yet_meta_natives_fail_with_not_implemented() {
+    let model = ModelBuilder::new().finish();
+    let registry = registry();
+    let mut eval = Evaluator::new(&model, &registry);
+    for key in [
+        "genericType_Any_MANY__GenericType_1_",
+        "genericType_Any_1__GenericType_1_",
+    ] {
+        let err = eval.eval(&expr::call(key, vec![expr::int(1)])).unwrap_err();
+        assert!(
+            matches!(
+                &err.kind,
+                PureExceptionKind::ExecutionError(PureRuntimeError::NotImplemented(k))
+                    if k == key
+            ),
+            "{key}: {err:?}"
+        );
+    }
+}

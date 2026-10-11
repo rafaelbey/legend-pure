@@ -35,7 +35,7 @@ use crate::date::DatePrecision;
 use crate::error::{PureException, PureRuntimeError};
 use crate::heap::RuntimeHeap;
 use crate::native::{
-    EvalContextTrait, Evaluated, NativeFunction, NativeRegistry, expect_args, force_all,
+    EvalContextTrait, Evaluated, NativeFunction, NativeRegistry, NotYet, expect_args, force_all,
 };
 use crate::value::{FunctionValue, Value};
 
@@ -822,4 +822,17 @@ pub fn register(registry: &mut NativeRegistry) {
         ExtractEnumValue,
     );
     registry.register("cast_Any_m__T_1__T_m_", Cast);
+    // `genericType` waits for the least upper bound: the platform takes
+    // `Any[*]`, and the archive's `GenericTypeOf` types a collection by
+    // folding its elements through the compiler's `least_upper_bound_ids`,
+    // which is not in this workspace. Registered under the platform key
+    // and the archive's `Any[1]` key.
+    registry.register(
+        "genericType_Any_MANY__GenericType_1_",
+        NotYet("genericType_Any_MANY__GenericType_1_"),
+    );
+    registry.register(
+        "genericType_Any_1__GenericType_1_",
+        NotYet("genericType_Any_1__GenericType_1_"),
+    );
 }
