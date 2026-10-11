@@ -17,6 +17,7 @@ package org.finos.legend.pure.rust.compiled;
 import org.eclipse.collections.api.factory.Lists;
 import org.eclipse.collections.api.list.MutableList;
 import org.finos.legend.pure.m3.coreinstance.meta.pure.metamodel.function.Function;
+import org.finos.legend.pure.m3.exception.PureExecutionException;
 import org.finos.legend.pure.m3.execution.ExecutionSupport;
 import org.finos.legend.pure.m4.coreinstance.CoreInstance;
 import org.finos.legend.pure.rust.PureRustEvaluationException;
@@ -72,6 +73,12 @@ public final class CompiledEvalRust implements EvalRustExecutor
                 values.add(objects.toCompiled(result));
             }
             return values;
+        }
+        catch (PureRustEvaluationException e)
+        {
+            // A result the compiled engine cannot hold: reported as the Rust
+            // side's own diagnostics are, kind-prefixed, as a Pure failure.
+            throw new PureExecutionException(e.getMessage(), e);
         }
         finally
         {
