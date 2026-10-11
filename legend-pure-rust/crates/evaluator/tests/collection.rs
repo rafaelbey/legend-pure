@@ -42,6 +42,7 @@ const SLICE: &str = "slice_T_MANY__Integer_1__Integer_1__T_MANY_";
 const FIND: &str = "find_T_MANY__Function_1__T_$0_1$_";
 const AT: &str = "at_T_MANY__Integer_1__T_1_";
 const EXISTS: &str = "exists_T_MANY__Function_1__Boolean_1_";
+const INDEX_OF: &str = "indexOf_T_MANY__T_1__Integer_1_";
 const TIMES: &str = "times_Number_MANY__Number_1_";
 const EQ: &str = "eq_Any_1__Any_1__Boolean_1_";
 const PLUS: &str = "plus_Number_MANY__Number_1_";
@@ -421,4 +422,37 @@ fn exists_is_true_when_any_element_matches() {
     assert_eq!(exists(&[1, 2, 3], 2), Value::Boolean(true));
     assert_eq!(exists(&[1, 3], 2), Value::Boolean(false));
     assert_eq!(exists(&[], 2), Value::Boolean(false));
+}
+
+#[test]
+fn index_of_finds_the_first_equal_element() {
+    let index_of =
+        |items: ValueSpec, needle: ValueSpec| run(&expr::call(INDEX_OF, vec![items, needle]));
+    assert_eq!(
+        index_of(strings(&["a", "b", "c", "b"]), expr::string("b")),
+        Value::Integer(1)
+    );
+    assert_eq!(
+        index_of(strings(&["a", "b"]), expr::string("z")),
+        Value::Integer(-1)
+    );
+    // Over heap objects: the second Pair a zip made is found by identity.
+    let model = model();
+    let registry = NativeRegistry::standard();
+    let mut eval = Evaluator::new(&model, &registry);
+    let pairs = eval
+        .eval(&expr::call(ZIP, vec![ints(&[1, 2]), strings(&["a", "b"])]))
+        .unwrap();
+    eval.context_mut().push_scope();
+    eval.context_mut().set("pairs", pairs.clone());
+    eval.context_mut()
+        .set("p", pairs.to_collection()[1].clone());
+    assert_eq!(
+        eval.eval(&expr::call(
+            INDEX_OF,
+            vec![expr::var("pairs"), expr::var("p")]
+        ))
+        .unwrap(),
+        Value::Integer(1)
+    );
 }

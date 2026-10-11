@@ -610,6 +610,36 @@ impl NativeFunction for Exists {
     }
 }
 
+/// Pure `indexOf<T>(T[*], T[1]): Integer[1]`
+///
+/// Returns the 0-based index of the first element equal to the needle,
+/// or `-1` when the needle is not found. Uses [`Value`] equality.
+#[derive(Debug)]
+pub struct IndexOf;
+
+impl NativeFunction for IndexOf {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("indexOf", &values, 2)?;
+        let haystack = values[0].to_collection();
+        let needle = &values[1];
+        let ctx_ref: &dyn EvalContextTrait = ctx;
+        let idx = haystack
+            .iter()
+            .position(|v| crate::native::equality::values_equal(ctx_ref, v, needle));
+        let result = match idx {
+            #[allow(clippy::cast_possible_wrap)]
+            Some(i) => Value::Integer(i as i64),
+            None => Value::Integer(-1),
+        };
+        Ok(Evaluated::new(result))
+    }
+}
+
 /// Register the fished collection natives.
 pub fn register(registry: &mut NativeRegistry) {
     registry.register("fold_T_MANY__Function_1__V_m__V_m_", Fold);
@@ -634,6 +664,7 @@ pub fn register(registry: &mut NativeRegistry) {
     registry.register("find_T_MANY__Function_1__T_$0_1$_", Find);
     registry.register("at_T_MANY__Integer_1__T_1_", At);
     registry.register("exists_T_MANY__Function_1__Boolean_1_", Exists);
+    registry.register("indexOf_T_MANY__T_1__Integer_1_", IndexOf);
 }
 
 #[cfg(test)]
@@ -994,5 +1025,43 @@ mod tests {
                 .is_err()
         );
         assert!(Take.execute(&[int_spec(&[1])], &mut MockCtx).is_err());
+    }
+
+    #[test]
+    fn index_of_found() {
+        assert_eq!(
+            IndexOf
+                .execute(&[int_spec(&[10, 20, 30]), lit_int(20)], &mut MockCtx)
+                .unwrap()
+                .into_value(),
+            Value::Integer(1)
+        );
+    }
+
+    #[test]
+    fn index_of_not_found_returns_minus_one() {
+        assert_eq!(
+            IndexOf
+                .execute(&[int_spec(&[10, 20, 30]), lit_int(99)], &mut MockCtx)
+                .unwrap()
+                .into_value(),
+            Value::Integer(-1)
+        );
+    }
+
+    #[test]
+    fn index_of_empty_returns_minus_one() {
+        assert_eq!(
+            IndexOf
+                .execute(&[lit_collection(vec![]), lit_int(1)], &mut MockCtx)
+                .unwrap()
+                .into_value(),
+            Value::Integer(-1)
+        );
+    }
+
+    #[test]
+    fn index_of_wrong_arg_count() {
+        assert!(IndexOf.execute(&[lit_int(1)], &mut MockCtx).is_err());
     }
 }
