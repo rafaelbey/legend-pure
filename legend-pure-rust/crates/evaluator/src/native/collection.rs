@@ -422,6 +422,44 @@ impl NativeFunction for Range {
     }
 }
 
+/// Pure `map(T[*], Function<{T[1]->V[1]}>[1]): V[*]`
+///
+/// Applies a lambda to each element of a collection.
+#[derive(Debug)]
+pub struct Map;
+
+impl NativeFunction for Map {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        expect_args("map", args, 2)?;
+        let source = ctx.evaluate(&args[0])?.into_value().to_collection();
+        let lambda_val = ctx.evaluate(&args[1])?.into_value();
+
+        // Pure collections are flat — a lambda returning `V[*]` or `V[0..1]`
+        // contributes zero, one, or many scalar elements to the result. We
+        // flatten Collection/Unit outputs here so downstream `.property`
+        // access sees scalars, not nested collections.
+        let mut results: Vec<Value> = Vec::with_capacity(source.len());
+        for item in &source {
+            let called = ctx.call_function(&lambda_val, std::slice::from_ref(item))?;
+            match &called {
+                Value::Collection(inner) => {
+                    for v in inner.iter() {
+                        results.push(v.clone());
+                    }
+                }
+                Value::Unit => {}
+                _ => results.push(called),
+            }
+        }
+
+        Ok(Evaluated::new(Value::from_vec(results)))
+    }
+}
+
 /// Register the fished collection natives.
 pub fn register(registry: &mut NativeRegistry) {
     registry.register("fold_T_MANY__Function_1__V_m__V_m_", Fold);
@@ -439,6 +477,9 @@ pub fn register(registry: &mut NativeRegistry) {
         "range_Integer_1__Integer_1__Integer_1__Integer_MANY_",
         Range,
     );
+    registry.register("map_T_MANY__Function_1__V_MANY_", Map);
+    registry.register("map_T_m__Function_1__V_m_", Map);
+    registry.register("map_T_$0_1$__Function_1__V_$0_1$_", Map);
 }
 
 #[cfg(test)]

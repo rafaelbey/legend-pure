@@ -35,6 +35,9 @@ const REMOVE_DUPLICATES: &str = "removeDuplicates_T_MANY__Function_$0_1$__Functi
 const SORT: &str = "sort_T_m__Function_$0_1$__Function_$0_1$__T_m_";
 const SIZE: &str = "size_Any_MANY__Integer_1_";
 const RANGE: &str = "range_Integer_1__Integer_1__Integer_1__Integer_MANY_";
+const MAP_M: &str = "map_T_m__Function_1__V_m_";
+const MAP_MANY: &str = "map_T_MANY__Function_1__V_MANY_";
+const MAP_ZERO_ONE: &str = "map_T_$0_1$__Function_1__V_$0_1$_";
 const TIMES: &str = "times_Number_MANY__Number_1_";
 const EQ: &str = "eq_Any_1__Any_1__Boolean_1_";
 const PLUS: &str = "plus_Number_MANY__Number_1_";
@@ -306,4 +309,39 @@ fn range_follows_the_sign_of_the_step_and_rejects_zero() {
     assert_eq!(as_ints(&run(&range(2, 2, 1))), Vec::<i64>::new());
     assert_eq!(as_ints(&run(&range(5, 0, 1))), Vec::<i64>::new());
     assert_eq!(run_err(&range(0, 5, 0)), "range step must not be 0");
+}
+
+#[test]
+fn map_applies_the_lambda_and_flattens_the_results() {
+    // [1, 2, 3]->map(x | $x * $x)
+    assert_eq!(
+        as_ints(&run(&expr::call(
+            MAP_M,
+            vec![ints(&[1, 2, 3]), square_lambda()]
+        ))),
+        [1, 4, 9]
+    );
+    // [1, 2]->map(x | [$x, $x]): a V[*] lambda contributes every element.
+    let twice = expr::lambda(
+        vec![param("x", named(INTEGER_ID), Multiplicity::PureOne)],
+        vec![expr::collection(vec![expr::var("x"), expr::var("x")])],
+    );
+    assert_eq!(
+        as_ints(&run(&expr::call(MAP_MANY, vec![ints(&[1, 2]), twice]))),
+        [1, 1, 2, 2]
+    );
+    // [1, 2]->map(x | []): an empty result contributes nothing.
+    let nothing = expr::lambda(
+        vec![param("x", named(INTEGER_ID), Multiplicity::PureOne)],
+        vec![expr::collection(Vec::new())],
+    );
+    assert_eq!(
+        run(&expr::call(MAP_MANY, vec![ints(&[1, 2]), nothing])),
+        Value::Unit
+    );
+    // The [0..1] overload over an empty input.
+    assert_eq!(
+        run(&expr::call(MAP_ZERO_ONE, vec![ints(&[]), square_lambda()])),
+        Value::Unit
+    );
 }
