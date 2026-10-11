@@ -540,6 +540,26 @@ impl NativeFunction for HasHour {
     }
 }
 
+/// Pure `hasMinute(Date[1]): Boolean[1]`.
+#[derive(Debug)]
+pub struct HasMinute;
+
+impl NativeFunction for HasMinute {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("hasMinute", &values, 1)?;
+        let d = values[0].as_date()?;
+        Ok(Evaluated::new(Value::Boolean(matches!(
+            d.precision(),
+            DatePrecision::Time(tp) if tp >= TimePrecision::Minute
+        ))))
+    }
+}
+
 /// Pure `parseDate(String[1]): Date[1]`.
 ///
 /// Accepts the same family of ISO-like literals the Pure compiler
@@ -957,6 +977,7 @@ pub fn register(registry: &mut NativeRegistry) {
     registry.register("hasMonth_Date_1__Boolean_1_", HasMonth);
     registry.register("hasDay_Date_1__Boolean_1_", HasDay);
     registry.register("hasHour_Date_1__Boolean_1_", HasHour);
+    registry.register("hasMinute_Date_1__Boolean_1_", HasMinute);
 
     registry.register("parseDate_String_1__Date_1_", ParseDate);
 
