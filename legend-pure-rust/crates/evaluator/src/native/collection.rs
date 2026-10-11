@@ -180,18 +180,20 @@ impl NativeFunction for RemoveDuplicates {
             ))
             .into());
         }
-        let source = values[0].to_collection();
+        let source: Vec<Value> = values[0].to_collection().iter().cloned().collect();
         let key_fn: Option<Value> = values.get(1).filter(|v| !is_empty_optional(v)).cloned();
         let eql_fn: Option<Value> = values.get(2).filter(|v| !is_empty_optional(v)).cloned();
 
-        let mut keys: Vec<Value> = Vec::with_capacity(source.len());
-        for item in &source {
-            let k = match &key_fn {
-                Some(kf) => ctx.call_function(kf, std::slice::from_ref(item))?,
-                None => item.clone(),
-            };
-            keys.push(k);
-        }
+        let keys: Vec<Value> = match &key_fn {
+            Some(kf) => {
+                let mut out = Vec::with_capacity(source.len());
+                for item in &source {
+                    out.push(ctx.call_function(kf, std::slice::from_ref(item))?);
+                }
+                out
+            }
+            None => source.clone(),
+        };
 
         let mut kept: Vec<usize> = Vec::with_capacity(source.len());
         for i in 0..source.len() {
@@ -255,13 +257,16 @@ impl NativeFunction for Sort {
         args: &[ValueSpec],
         ctx: &mut dyn EvalContextTrait,
     ) -> Result<Evaluated, PureException> {
-        let values = force_all(args, ctx)?;
-        expect_args("sort", &values, 3)?;
-        let source = values[0].to_collection();
-        let key_fn = lambda_or_none(&values[1]);
-        let comp_fn = lambda_or_none(&values[2]);
+        let (a0, a1, a2) = force3("sort", args, ctx)?;
+        let source = a0.to_collection();
+        let key_fn = lambda_or_none(&a1);
+        let comp_fn = lambda_or_none(&a2);
 
-        let items: Vec<Value> = source.iter().cloned().collect();
+        let mut items: Vec<Value> = source.iter().cloned().collect();
+        if key_fn.is_none() && comp_fn.is_none() {
+            items.sort_by(cmp_values);
+            return Ok(Evaluated::new(Value::from_vec(items)));
+        }
         let keys: Vec<Value> = if let Some(k) = key_fn {
             let mut out = Vec::with_capacity(items.len());
             for it in &items {

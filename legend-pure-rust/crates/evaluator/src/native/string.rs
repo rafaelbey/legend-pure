@@ -21,6 +21,7 @@
 use legend_pure_metamodel::ids::ElementId;
 use legend_pure_metamodel::types::ValueSpec;
 use smol_str::SmolStr;
+use std::fmt::Write as _;
 
 use crate::error::{PureException, PureRuntimeError};
 use crate::native::{
@@ -232,65 +233,53 @@ impl NativeFunction for Format {
         ctx: &mut dyn EvalContextTrait,
     ) -> Result<Evaluated, PureException> {
         let (a0, a1) = force2("format", args, ctx)?;
-        let template = a0.as_string()?.to_string();
+        let template: &str = a0.as_string()?;
+        let subs = a1.to_collection();
 
-        let subs: Vec<Value> = match &a1 {
-            Value::Collection(v) => v.iter().cloned().collect(),
-            single => vec![single.clone()],
-        };
-
-        let chars: Vec<char> = template.chars().collect();
+        // Every directive character is ASCII, so the scan runs over bytes
+        // and copies the text between directives as whole slices.
+        let bytes = template.as_bytes();
         let mut result = String::with_capacity(template.len());
         let mut i = 0usize;
         let mut sub_idx = 0usize;
 
-        while i < chars.len() {
-            let c = chars[i];
-            if c != '%' {
-                result.push(c);
-                i += 1;
+        while i < bytes.len() {
+            if bytes[i] != b'%' {
+                let run = i;
+                while i < bytes.len() && bytes[i] != b'%' {
+                    i += 1;
+                }
+                result.push_str(&template[run..i]);
                 continue;
             }
             let mut j = i + 1;
             let mut zero_pad = false;
-            if j < chars.len()
-                && chars[j] == '0'
-                && j + 1 < chars.len()
-                && chars[j + 1].is_ascii_digit()
+            if j < bytes.len()
+                && bytes[j] == b'0'
+                && j + 1 < bytes.len()
+                && bytes[j + 1].is_ascii_digit()
             {
                 zero_pad = true;
                 j += 1;
             }
             let width_start = j;
-            while j < chars.len() && chars[j].is_ascii_digit() {
+            while j < bytes.len() && bytes[j].is_ascii_digit() {
                 j += 1;
             }
             let width: Option<usize> = if j > width_start {
-                Some(
-                    chars[width_start..j]
-                        .iter()
-                        .collect::<String>()
-                        .parse()
-                        .unwrap_or(0),
-                )
+                Some(template[width_start..j].parse().unwrap_or(0))
             } else {
                 None
             };
-            let precision: Option<usize> = if j < chars.len() && chars[j] == '.' {
+            let precision: Option<usize> = if j < bytes.len() && bytes[j] == b'.' {
                 let p_start = j + 1;
                 let mut p_end = p_start;
-                while p_end < chars.len() && chars[p_end].is_ascii_digit() {
+                while p_end < bytes.len() && bytes[p_end].is_ascii_digit() {
                     p_end += 1;
                 }
                 if p_end > p_start {
                     j = p_end;
-                    Some(
-                        chars[p_start..p_end]
-                            .iter()
-                            .collect::<String>()
-                            .parse()
-                            .unwrap_or(0),
-                    )
+                    Some(template[p_start..p_end].parse().unwrap_or(0))
                 } else {
                     j = p_start;
                     None
@@ -298,17 +287,17 @@ impl NativeFunction for Format {
             } else {
                 None
             };
-            if j >= chars.len() {
+            if j >= bytes.len() {
                 result.push('%');
                 i += 1;
                 continue;
             }
-            let spec = chars[j];
+            let spec = bytes[j];
             let date_pattern: Option<String> =
-                if spec == 't' && j + 1 < chars.len() && chars[j + 1] == '{' {
+                if spec == b't' && j + 1 < bytes.len() && bytes[j + 1] == b'{' {
                     let pat_start = j + 2;
-                    if let Some(end) = chars[pat_start..].iter().position(|&c| c == '}') {
-                        let pat: String = chars[pat_start..pat_start + end].iter().collect();
+                    if let Some(end) = template[pat_start..].find('}') {
+                        let pat = template[pat_start..pat_start + end].to_string();
                         j = pat_start + end + 1;
                         Some(pat)
                     } else {
@@ -318,7 +307,7 @@ impl NativeFunction for Format {
                     j += 1;
                     None
                 };
-            if !matches!(spec, 's' | 'r' | 'd' | 'f' | 't') {
+            if !matches!(spec, b's' | b'r' | b'd' | b'f' | b't') {
                 result.push('%');
                 i += 1;
                 continue;
@@ -331,9 +320,15 @@ impl NativeFunction for Format {
             })?;
             sub_idx += 1;
             match spec {
-                'r' => result.push_str(&repr_value(&v)),
-                's' => result.push_str(&pure_to_string(&v, ctx)?),
-                'd' => {
+                b'r' => result.push_str(&repr_value(&v)),
+                b's' => match &v {
+                    Value::String(s) => result.push_str(s),
+                    Value::Integer(n) => {
+                        let _ = write!(result, "{n}");
+                    }
+                    other => result.push_str(&pure_to_string(other, ctx)?),
+                },
+                b'd' => {
                     let Value::Integer(n) = v else {
                         let got = pure_to_string(&v, ctx)?;
                         return Err(PureRuntimeError::EvaluationError(format!(
@@ -356,7 +351,7 @@ impl NativeFunction for Format {
                     };
                     result.push_str(&body);
                 }
-                'f' => {
+                b'f' => {
                     let Value::Float(f) = v else {
                         let got = pure_to_string(&v, ctx)?;
                         return Err(PureRuntimeError::EvaluationError(format!(
@@ -371,7 +366,7 @@ impl NativeFunction for Format {
                     };
                     result.push_str(&body);
                 }
-                't' => {
+                b't' => {
                     let Value::Date(d) = &v else {
                         let got = pure_to_string(&v, ctx)?;
                         return Err(PureRuntimeError::EvaluationError(format!(
@@ -561,16 +556,19 @@ impl NativeFunction for JoinStrings {
         };
 
         let coll = values[0].to_collection();
-        let mut parts: Vec<String> = Vec::with_capacity(coll.len());
-        for v in &coll {
-            parts.push(v.as_string()?.as_str().to_owned());
+        let mut result = String::new();
+        if let Some(p) = &prefix {
+            result.push_str(p);
         }
-        let joined = parts.join(separator.as_str());
-
-        let result = match (prefix, suffix) {
-            (Some(p), Some(s)) => format!("{p}{joined}{s}"),
-            _ => joined,
-        };
+        for (i, v) in coll.iter().enumerate() {
+            if i > 0 {
+                result.push_str(&separator);
+            }
+            result.push_str(v.as_string()?);
+        }
+        if let Some(s) = &suffix {
+            result.push_str(s);
+        }
         Ok(Evaluated::new(Value::String(SmolStr::new(result))))
     }
 }
