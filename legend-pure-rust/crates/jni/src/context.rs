@@ -20,8 +20,10 @@ use legend_pure_evaluator::error::{PureException, PureRuntimeError};
 use legend_pure_evaluator::eval::Evaluator;
 use legend_pure_evaluator::heap::{HeapEntry, ObjectHandle};
 use legend_pure_evaluator::lower::{Lowering, ModelExtension};
+use legend_pure_evaluator::m3_paths;
 use legend_pure_evaluator::native::NativeRegistry;
 use legend_pure_evaluator::value::{FunctionValue, Value};
+use legend_pure_metamodel::ids::ElementId;
 use legend_pure_metamodel::model::PureModel;
 use smol_str::SmolStr;
 
@@ -30,11 +32,71 @@ use crate::bridge::{BridgeShared, JniHandleTable};
 use crate::failure::ffi_error;
 use crate::java_node::JavaNode;
 
-/// Classifier of a `.par` native-function node.
-const NATIVE_FUNCTION: &str = "meta::pure::metamodel::function::NativeFunction";
+/// The function classifiers `start` tells apart, resolved once to the
+/// model's ids: a node is classified by id, never by its classifier's
+/// spelling.
+struct FunctionKinds {
+    lambda: Option<ElementId>,
+    native: Option<ElementId>,
+    defined: Option<ElementId>,
+}
 
-/// Classifier of a Java lambda.
-const LAMBDA_FUNCTION: &str = legend_pure_evaluator::m3_paths::LAMBDA_FUNCTION;
+/// What a function node handed to `start` is.
+enum FunctionKind {
+    /// A lambda: lowered with its captures and applied.
+    Lambda,
+    /// A native function: called through the registry under its key.
+    Native(SmolStr),
+    /// A function with a body (`ConcreteFunctionDefinition`): lowered as
+    /// an element, with everything it calls, and applied.
+    Defined,
+    /// Anything else, with its user path when it has one.
+    Other(Option<SmolStr>),
+}
+
+impl FunctionKinds {
+    fn resolve(model: &PureModel) -> Self {
+        Self {
+            lambda: m3_paths::resolve(model, m3_paths::LAMBDA_FUNCTION),
+            native: m3_paths::resolve(model, m3_paths::NATIVE_FUNCTION),
+            defined: m3_paths::resolve(model, m3_paths::CONCRETE_FUNCTION_DEFINITION),
+        }
+    }
+
+    fn of(&self, model: &PureModel, handle: &ObjectHandle) -> FunctionKind {
+        let entry = handle.borrow();
+        let HeapEntry::Typed(obj) = &*entry else {
+            return FunctionKind::Other(None);
+        };
+        let Some(node) = obj.as_any().downcast_ref::<JavaNode>() else {
+            return FunctionKind::Other(None);
+        };
+        let path = node.user_path.clone().or_else(|| node.name.clone());
+        let Some(classifier) = model.resolve_fqn_str(&node.classifier) else {
+            return FunctionKind::Other(path);
+        };
+        let is = |id: Option<ElementId>| id == Some(classifier);
+        if is(self.lambda) {
+            FunctionKind::Lambda
+        } else if is(self.native)
+            && let Some(key) = &node.name
+        {
+            FunctionKind::Native(key.clone())
+        } else if is(self.defined) {
+            FunctionKind::Defined
+        } else {
+            FunctionKind::Other(path)
+        }
+    }
+}
+
+/// What a lowered call runs.
+enum Callable {
+    /// A native, by its registry key.
+    Native(SmolStr),
+    /// An element or closure the evaluator applies.
+    Value(Value),
+}
 
 /// Where the last `start` on this thread spent its time: the lowering
 /// (Phase A and B, including every JNI read it made) and the run.
@@ -74,6 +136,8 @@ pub struct JniContext {
     /// Set once a panic unwound through an entry point: the evaluator's
     /// state is unknown from then on and every call is refused.
     pub poisoned: bool,
+    /// The function classifiers, by id.
+    kinds: FunctionKinds,
 }
 
 impl JniContext {
@@ -103,6 +167,9 @@ impl JniContext {
             last_error: std::cell::RefCell::new(None),
             jni_reads: std::cell::Cell::new(0),
         });
+        // SAFETY: the model box was allocated just above and lives until
+        // `Drop`; nothing borrows it mutably yet.
+        let kinds = FunctionKinds::resolve(unsafe { &*model_ptr });
         Self {
             model: model_ptr,
             registry: registry_ptr,
@@ -110,6 +177,7 @@ impl JniContext {
             shared,
             bridge_chunk: None,
             poisoned: false,
+            kinds,
         }
     }
 
@@ -150,45 +218,16 @@ impl JniContext {
         Ok(())
     }
 
-    /// Run a function with already-crossed arguments, one scope per call.
+    /// Run a function node with already-crossed arguments, one scope per
+    /// call: the function and its arguments are lowered (Phase A), the
+    /// model grows by what they reference (Phase B), and the call runs.
     ///
     /// # Errors
-    /// Whatever the evaluator raises, or a failure recorded while a Java
-    /// node was read.
+    /// Whatever the lowering or the evaluator raises, or a failure
+    /// recorded while a Java node was read (which wins: what follows a
+    /// failed read is its consequence).
     pub fn start(&mut self, function: &Value, args: &[Value]) -> Result<Value, PureException> {
-        let evaluator = self.evaluator();
-        evaluator.context_mut().push_scope();
-        let result = match function {
-            Value::Element(_) => evaluator.apply_callable(function, args),
-            Value::Object(handle) => match java_function(handle) {
-                Some((classifier, name, _)) if classifier == NATIVE_FUNCTION => {
-                    evaluator.call_native(&name, args)
-                }
-                Some((classifier, _, _)) if classifier == LAMBDA_FUNCTION => {
-                    evaluator.context_mut().pop_scope();
-                    return self.lower_and_run(function);
-                }
-                Some((_, _, user_path)) => Err(PureException::from(
-                    PureRuntimeError::FunctionNotFound(user_path),
-                )),
-                None => Err(ffi_error("start: the function is not a graph node")),
-            },
-            other => Err(ffi_error(format!(
-                "start: expected a function node, got {other:?}"
-            ))),
-        };
-        evaluator.context_mut().pop_scope();
-        self.shared.end_execution();
-        if let Some(failure) = self.shared.take_error() {
-            return Err(failure);
-        }
-        result
-    }
-
-    /// Lower the lambda and everything it references, then run the
-    /// closure in its own scope.
-    fn lower_and_run(&mut self, function: &Value) -> Result<Value, PureException> {
-        let result = self.lower_and_run_inner(function);
+        let result = self.lower_and_run(function, args);
         // Whether the lowering or the run failed, the nodes this execution
         // touched hold caches (and cycles) that must go now.
         self.shared.end_execution();
@@ -198,43 +237,84 @@ impl JniContext {
         result
     }
 
-    fn lower_and_run_inner(&mut self, function: &Value) -> Result<Value, PureException> {
+    fn lower_and_run(&mut self, function: &Value, args: &[Value]) -> Result<Value, PureException> {
         let started = std::time::Instant::now();
-        let closure = {
-            let model: &PureModel = self.model();
-            let chunk = self
-                .bridge_chunk
-                .unwrap_or_else(|| u16::try_from(model.chunks.len()).expect("chunk ids are u16"));
-            let mut lowering = Lowering::new(model, chunk, model.chunk_len(chunk));
-            let closure = lowering.lower_root_lambda(function);
-            // A property that could not be read lowers to nothing; surface
-            // the read failure before trusting the tree.
-            if let Some(failure) = self.shared.take_error() {
-                return Err(failure);
-            }
-            let closure = closure?;
-            let extension = lowering.into_extension();
-            if !extension.is_empty() {
-                self.grow_model(extension)?;
-            }
-            closure
-        };
+        let (callable, args) = self.lower_call(function, args)?;
         let lowered = std::time::Instant::now();
         let reads_before = self.shared.jni_reads.get();
         let evaluator = self.evaluator();
         evaluator.context_mut().push_scope();
-        let callable = Value::Function(Box::new(FunctionValue::Lambda(closure)));
-        let result = evaluator.apply_callable(&callable, &[]);
+        let result = match &callable {
+            Callable::Native(key) => evaluator.call_native(key, &args),
+            Callable::Value(value) => evaluator.apply_callable(value, &args),
+        };
         evaluator.context_mut().pop_scope();
         let ran = std::time::Instant::now();
         LAST_TIMINGS.with(|t| {
             t.set(Timings {
-                lower_ns: (lowered - started).as_nanos() as u64,
-                run_ns: (ran - lowered).as_nanos() as u64,
+                lower_ns: u64::try_from((lowered - started).as_nanos()).unwrap_or(u64::MAX),
+                run_ns: u64::try_from((ran - lowered).as_nanos()).unwrap_or(u64::MAX),
                 run_jni_reads: self.shared.jni_reads.get() - reads_before,
             });
         });
         result
+    }
+
+    /// Phase A and B for one call: what the function node is (by its
+    /// classifier's element id), its lowering and the lowering of every
+    /// argument, then the model's growth.
+    fn lower_call(
+        &mut self,
+        function: &Value,
+        args: &[Value],
+    ) -> Result<(Callable, Vec<Value>), PureException> {
+        let model: &PureModel = self.model();
+        let chunk = self
+            .bridge_chunk
+            .unwrap_or_else(|| u16::try_from(model.chunks.len()).expect("chunk ids are u16"));
+        let mut lowering = Lowering::new(model, chunk, model.chunk_len(chunk));
+        let lowered = (|| -> Result<(Callable, Vec<Value>), PureException> {
+            let callable = match function {
+                Value::Element(_) => Callable::Value(function.clone()),
+                Value::Object(handle) => match self.kinds.of(model, handle) {
+                    FunctionKind::Lambda => Callable::Value(Value::Function(Box::new(
+                        FunctionValue::Lambda(lowering.lower_root_lambda(function)?),
+                    ))),
+                    FunctionKind::Native(key) => Callable::Native(key),
+                    FunctionKind::Defined => Callable::Value(lowering.lower_value(function)?),
+                    FunctionKind::Other(Some(path)) => {
+                        return Err(PureException::from(PureRuntimeError::FunctionNotFound(
+                            path,
+                        )));
+                    }
+                    FunctionKind::Other(None) => {
+                        return Err(ffi_error("start: the function is not a function node"));
+                    }
+                },
+                other => {
+                    return Err(ffi_error(format!(
+                        "start: expected a function node, got {}",
+                        other.type_name()
+                    )));
+                }
+            };
+            let args = args
+                .iter()
+                .map(|arg| lowering.lower_value(arg))
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok((callable, args))
+        })();
+        // A property that could not be read lowers to nothing; surface the
+        // read failure before trusting the tree.
+        if let Some(failure) = self.shared.take_error() {
+            return Err(failure);
+        }
+        let lowered = lowered?;
+        let extension = lowering.into_extension();
+        if !extension.is_empty() {
+            self.grow_model(extension)?;
+        }
+        Ok(lowered)
     }
 
     fn resolve_i64(&self, raw: i64) -> Option<ObjectHandle> {
@@ -333,19 +413,6 @@ impl JniContext {
     #[must_use]
     pub fn live_handle_count(&self) -> usize {
         self.shared.live_count()
-    }
-}
-
-/// `(classifier, name, user path)` of a Java-backed node, or `None` when
-/// the handle is not one. The user path falls back to the name.
-fn java_function(handle: &ObjectHandle) -> Option<(SmolStr, SmolStr, SmolStr)> {
-    match &*handle.borrow() {
-        HeapEntry::Typed(obj) => obj.as_any().downcast_ref::<JavaNode>().map(|n| {
-            let name = n.name.clone().unwrap_or_default();
-            let path = n.user_path.clone().unwrap_or_else(|| name.clone());
-            (n.classifier.clone(), name, path)
-        }),
-        HeapEntry::Dynamic(_) => None,
     }
 }
 

@@ -113,6 +113,17 @@ public class TestRustEvaluatorBoundary
         return tests.getFirst();
     }
 
+    /**
+     * A graph node that is neither a value nor a packageable element: the
+     * first expression of a PCT test's body.
+     */
+    private static CoreInstance anExpressionNode()
+    {
+        CoreInstance expression = firstPctTest().getValueForMetaPropertyToMany(M3Properties.expressionSequence).getFirst();
+        Assert.assertNotNull(expression);
+        return expression;
+    }
+
     @Test
     public void primitivesRoundTripWithTheirClassifier()
     {
@@ -154,9 +165,9 @@ public class TestRustEvaluatorBoundary
         Assert.assertEquals("element", evaluator.crossingKind(classNode));
         Assert.assertSame(classNode, roundTrip(classNode));
 
-        CoreInstance pctTest = firstPctTest();
-        Assert.assertEquals("javaNode", evaluator.crossingKind(pctTest));
-        Assert.assertSame(pctTest, roundTrip(pctTest));
+        CoreInstance expression = anExpressionNode();
+        Assert.assertEquals("javaNode", evaluator.crossingKind(expression));
+        Assert.assertSame(expression, roundTrip(expression));
     }
 
     @Test
@@ -230,16 +241,33 @@ public class TestRustEvaluatorBoundary
         Assert.assertEquals(0L, evaluator.liveHandleCount());
     }
 
+    /**
+     * A function with a body handed to {@code start} is lowered with
+     * everything it calls, and so are its arguments: a PCT test run with
+     * the In-Memory adapter (itself a function with a body) runs entirely
+     * in Rust and returns its result.
+     */
     @Test
-    public void aPctTestIsFunctionNotFoundWithItsUserPath()
+    public void aConcreteFunctionDefinitionLowersAndRunsWithItsArguments()
     {
-        CoreInstance pctTest = firstPctTest();
+        CoreInstance pctTest = pctTest(PlatformCodeRepositoryProvider.grammarFunctions, "testSimplePlus");
         CoreInstance adapter = node(PlatformCodeRepositoryProvider.nativeAdapter.function);
+        CoreInstance result = evaluator.start(pctTest, Lists.mutable.with(wrap(adapter)));
+        Assert.assertEquals("true", values(result).get(0).getName());
+    }
+
+    /**
+     * A packageable element that is not a function cannot be started: it is
+     * reported as a function not found, with its user path.
+     */
+    @Test
+    public void anElementThatIsNotAFunctionIsFunctionNotFoundWithItsUserPath()
+    {
+        String profile = "meta::pure::profiles::doc";
         PureRustEvaluationException e = Assert.assertThrows(PureRustEvaluationException.class,
-                () -> evaluator.start(pctTest, Lists.mutable.with(wrap(adapter))));
+                () -> evaluator.start(node(profile), Lists.immutable.empty()));
         Assert.assertEquals(PureRustEvaluationException.Kind.FUNCTION_NOT_FOUND, e.getKind());
-        String expectedPath = PackageableElement.getUserPathForPackageableElement(pctTest, "::");
-        Assert.assertEquals("FunctionNotFound: " + expectedPath, e.getMessage());
+        Assert.assertEquals("FunctionNotFound: " + profile, e.getMessage());
     }
 
     /**
@@ -442,13 +470,13 @@ public class TestRustEvaluatorBoundary
     @Test
     public void handlesAreReleasedAcrossTenThousandRoundTrips()
     {
-        CoreInstance pctTest = firstPctTest();
+        CoreInstance expression = anExpressionNode();
         for (int i = 0; i < 10_000; i++)
         {
             CoreInstance created = evaluator.create(CLASS, new String[]{"name"}, new CoreInstance[][]{{repository.newStringCoreInstance("X" + i)}});
             Assert.assertNotNull(created.getClassifier());
             ((RustCoreInstance) created).close();
-            Assert.assertSame(pctTest, roundTrip(pctTest));
+            Assert.assertSame(expression, roundTrip(expression));
         }
         Assert.assertEquals(0L, evaluator.liveHandleCount());
     }
