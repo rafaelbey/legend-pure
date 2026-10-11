@@ -20,7 +20,7 @@
 use legend_pure_evaluator::native::NativeRegistry;
 
 const FISHED: &[&str] = &[
-    // arithmetic: one implementation per operator, four signatures each
+    // arithmetic
     "plus_Integer_MANY__Integer_1_",
     "plus_Float_MANY__Float_1_",
     "plus_Decimal_MANY__Decimal_1_",
@@ -33,13 +33,18 @@ const FISHED: &[&str] = &[
     "times_Float_MANY__Float_1_",
     "times_Decimal_MANY__Decimal_1_",
     "times_Number_MANY__Number_1_",
+    "divide_Number_1__Number_1__Float_1_",
+    "divide_Decimal_1__Decimal_1__Integer_1__Decimal_1_",
+    "abs_Integer_1__Integer_1_",
+    "abs_Float_1__Float_1_",
+    "abs_Decimal_1__Decimal_1_",
+    "abs_Number_1__Number_1_",
+    "mod_Integer_1__Integer_1__Integer_1_",
+    "rem_Number_1__Number_1__Number_1_",
     // boolean
     "and_Boolean_1__Boolean_1__Boolean_1_",
     "or_Boolean_1__Boolean_1__Boolean_1_",
     "not_Boolean_1__Boolean_1_",
-    // comparison
-    "eq_Any_1__Any_1__Boolean_1_",
-    "equal_Any_MANY__Any_MANY__Boolean_1_",
     // collection
     "fold_T_MANY__Function_1__V_m__V_m_",
     "take_T_MANY__Integer_1__T_MANY_",
@@ -78,6 +83,12 @@ const FISHED: &[&str] = &[
     "values_Map_1__V_MANY_",
     "newMap_Pair_MANY__Map_1_",
     "newMap_Pair_MANY__Property_MANY__Map_1_",
+    // comparison
+    "eq_Any_1__Any_1__Boolean_1_",
+    "equal_Any_MANY__Any_MANY__Boolean_1_",
+    "lessThan_Number_1__Number_1__Boolean_1_",
+    "lessThanEqual_Number_1__Number_1__Boolean_1_",
+    "compare_T_1__T_1__Integer_1_",
     // lang
     "letFunction_String_1__T_m__T_m_",
     "if_Boolean_1__Function_1__Function_1__T_m_",
@@ -87,6 +98,33 @@ const FISHED: &[&str] = &[
     "copy_T_1__KeyExpression_MANY__T_1_",
     "copy_T_1__String_1__T_1_",
     "copy_T_1__String_1__KeyExpression_MANY__T_1_",
+    // math
+    "floor_Number_1__Integer_1_",
+    "ceiling_Number_1__Integer_1_",
+    "round_Number_1__Integer_1_",
+    "round_Decimal_1__Integer_1__Decimal_1_",
+    "round_Float_1__Integer_1__Float_1_",
+    "sign_Number_1__Integer_1_",
+    "sqrt_Number_1__Float_1_",
+    "cbrt_Number_1__Float_1_",
+    "exp_Number_1__Float_1_",
+    "log_Number_1__Float_1_",
+    "log10_Number_1__Float_1_",
+    "pow_Number_1__Number_1__Float_1_",
+    "pow_Number_1__Number_1__Number_1_",
+    "sin_Number_1__Float_1_",
+    "cos_Number_1__Float_1_",
+    "tan_Number_1__Float_1_",
+    "cot_Number_1__Float_1_",
+    "asin_Number_1__Float_1_",
+    "acos_Number_1__Float_1_",
+    "atan_Number_1__Float_1_",
+    "atan2_Number_1__Number_1__Float_1_",
+    "toFloat_Number_1__Float_1_",
+    "toDecimal_Number_1__Decimal_1_",
+    "parseInteger_String_1__Integer_1_",
+    "parseFloat_String_1__Float_1_",
+    "parseBoolean_String_1__Boolean_1_",
     // string
     "toString_Any_1__String_1_",
     "format_String_1__Any_MANY__String_1_",
