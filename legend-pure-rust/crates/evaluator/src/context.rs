@@ -21,11 +21,36 @@
 //! - Lambda captures
 
 use std::collections::HashMap;
+use std::hash::{BuildHasherDefault, Hasher};
 
 use smol_str::SmolStr;
 
 use crate::error::PureRuntimeError;
 use crate::value::Value;
+
+/// A multiplicative hash for short identifier keys: a few nanoseconds
+/// where SipHash spends tens, on names that come from source text and
+/// never from an adversary.
+#[derive(Default, Clone, Copy)]
+pub struct NameHasher(u64);
+
+impl Hasher for NameHasher {
+    fn write(&mut self, bytes: &[u8]) {
+        for chunk in bytes.chunks(8) {
+            let mut word = [0u8; 8];
+            word[..chunk.len()].copy_from_slice(chunk);
+            self.0 = (self.0.rotate_left(5) ^ u64::from_le_bytes(word))
+                .wrapping_mul(0x517c_c1b7_2722_0a95);
+        }
+    }
+
+    fn finish(&self) -> u64 {
+        self.0
+    }
+}
+
+/// A map keyed by variable name, hashed with [`NameHasher`].
+pub type NameMap<V> = HashMap<SmolStr, V, BuildHasherDefault<NameHasher>>;
 
 /// An entry in the undo log — records what to restore on `pop_scope`.
 #[derive(Debug)]
@@ -38,11 +63,12 @@ enum UndoEntry {
     Restore(SmolStr, Value),
 }
 
-/// A stack of variable scopes backed by a flat `HashMap` + undo log.
+/// A stack of variable scopes backed by a flat map and one undo log.
 ///
-/// Variables are resolved with a single `HashMap` lookup regardless
-/// of scope depth. Push/pop manages an undo log to restore previous
-/// bindings.
+/// Variables are resolved with a single map lookup regardless of scope
+/// depth. A scope is a position in the undo log; popping it replays the
+/// entries above that position in reverse. No scope allocates anything
+/// of its own.
 ///
 /// # Example
 ///
@@ -60,15 +86,17 @@ enum UndoEntry {
 /// ctx.pop_scope();
 /// assert_eq!(ctx.get("x"), Some(&Value::Integer(10)));
 /// ```
+#[derive(Debug)]
 pub struct VariableContext {
     /// The single flat map — always contains the "current" value of every
     /// variable visible at the current scope depth.
-    vars: HashMap<SmolStr, Value>,
+    vars: NameMap<Value>,
 
-    /// Undo log frames. Each frame records what to undo when `pop_scope`
-    /// is called. The outer `Vec` is the scope stack; the inner `Vec`
-    /// holds the undo entries for that scope.
-    undo_stack: Vec<Vec<UndoEntry>>,
+    /// The undo log, one entry per binding made since the outermost scope.
+    undo: Vec<UndoEntry>,
+
+    /// Where each open scope starts in the undo log.
+    frames: Vec<usize>,
 }
 
 impl VariableContext {
@@ -76,14 +104,16 @@ impl VariableContext {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            vars: HashMap::new(),
-            undo_stack: Vec::new(),
+            vars: NameMap::default(),
+            undo: Vec::new(),
+            frames: Vec::new(),
         }
     }
 
-    /// Push a new scope. No allocation unless variables are actually set.
+    /// Push a new scope. Bindings made until the matching `pop_scope`
+    /// are undone by it.
     pub fn push_scope(&mut self) {
-        self.undo_stack.push(Vec::new());
+        self.frames.push(self.undo.len());
     }
 
     /// Pop the innermost scope, restoring all shadowed/removed variables.
@@ -91,11 +121,10 @@ impl VariableContext {
     /// # Panics
     /// Panics if there are no scopes to pop (programming error).
     pub fn pop_scope(&mut self) {
-        let Some(entries) = self.undo_stack.pop() else {
+        let Some(start) = self.frames.pop() else {
             unreachable!("VariableContext::pop_scope called with no scopes");
         };
-
-        for entry in entries.into_iter().rev() {
+        for entry in self.undo.drain(start..).rev() {
             match entry {
                 UndoEntry::Remove(name) => {
                     self.vars.remove(&name);
@@ -113,18 +142,15 @@ impl VariableContext {
     /// Panics if there are no scopes (call `push_scope` first).
     pub fn set(&mut self, name: impl Into<SmolStr>, value: Value) {
         let name = name.into();
-
-        let Some(undo_frame) = self.undo_stack.last_mut() else {
-            unreachable!("VariableContext::set called with no scopes");
+        assert!(
+            !self.frames.is_empty(),
+            "VariableContext::set called with no scopes"
+        );
+        let entry = match self.vars.insert(name.clone(), value) {
+            Some(old_value) => UndoEntry::Restore(name, old_value),
+            None => UndoEntry::Remove(name),
         };
-
-        if let Some(old_value) = self.vars.get(&name).cloned() {
-            undo_frame.push(UndoEntry::Restore(name.clone(), old_value));
-        } else {
-            undo_frame.push(UndoEntry::Remove(name.clone()));
-        }
-
-        self.vars.insert(name, value);
+        self.undo.push(entry);
     }
 
     /// Look up a variable by name.
@@ -145,7 +171,7 @@ impl VariableContext {
     /// The current scope depth (number of active scopes).
     #[must_use]
     pub fn depth(&self) -> usize {
-        self.undo_stack.len()
+        self.frames.len()
     }
 
     /// Iterate every currently visible binding's value.
