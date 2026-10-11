@@ -61,6 +61,7 @@ const PUT_ALL_MAP: &str = "putAll_Map_1__Map_1__Map_1_";
 const IS_EMPTY: &str = "isEmpty_Any_MANY__Boolean_1_";
 const ADD: &str = "add_T_MANY__T_1__T_$1_MANY$_";
 const ADD_AT: &str = "add_T_MANY__Integer_1__T_1__T_$1_MANY$_";
+const REVERSE: &str = "reverse_T_m__T_m_";
 const TIMES: &str = "times_Number_MANY__Number_1_";
 const EQ: &str = "eq_Any_1__Any_1__Boolean_1_";
 const PLUS: &str = "plus_Number_MANY__Number_1_";
@@ -751,4 +752,12 @@ fn add_appends_or_inserts_at_an_offset() {
         ))),
         [-1, 0, 1, 2, 3, 4]
     );
+}
+
+#[test]
+fn reverse_flips_the_order() {
+    let reverse = |v: ValueSpec| run(&expr::call(REVERSE, vec![v]));
+    assert_eq!(as_ints(&reverse(ints(&[1, 2, 3]))), [3, 2, 1]);
+    assert_eq!(reverse(expr::int(7)), Value::Integer(7));
+    assert_eq!(reverse(ints(&[])), Value::Unit);
 }

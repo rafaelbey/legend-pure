@@ -1098,6 +1098,28 @@ impl NativeFunction for Add {
     }
 }
 
+/// Pure `reverse<T|m>(T[m]): T[m]`
+///
+/// Returns the input collection in reverse order. A scalar input is
+/// returned unchanged (a single-element reversal is a no-op). Empty
+/// input yields [`Value::Unit`].
+#[derive(Debug)]
+pub struct Reverse;
+
+impl NativeFunction for Reverse {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("reverse", &values, 1)?;
+        let source = values[0].to_collection();
+        let reversed: Vec<Value> = source.iter().rev().cloned().collect();
+        Ok(Evaluated::new(Value::from_vec(reversed)))
+    }
+}
+
 /// Register the fished collection natives.
 pub fn register(registry: &mut NativeRegistry) {
     registry.register("fold_T_MANY__Function_1__V_m__V_m_", Fold);
@@ -1137,6 +1159,7 @@ pub fn register(registry: &mut NativeRegistry) {
     registry.register("isEmpty_Any_MANY__Boolean_1_", IsEmpty);
     registry.register("add_T_MANY__T_1__T_$1_MANY$_", Add);
     registry.register("add_T_MANY__Integer_1__T_1__T_$1_MANY$_", Add);
+    registry.register("reverse_T_m__T_m_", Reverse);
 }
 
 #[cfg(test)]
@@ -1646,5 +1669,43 @@ mod tests {
     #[test]
     fn add_wrong_arg_count() {
         assert!(Add.execute(&[lit_int(1)], &mut MockCtx).is_err());
+    }
+
+    #[test]
+    fn reverse_multi_element() {
+        assert_eq!(
+            Reverse
+                .execute(&[int_spec(&[1, 2, 3])], &mut MockCtx)
+                .unwrap()
+                .into_value(),
+            int_collection(&[3, 2, 1])
+        );
+    }
+
+    #[test]
+    fn reverse_single_element_is_noop() {
+        assert_eq!(
+            Reverse
+                .execute(&[lit_int(7)], &mut MockCtx)
+                .unwrap()
+                .into_value(),
+            Value::Integer(7)
+        );
+    }
+
+    #[test]
+    fn reverse_empty_returns_unit() {
+        assert_eq!(
+            Reverse
+                .execute(&[lit_collection(vec![])], &mut MockCtx)
+                .unwrap()
+                .into_value(),
+            Value::Unit
+        );
+    }
+
+    #[test]
+    fn reverse_wrong_arg_count() {
+        assert!(Reverse.execute(&[], &mut MockCtx).is_err());
     }
 }
