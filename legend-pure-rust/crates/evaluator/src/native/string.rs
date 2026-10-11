@@ -818,6 +818,24 @@ impl NativeFunction for Contains {
     }
 }
 
+/// Pure `endsWith(String[1], String[1]): Boolean[1]`
+#[derive(Debug)]
+pub struct EndsWith;
+
+impl NativeFunction for EndsWith {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("endsWith", &values, 2)?;
+        let s = values[0].as_string()?;
+        let suffix = values[1].as_string()?;
+        Ok(Evaluated::new(Value::Boolean(s.ends_with(suffix.as_str()))))
+    }
+}
+
 fn i64_arg(v: &Value, ctx: &str) -> Result<i64, PureException> {
     match v {
         Value::Integer(n) => Ok(*n),
@@ -847,6 +865,7 @@ pub fn register(registry: &mut NativeRegistry) {
         ParseDecimal,
     );
     registry.register("contains_String_1__String_1__Boolean_1_", Contains);
+    registry.register("endsWith_String_1__String_1__Boolean_1_", EndsWith);
 }
 
 #[cfg(test)]
@@ -1044,6 +1063,22 @@ mod tests {
                 .execute(&[lit_str("a"), lit_int(1)], &mut MockCtx)
                 .is_err()
         );
+    }
+
+    /// `testTrueEndsWith`, `testFalseEndsWith`.
+    #[test]
+    fn string_ends_with() {
+        let fox = "the quick brown fox jumps over the lazy dog";
+        let ends = |suffix| {
+            EndsWith
+                .execute(&[lit_str(fox), lit_str(suffix)], &mut MockCtx)
+                .unwrap()
+                .into_value()
+        };
+        assert_eq!(ends("dog"), Value::Boolean(true));
+        assert_eq!(ends("lazy dog"), Value::Boolean(true));
+        assert_eq!(ends("brown fox"), Value::Boolean(false));
+        assert!(EndsWith.execute(&[lit_str(fox)], &mut MockCtx).is_err());
     }
 
     // -- joinStrings --
