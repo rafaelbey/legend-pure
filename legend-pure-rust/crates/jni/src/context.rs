@@ -19,7 +19,7 @@ use std::rc::Rc;
 use legend_pure_evaluator::error::{PureException, PureRuntimeError};
 use legend_pure_evaluator::eval::Evaluator;
 use legend_pure_evaluator::heap::{HeapEntry, ObjectHandle};
-use legend_pure_evaluator::lower::Lowering;
+use legend_pure_evaluator::lower::{Lowering, ModelExtension};
 use legend_pure_evaluator::native::NativeRegistry;
 use legend_pure_evaluator::value::PVector;
 use legend_pure_evaluator::value::{FunctionValue, Value};
@@ -56,6 +56,13 @@ thread_local! {
 
 /// Model, registry and evaluator behind raw pointers (freed in `Drop`),
 /// plus the state shared with every Java-backed node.
+///
+/// The three boxes are self-referential: the evaluator borrows the model
+/// and the registry for `'static`, which is a lie the context keeps true
+/// by construction. The model and registry are allocated before the
+/// evaluator and freed after it; the model is borrowed mutably only in
+/// [`grow_model`](Self::grow_model), after the evaluator is dropped and
+/// before a new one is built; every other access is shared.
 pub struct JniContext {
     model: *mut PureModel,
     registry: *mut NativeRegistry,
@@ -82,7 +89,9 @@ impl JniContext {
     ) -> Self {
         let model_ptr = Box::into_raw(Box::new(model));
         let registry_ptr = Box::into_raw(Box::new(registry));
-        let evaluator = Evaluator::new(unsafe { &*model_ptr }, unsafe { &*registry_ptr });
+        // SAFETY: both pointers come from `Box::into_raw` just above and
+        // stay live until `Drop`, which frees the evaluator first.
+        let evaluator = unsafe { Evaluator::new(&*model_ptr, &*registry_ptr) };
         let evaluator_ptr = Box::into_raw(Box::new(evaluator)).cast::<Evaluator<'static>>();
         let shared = Rc::new(BridgeShared {
             vm,
@@ -105,7 +114,40 @@ impl JniContext {
     }
 
     fn evaluator(&mut self) -> &mut Evaluator<'static> {
+        // SAFETY: the evaluator box is live and non-null outside
+        // `grow_model` (which rebuilds it before returning, and leaves the
+        // context poisoned if it panics); `&mut self` makes the borrow
+        // unique.
         unsafe { &mut *self.evaluator }
+    }
+
+    fn model(&self) -> &PureModel {
+        // SAFETY: the model box lives from `new` to `Drop` and is borrowed
+        // mutably only inside `grow_model`, which holds `&mut self`.
+        unsafe { &*self.model }
+    }
+
+    /// Phase B: append the lowered elements to the model. The evaluator
+    /// borrows the model, so it is dropped first and rebuilt after.
+    fn grow_model(&mut self, extension: ModelExtension) -> Result<(), PureException> {
+        let chunk_id = extension.chunk_id();
+        // SAFETY: the evaluator box is live (see `evaluator`); dropping it
+        // ends its borrows of the model and registry. The pointer is
+        // nulled at once so nothing reads it until it is rebuilt.
+        unsafe { drop(Box::from_raw(self.evaluator)) };
+        self.evaluator = std::ptr::null_mut();
+        // SAFETY: no evaluator exists and `&mut self` excludes every other
+        // borrow of the model (the lowering that read it was consumed
+        // before this call); Java-backed nodes reach the model only while
+        // a call reads them, and none runs during `apply`.
+        let applied = extension.apply(unsafe { &mut *self.model });
+        // SAFETY: the mutable borrow above has ended; both boxes stay live
+        // until `Drop`, which frees this evaluator first.
+        let evaluator = unsafe { Evaluator::new(&*self.model, &*self.registry) };
+        self.evaluator = Box::into_raw(Box::new(evaluator)).cast::<Evaluator<'static>>();
+        applied?;
+        self.bridge_chunk = Some(chunk_id);
+        Ok(())
     }
 
     /// Run a function with already-crossed arguments, one scope per call.
@@ -114,7 +156,7 @@ impl JniContext {
     /// Whatever the evaluator raises, or a failure recorded while a Java
     /// node was read.
     pub fn start(&mut self, function: &Value, args: &[Value]) -> Result<Value, PureException> {
-        let evaluator = unsafe { &mut *self.evaluator };
+        let evaluator = self.evaluator();
         evaluator.context_mut().push_scope();
         let result = match function {
             Value::Element(_) => evaluator.apply_callable(function, args),
@@ -159,7 +201,7 @@ impl JniContext {
     fn lower_and_run_inner(&mut self, function: &Value) -> Result<Value, PureException> {
         let started = std::time::Instant::now();
         let closure = {
-            let model: &PureModel = unsafe { &*self.model };
+            let model: &PureModel = self.model();
             let chunk = self
                 .bridge_chunk
                 .unwrap_or_else(|| u16::try_from(model.chunks.len()).expect("chunk ids are u16"));
@@ -173,16 +215,7 @@ impl JniContext {
             let closure = closure?;
             let extension = lowering.into_extension();
             if !extension.is_empty() {
-                // Every borrow of the model is gone: the lowering was
-                // consumed above and the evaluator is dropped here.
-                unsafe { drop(Box::from_raw(self.evaluator)) };
-                self.evaluator = std::ptr::null_mut();
-                let chunk_id = extension.chunk_id();
-                let applied = extension.apply(unsafe { &mut *self.model });
-                let evaluator = Evaluator::new(unsafe { &*self.model }, unsafe { &*self.registry });
-                self.evaluator = Box::into_raw(Box::new(evaluator)).cast::<Evaluator<'static>>();
-                applied?;
-                self.bridge_chunk = Some(chunk_id);
+                self.grow_model(extension)?;
             }
             closure
         };
@@ -318,6 +351,9 @@ fn java_function(handle: &ObjectHandle) -> Option<(SmolStr, SmolStr, SmolStr)> {
 
 impl Drop for JniContext {
     fn drop(&mut self) {
+        // SAFETY: the three pointers come from `Box::into_raw` and are
+        // freed here only, the evaluator (which borrows the other two)
+        // first; a null evaluator is one `grow_model` had dropped.
         unsafe {
             if !self.evaluator.is_null() {
                 drop(Box::from_raw(self.evaluator));

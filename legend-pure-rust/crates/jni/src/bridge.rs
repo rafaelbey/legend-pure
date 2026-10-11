@@ -209,8 +209,7 @@ pub struct BridgeShared {
     pub bridge: GlobalRef,
     /// Cached method ids.
     pub methods: BridgeMethods,
-    /// The model, valid for the context's lifetime (the context frees
-    /// the evaluator, and with it every node, before the model).
+    /// The context's model (see [`model`](Self::model)).
     pub model: *const PureModel,
     /// Java-to-Rust identity: bridge id → the one heap entry wrapping it.
     pub java_nodes: RefCell<HashMap<i64, Weak<RefCell<HeapEntry>>>>,
@@ -226,8 +225,17 @@ pub struct BridgeShared {
 
 impl BridgeShared {
     /// The model behind the raw pointer.
+    ///
+    /// # Safety
+    /// The context that owns this `BridgeShared` must be alive and must not
+    /// be growing its model (`JniContext::grow_model`): the model box lives
+    /// from the context's creation to its drop and is borrowed mutably
+    /// only there. Every caller in this crate runs inside an entry point
+    /// of that context (crossing a value, or a node read while the
+    /// lowering or the evaluator runs), never during the growth.
     #[must_use]
-    pub fn model(&self) -> &PureModel {
+    pub unsafe fn model(&self) -> &PureModel {
+        // SAFETY: guaranteed by the caller, per this function's contract.
         unsafe { &*self.model }
     }
 

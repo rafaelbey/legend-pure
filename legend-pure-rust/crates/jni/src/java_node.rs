@@ -269,7 +269,9 @@ pub fn description_to_value(
         kind::BYTE => Err(unsupported("Byte values across the boundary")),
         kind::ENUM_VALUE => {
             if let (Some(classifier), Some(name)) = (&d.classifier, &d.name)
-                && let Some(enum_id) = shared.model().resolve_fqn_str(classifier)
+                // SAFETY: descriptions are decoded inside an entry point of
+                // the context that owns `shared`, never while it grows its model.
+                && let Some(enum_id) = unsafe { shared.model() }.resolve_fqn_str(classifier)
             {
                 return Ok(Value::EnumValue {
                     enum_id,
@@ -281,7 +283,9 @@ pub fn description_to_value(
         kind::PACKAGEABLE_ELEMENT => {
             if let Some(path) = &d.user_path {
                 let segments: Vec<SmolStr> = path.split("::").map(SmolStr::new).collect();
-                let model = shared.model();
+                // SAFETY: descriptions are decoded inside an entry point of
+                // the context that owns `shared`, never while it grows its model.
+                let model = unsafe { shared.model() };
                 if let Some(id) = model
                     .resolve_by_fqn(&segments)
                     .or_else(|| model.resolve_by_path(&segments))

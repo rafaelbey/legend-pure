@@ -24,6 +24,7 @@
 
 #![deny(missing_docs)]
 #![allow(clippy::result_large_err)]
+#![deny(clippy::undocumented_unsafe_blocks)]
 
 pub mod bridge;
 mod context;
@@ -31,6 +32,7 @@ mod exception;
 mod failure;
 pub mod java_node;
 pub mod materialize;
+mod session;
 
 use jni::JNIEnv;
 use jni::objects::{JClass, JObject, JObjectArray, JString, JValue};
@@ -45,6 +47,9 @@ use crate::bridge::{BridgeMethods, CORE_INSTANCE_CLASS};
 use crate::context::JniContext;
 use crate::exception::{ExceptionPayload, pure_exception_to_payload};
 use crate::failure::{ffi_error, in_local_frame, jni_failure};
+use crate::session::{Entered, Session};
+
+type ContextSession = Session<JniContext>;
 
 const PURE_RUST_EXC: &str = "org/finos/legend/pure/rust/PureRustException";
 
@@ -208,14 +213,10 @@ fn throw_panic(env: &mut JNIEnv, what: &str) {
     let _ = env.throw_new(PURE_RUST_EXC, format!("Rust paniced during {what}"));
 }
 
-fn context_mut<'a>(context_ptr: jlong) -> &'a mut JniContext {
-    unsafe { &mut *(context_ptr as *mut JniContext) }
-}
-
-/// The context behind `context_ptr`, refused once a panic has unwound
-/// through it.
-fn live_context<'a>(context_ptr: jlong) -> Result<&'a mut JniContext, PureException> {
-    let ctx = context_mut(context_ptr);
+/// The context behind `context_ptr` for one call, refused while another
+/// call on it runs and once a panic has unwound through it.
+fn live_context<'a>(context_ptr: jlong) -> Result<Entered<'a, JniContext>, PureException> {
+    let ctx = ContextSession::enter(context_ptr)?;
     if ctx.poisoned {
         return Err(ffi_error(
             "the evaluator is poisoned by an earlier panic; close it and create a new one",
@@ -224,9 +225,11 @@ fn live_context<'a>(context_ptr: jlong) -> Result<&'a mut JniContext, PureExcept
     Ok(ctx)
 }
 
+/// Mark the context unusable after a panic unwound through an entry
+/// point (the `Entered` of that call was dropped by the unwind).
 fn poison(context_ptr: jlong) {
-    if context_ptr != 0 {
-        context_mut(context_ptr).poisoned = true;
+    if let Ok(mut ctx) = ContextSession::enter(context_ptr) {
+        ctx.poisoned = true;
     }
 }
 
@@ -258,9 +261,7 @@ pub extern "system" fn Java_org_finos_legend_pure_rust_PureRustEvaluator_nativeI
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let model = PureModel::bootstrapped();
         let registry = NativeRegistry::standard();
-        Box::into_raw(Box::new(JniContext::new(
-            model, registry, vm, global, methods,
-        ))) as jlong
+        Session::into_raw(JniContext::new(model, registry, vm, global, methods))
     }));
     match result {
         Ok(ptr) => ptr,
@@ -281,8 +282,8 @@ pub extern "system" fn Java_org_finos_legend_pure_rust_PureRustEvaluator_nativeS
     args: JObjectArray<'local>,
 ) -> JObjectArray<'local> {
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let ctx = live_context(context_ptr)?;
-        let function = cross_in(&mut env, ctx, &function)?;
+        let mut ctx = live_context(context_ptr)?;
+        let function = cross_in(&mut env, &ctx, &function)?;
         let mut values = Vec::new();
         if !args.is_null() {
             let shared = std::rc::Rc::clone(&ctx.shared);
@@ -294,13 +295,13 @@ pub extern "system" fn Java_org_finos_legend_pure_rust_PureRustEvaluator_nativeS
                     let slot = env
                         .get_object_array_element(&args, i)
                         .map_err(|e| jni_failure(env, &shared, "arguments", &e))?;
-                    cross_in_slot(env, ctx, &slot)
+                    cross_in_slot(env, &ctx, &slot)
                 })?;
                 values.push(value);
             }
         }
         let value = ctx.start(&function, &values)?;
-        cross_out(&mut env, ctx, &value)
+        cross_out(&mut env, &ctx, &value)
     }));
     match result {
         Ok(Ok(arr)) => arr,
@@ -328,14 +329,14 @@ pub extern "system" fn Java_org_finos_legend_pure_rust_PureRustEvaluator_nativeG
     property_name: JString<'local>,
 ) -> JObjectArray<'local> {
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let ctx = live_context(context_ptr)?;
+        let mut ctx = live_context(context_ptr)?;
         let name: String = match env.get_string(&property_name) {
             Ok(name) => name.into(),
             Err(e) => return Err(jni_failure(&mut env, &ctx.shared, "property name", &e)),
         };
         let values = ctx.get_property_values(handle, &name)?;
         let collected: Vec<Value> = values.iter().cloned().collect();
-        cross_out(&mut env, ctx, &Value::from_vec(collected))
+        cross_out(&mut env, &ctx, &Value::from_vec(collected))
     }));
     match result {
         Ok(Ok(arr)) => arr,
@@ -378,7 +379,7 @@ pub extern "system" fn Java_org_finos_legend_pure_rust_PureRustEvaluator_nativeP
     handle: jlong,
 ) -> JObjectArray<'local> {
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let ctx = live_context(context_ptr)?;
+        let mut ctx = live_context(context_ptr)?;
         let names = ctx.property_names(handle)?;
         string_array(&mut env, &names).map_err(|e| jni_failure(&mut env, &ctx.shared, "names", &e))
     }));
@@ -407,7 +408,7 @@ pub extern "system" fn Java_org_finos_legend_pure_rust_PureRustEvaluator_nativeG
     handle: jlong,
 ) -> JString<'local> {
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let ctx = live_context(context_ptr)?;
+        let mut ctx = live_context(context_ptr)?;
         ctx.get_classifier(handle)
     }));
     match result {
@@ -439,7 +440,7 @@ pub extern "system" fn Java_org_finos_legend_pure_rust_PureRustEvaluator_nativeN
     property_values: JObjectArray<'local>,
 ) -> jlong {
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let ctx = live_context(context_ptr)?;
+        let mut ctx = live_context(context_ptr)?;
         let shared = std::rc::Rc::clone(&ctx.shared);
         let classifier: String = match env.get_string(&classifier) {
             Ok(classifier) => classifier.into(),
@@ -469,7 +470,7 @@ pub extern "system" fn Java_org_finos_legend_pure_rust_PureRustEvaluator_nativeN
                 let slot = env
                     .get_object_array_element(&property_values, i)
                     .map_err(|e| jni_failure(env, &shared, "new", &e))?;
-                let value = cross_in_slot(env, ctx, &slot)?;
+                let value = cross_in_slot(env, &ctx, &slot)?;
                 Ok((
                     name,
                     value.to_collection().iter().cloned().collect::<Vec<_>>(),
@@ -505,7 +506,7 @@ pub extern "system" fn Java_org_finos_legend_pure_rust_PureRustEvaluator_nativeC
 ) -> JString<'local> {
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let ctx = live_context(context_ptr)?;
-        let value = cross_in(&mut env, ctx, &node)?;
+        let value = cross_in(&mut env, &ctx, &node)?;
         Ok::<&'static str, PureException>(java_node::crossing_kind(&value))
     }));
     match result {
@@ -566,9 +567,9 @@ pub extern "system" fn Java_org_finos_legend_pure_rust_PureRustEvaluator_nativeL
     if context_ptr == 0 {
         return 0;
     }
-    std::panic::catch_unwind(|| {
-        let ctx = unsafe { &*(context_ptr as *const JniContext) };
-        i64::try_from(ctx.live_handle_count()).unwrap_or(i64::MAX)
+    std::panic::catch_unwind(|| match ContextSession::enter(context_ptr) {
+        Ok(ctx) => i64::try_from(ctx.live_handle_count()).unwrap_or(i64::MAX),
+        Err(_) => -1,
     })
     .unwrap_or(-1)
 }
@@ -578,14 +579,14 @@ pub extern "system" fn Java_org_finos_legend_pure_rust_PureRustEvaluator_nativeL
 pub extern "system" fn Java_org_finos_legend_pure_rust_PureRustEvaluator_nativeFreeContext<
     'local,
 >(
-    mut _env: JNIEnv<'local>,
+    mut env: JNIEnv<'local>,
     _class: JClass<'local>,
     context_ptr: jlong,
 ) {
-    if context_ptr != 0 {
-        let _ = std::panic::catch_unwind(|| unsafe {
-            drop(Box::from_raw(context_ptr as *mut JniContext));
-        });
+    match std::panic::catch_unwind(|| ContextSession::free(context_ptr)) {
+        Ok(Ok(())) => {}
+        Ok(Err(err)) => throw_pure_exception(&mut env, &err),
+        Err(_) => throw_panic(&mut env, "close"),
     }
 }
 
@@ -601,8 +602,9 @@ pub extern "system" fn Java_org_finos_legend_pure_rust_PureRustEvaluator_nativeF
 ) {
     if context_ptr != 0 {
         let _ = std::panic::catch_unwind(|| {
-            let ctx = unsafe { &*(context_ptr as *const JniContext) };
-            ctx.release(handle);
+            if let Ok(ctx) = ContextSession::enter(context_ptr) {
+                ctx.release(handle);
+            }
         });
     }
 }

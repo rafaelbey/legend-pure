@@ -64,7 +64,9 @@ fn call_object<'l>(
 }
 
 fn element_path(shared: &BridgeShared, id: ElementId) -> String {
-    build_element_path(shared.model(), id, "::", false)
+    // SAFETY: values are materialised inside an entry point of the
+    // context that owns `shared`, never while it grows its model.
+    build_element_path(unsafe { shared.model() }, id, "::", false)
 }
 
 /// The values `value` stands for once collections are flattened and
