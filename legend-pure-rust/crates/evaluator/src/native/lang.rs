@@ -282,7 +282,6 @@ fn back_fill_type_args(args: &[ValueSpec], class_metatype_id: Option<ElementId>)
 /// an `InstanceValue`'s `.values`); the `expression` slot's value(s)
 /// flow through unchanged. The `add` slot defaults to `false` when
 /// absent or non-Boolean.
-#[allow(clippy::result_large_err)]
 fn decode_key_expressions(
     ctx: &mut dyn EvalContextTrait,
     key_expr_id: Option<ElementId>,
@@ -316,7 +315,6 @@ fn decode_key_expressions(
 /// wrapper whose `.values` contains the string (the canonical M3
 /// shape produced by `^KeyExpression(key=^InstanceValue(values='prop',
 /// …))`). Errors for any other shape.
-#[allow(clippy::result_large_err)]
 fn unwrap_instance_value_string(
     payload: &[Value],
     ctx: &mut dyn EvalContextTrait,
@@ -344,7 +342,6 @@ fn unwrap_instance_value_string(
 /// an `InstanceValue` wrapper around a literal/collection (Pure's
 /// canonical M3 shape) into its `.values` payload. A bare value is
 /// passed through unchanged.
-#[allow(clippy::result_large_err)]
 fn unwrap_instance_value_list(
     payload: &[Value],
     ctx: &mut dyn EvalContextTrait,
@@ -364,7 +361,6 @@ fn unwrap_instance_value_list(
 /// Convert the compiler-emitted flat `[k, v, augmented, k, v, augmented, …]`
 /// stream into the canonical triple form the construction helpers
 /// consume.
-#[allow(clippy::result_large_err)]
 fn triples_from_flat_kv_stream(
     kvs: &[Value],
 ) -> Result<Vec<(SmolStr, Vec<Value>, bool)>, PureException> {
@@ -399,7 +395,7 @@ thread_local! {
 }
 
 /// Shared tail of both `New` overloads.
-#[allow(clippy::result_large_err, clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
 fn finish_construction(
     ctx: &mut dyn EvalContextTrait,
     class_id: ElementId,
@@ -466,7 +462,6 @@ impl ConstructionFrame {
     /// every collected `(obj, class_id)`. Call this right before the
     /// guard goes out of scope so any validation failure propagates as
     /// the native's return value (Drop can't return errors).
-    #[allow(clippy::result_large_err)]
     fn drain_if_outermost(ctx: &mut dyn EvalContextTrait) -> Result<(), PureException> {
         let depth = CONSTRUCTION_DEPTH.with(std::cell::Cell::get);
         if depth == 1 {
@@ -539,7 +534,6 @@ fn format_mult_text(m: &legend_pure_metamodel::types::Multiplicity) -> String {
 /// injected) and verify that every property with `lower_bound > 0` has
 /// at least that many values on the populated heap object. Aggregates
 /// all violations into one error message.
-#[allow(clippy::result_large_err)]
 fn validate_required_properties(
     ctx: &mut dyn EvalContextTrait,
     obj: ObjectHandle,
@@ -620,7 +614,6 @@ fn validate_required_properties(
 /// Apply each `(name, values, augmented)` triple to the heap object
 /// — `mutate_add` for `+=` (augmented), `mutate_set` for `=`
 /// (replace).
-#[allow(clippy::result_large_err)]
 fn apply_property_triples(
     ctx: &mut dyn EvalContextTrait,
     obj: ObjectHandle,
@@ -640,7 +633,6 @@ fn apply_property_triples(
 /// did not supply and write the results to the heap object. Walks the
 /// supertype chain child-first so a redeclared property on a subclass
 /// wins over the parent's default (Java-parity MRO).
-#[allow(clippy::result_large_err)]
 fn apply_property_defaults(
     ctx: &mut dyn EvalContextTrait,
     obj: &ObjectHandle,
@@ -997,7 +989,6 @@ fn try_lambda_shortcut(kvs: &[Value]) -> Option<Value> {
 
 /// Populate association reverse-links for every Association-backed property
 /// just assigned to `obj`.
-#[allow(clippy::result_large_err)]
 fn populate_association_inverses(
     ctx: &mut dyn EvalContextTrait,
     obj: ObjectHandle,
@@ -1101,7 +1092,6 @@ fn populate_association_inverses(
 /// Eager shallow hydration of every M3 reflective property of `meta_id`
 /// (and its supertypes) onto the heap object `obj` from the source
 /// `Value::Element(elem_id)`.
-#[allow(clippy::result_large_err)]
 fn hydrate_element_to_heap(
     ctx: &mut dyn EvalContextTrait,
     elem_id: ElementId,
@@ -1206,7 +1196,6 @@ fn apply_key_value_triples(
 /// Split a `[key1, val1, augmented1, key2, val2, augmented2, ...]` slice
 /// into two parallel triple slices: the plain keys (no `.`) and the
 /// dotted-path keys (`address.name`, `firm.legalName`).
-#[allow(clippy::result_large_err)]
 fn partition_path_kvs(kvs: &[Value]) -> Result<(Vec<Value>, Vec<Value>), PureException> {
     if !kvs.len().is_multiple_of(3) {
         return Err(PureRuntimeError::EvaluationError(format!(
@@ -1235,7 +1224,6 @@ fn partition_path_kvs(kvs: &[Value]) -> Result<(Vec<Value>, Vec<Value>), PureExc
 
 /// Apply dotted-path property updates (`address.name = 'Somewhere'`,
 /// `firm.legalName = 'FirmX'`) to the freshly-allocated copy.
-#[allow(clippy::result_large_err)]
 fn apply_path_property_updates(
     ctx: &mut dyn EvalContextTrait,
     source_id: ObjectHandle,
@@ -1350,7 +1338,6 @@ fn collect_inherited_association_properties(
 /// Scope: only the `obj` passed in. Callers that produce multiple
 /// affected instances (e.g. `Copy::execute` plus path-property clones)
 /// must invoke this helper once per object.
-#[allow(clippy::result_large_err)]
 fn sync_object_inverses(
     ctx: &mut dyn EvalContextTrait,
     obj: ObjectHandle,
@@ -1409,7 +1396,6 @@ fn sync_object_inverses(
 
 /// Allocate a fresh heap Object that mirrors `source_id` — same
 /// classifier and a copy of every property.
-#[allow(clippy::result_large_err)]
 fn clone_heap_object(
     ctx: &mut dyn EvalContextTrait,
     source_id: ObjectHandle,
@@ -1435,7 +1421,6 @@ fn clone_heap_object(
 
 /// Run every constraint declared on the given Class against the
 /// freshly-constructed instance.
-#[allow(clippy::result_large_err)]
 fn evaluate_class_constraints(
     ctx: &mut dyn EvalContextTrait,
     class_id: ElementId,
@@ -1446,7 +1431,6 @@ fn evaluate_class_constraints(
     evaluate_class_constraints_with_inheritance(ctx, class_id, obj, type_var_values, &mut visited)
 }
 
-#[allow(clippy::result_large_err)]
 fn evaluate_class_constraints_with_inheritance(
     ctx: &mut dyn EvalContextTrait,
     class_id: ElementId,
@@ -1477,7 +1461,6 @@ fn evaluate_class_constraints_with_inheritance(
     Ok(())
 }
 
-#[allow(clippy::result_large_err)]
 fn evaluate_class_constraints_at_level(
     ctx: &mut dyn EvalContextTrait,
     class_id: ElementId,

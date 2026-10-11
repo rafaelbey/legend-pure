@@ -46,7 +46,6 @@ use crate::value::{FunctionValue, Value};
 /// and `return_multiplicity` straight off the `Function` compiled node
 /// — these are exactly what the Java `Function.parameters`/`returnType`
 /// reflective slots return.
-#[allow(clippy::result_large_err)]
 pub(crate) fn build_function_type_wrapper(
     ctx: &mut dyn EvalContextTrait,
     fv: &crate::value::FunctionValue,
@@ -129,7 +128,6 @@ fn type_expr_to_element(ty: &legend_pure_metamodel::types::TypeExpr) -> Option<E
 
 /// Allocate a `meta::pure::metamodel::multiplicity::Multiplicity` heap
 /// wrapper carrying `lowerBound` / `upperBound` integer slots.
-#[allow(clippy::result_large_err)]
 pub(crate) fn build_multiplicity_wrapper(
     heap: &mut crate::heap::RuntimeHeap,
     m: &legend_pure_metamodel::types::Multiplicity,
