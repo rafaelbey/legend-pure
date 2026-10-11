@@ -1071,7 +1071,6 @@ fn i64_arg(v: &Value, ctx: &str) -> Result<i64, PureException> {
 pub fn register(registry: &mut NativeRegistry) {
     registry.register("toString_Any_1__String_1_", ToString);
     registry.register("format_String_1__Any_MANY__String_1_", Format);
-    registry.register("joinStrings_String_MANY__String_1__String_1_", JoinStrings);
     registry.register(
         "joinStrings_String_MANY__String_1__String_1__String_1__String_1_",
         JoinStrings,

@@ -454,7 +454,7 @@ pub fn force_thunk(
     ctx.evaluate(spec)
 }
 
-/// Arithmetic natives: `plus`, `minus`, `times` (the rest stay on the archive).
+/// Arithmetic natives: `plus`, `minus`, `times`, `divide`, `rem`, `mod`, `abs`.
 pub mod arithmetic;
 
 /// Boolean natives: `and`, `or`, `not`.

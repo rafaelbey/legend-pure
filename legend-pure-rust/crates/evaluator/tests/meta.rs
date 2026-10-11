@@ -737,7 +737,6 @@ fn not_yet_meta_natives_fail_with_not_implemented() {
     let mut eval = Evaluator::new(&model, &registry);
     for key in [
         "genericType_Any_MANY__GenericType_1_",
-        "genericType_Any_1__GenericType_1_",
         "deactivate_Any_MANY__ValueSpecification_1_",
     ] {
         let err = eval.eval(&expr::call(key, vec![expr::int(1)])).unwrap_err();

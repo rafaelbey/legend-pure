@@ -75,7 +75,7 @@ cd .. && JAVA_HOME=$(/usr/libexec/java_home -v 17) \
   mvn -pl legend-pure-runtime/legend-pure-runtime-rust-evaluator clean verify
 ```
 
-`verify` runs the 9 boundary tests and the two `Rust_JNI` suites (327 + 136), checkstyle and
+`verify` runs the 16 boundary tests and the two `Rust_JNI` suites (327 + 136), checkstyle and
 dependency analysis.
 
 Surefire passes the library directory to the tests as the system property

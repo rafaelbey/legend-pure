@@ -825,15 +825,10 @@ pub fn register(registry: &mut NativeRegistry) {
     // `genericType` waits for the least upper bound: the platform takes
     // `Any[*]`, and the archive's `GenericTypeOf` types a collection by
     // folding its elements through the compiler's `least_upper_bound_ids`,
-    // which is not in this workspace. Registered under the platform key
-    // and the archive's `Any[1]` key.
+    // which is not in this workspace.
     registry.register(
         "genericType_Any_MANY__GenericType_1_",
         NotYet("genericType_Any_MANY__GenericType_1_"),
-    );
-    registry.register(
-        "genericType_Any_1__GenericType_1_",
-        NotYet("genericType_Any_1__GenericType_1_"),
     );
     // `deactivate` rebuilds the argument's expression as M3
     // `ValueSpecification` heap objects and types it statically (the

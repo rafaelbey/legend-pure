@@ -31,7 +31,7 @@ use legend_pure_metamodel::types::{DateValue, Multiplicity, ValueSpec};
 const NEW: &str = "new_Class_1__String_1__Any_MANY__T_1_";
 const TO_STRING: &str = "toString_Any_1__String_1_";
 const FORMAT: &str = "format_String_1__Any_MANY__String_1_";
-const JOIN: &str = "joinStrings_String_MANY__String_1__String_1_";
+const JOIN: &str = "joinStrings_String_MANY__String_1__String_1__String_1__String_1_";
 const JOIN_AFFIXED: &str = "joinStrings_String_MANY__String_1__String_1__String_1__String_1_";
 const STARTS_WITH: &str = "startsWith_String_1__String_1__Boolean_1_";
 
@@ -457,7 +457,17 @@ fn strings(values: &[&str]) -> ValueSpec {
 #[test]
 fn join_strings_with_and_without_prefix_and_suffix() {
     let model = ModelBuilder::new().finish();
-    let join = |values: &[&str]| expr::call(JOIN, vec![strings(values), expr::string(",")]);
+    let join = |values: &[&str]| {
+        expr::call(
+            JOIN,
+            vec![
+                strings(values),
+                expr::string(""),
+                expr::string(","),
+                expr::string(""),
+            ],
+        )
+    };
     let affixed = |values: &[&str]| {
         expr::call(
             JOIN_AFFIXED,

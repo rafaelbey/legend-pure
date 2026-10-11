@@ -239,6 +239,25 @@ public class TestRustEvaluatorBoundary
     }
 
     /**
+     * A native registered under its key before its body is fished reports
+     * {@code NOT_IMPLEMENTED}; the Pure cause keeps the kind prefix, as every
+     * Rust-side diagnostic does.
+     */
+    @Test
+    public void aWiredButUnfishedNativeReportsNotImplemented()
+    {
+        CoreInstance lambda = findLambda(pctTest(PlatformCodeRepositoryProvider.grammarFunctions, "testSinglePlusType"));
+        PureRustEvaluationException e = Assert.assertThrows(PureRustEvaluationException.class,
+                () -> evaluator.start(lambda, Lists.immutable.empty()));
+        Assert.assertEquals(e.getMessage(), PureRustEvaluationException.Kind.NOT_IMPLEMENTED, e.getKind());
+        Assert.assertEquals("NotImplemented: genericType_Any_MANY__GenericType_1_", e.getMessage());
+        Assert.assertEquals("genericType_Any_MANY__GenericType_1_", e.getInfo());
+        PureException cause = PureException.findPureException(e);
+        Assert.assertNotNull(cause);
+        Assert.assertEquals("NotImplemented: genericType_Any_MANY__GenericType_1_", cause.getInfo());
+    }
+
+    /**
      * An enum value in a lambda lowers its enumeration, and the native
      * that takes it (`adjust` with a `DurationUnit`) reads the member.
      */

@@ -163,12 +163,10 @@ const FISHED: &[&str] = &[
     "extractEnumValue_Enumeration_1__String_1__T_1_",
     "cast_Any_m__T_1__T_m_",
     "genericType_Any_MANY__GenericType_1_",
-    "genericType_Any_1__GenericType_1_",
     "deactivate_Any_MANY__ValueSpecification_1_",
     // string
     "toString_Any_1__String_1_",
     "format_String_1__Any_MANY__String_1_",
-    "joinStrings_String_MANY__String_1__String_1_",
     "joinStrings_String_MANY__String_1__String_1__String_1__String_1_",
     "indexOf_String_1__String_1__Integer_1_",
     "indexOf_String_1__String_1__Integer_1__Integer_1_",
