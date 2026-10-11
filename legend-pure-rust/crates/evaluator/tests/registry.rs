@@ -55,6 +55,7 @@ const FISHED: &[&str] = &[
     "hour_Date_1__Integer_1_",
     "minute_Date_1__Integer_1_",
     "second_Date_1__Integer_1_",
+    "monthNumber_Date_1__Integer_1_",
     // lang
     "letFunction_String_1__T_m__T_m_",
     "if_Boolean_1__Function_1__Function_1__T_m_",

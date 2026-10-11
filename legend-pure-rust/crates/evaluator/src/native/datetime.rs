@@ -100,6 +100,29 @@ fn duration_unit(v: &Value) -> Result<DurationUnit, PureRuntimeError> {
     }
 }
 
+/// Pure `monthNumber(Date[1]): Integer[1]`.
+#[derive(Debug)]
+pub struct MonthNumber;
+
+impl NativeFunction for MonthNumber {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("monthNumber", &values, 1)?;
+        let d = values[0].as_date()?;
+        match d.get_month() {
+            Some(m) => Ok(Evaluated::new(Value::Integer(i64::from(m)))),
+            None => Err(PureRuntimeError::EvaluationError(
+                "monthNumber: date has no month component".into(),
+            )
+            .into()),
+        }
+    }
+}
+
 /// Pure `dayOfMonth(Date[1]): Integer[1]`.
 ///
 /// Throws `"Cannot get day of month for <date>"` (mirroring
@@ -828,6 +851,7 @@ impl NativeFunction for DateConstruct {
 
 /// Register the fished date and time natives under their platform keys.
 pub fn register(registry: &mut NativeRegistry) {
+    registry.register("monthNumber_Date_1__Integer_1_", MonthNumber);
     registry.register("dayOfMonth_Date_1__Integer_1_", DayOfMonth);
     registry.register("hour_Date_1__Integer_1_", Hour);
     registry.register("minute_Date_1__Integer_1_", Minute);

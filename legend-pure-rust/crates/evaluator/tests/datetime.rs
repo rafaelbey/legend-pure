@@ -34,6 +34,7 @@ const DAY_OF_MONTH: &str = "dayOfMonth_Date_1__Integer_1_";
 const HOUR: &str = "hour_Date_1__Integer_1_";
 const MINUTE: &str = "minute_Date_1__Integer_1_";
 const SECOND: &str = "second_Date_1__Integer_1_";
+const MONTH_NUMBER: &str = "monthNumber_Date_1__Integer_1_";
 
 /// `%y` — a year-only date.
 fn year_only(year: i16) -> ValueSpec {
@@ -366,4 +367,27 @@ fn second_reads_the_second_or_fails_with_the_java_message() {
     // testSecondError
     let err = apply(&mut eval, SECOND, year_only(2017)).unwrap_err();
     assert_eq!(evaluation_error(&err), Some("Cannot get second for 2017"));
+}
+
+#[test]
+fn month_number_reads_the_month() {
+    let model = ModelBuilder::new().finish();
+    let registry = NativeRegistry::standard();
+    let mut eval = Evaluator::new(&model, &registry);
+    // testMonthNumber: every fixture from month precision down.
+    for date in extract_ladder() {
+        assert_eq!(
+            apply(&mut eval, MONTH_NUMBER, date).unwrap(),
+            Value::Integer(4)
+        );
+    }
+    assert_eq!(
+        apply(&mut eval, MONTH_NUMBER, year_month(2015, 1)).unwrap(),
+        Value::Integer(1)
+    );
+    let err = apply(&mut eval, MONTH_NUMBER, year_only(2015)).unwrap_err();
+    assert_eq!(
+        evaluation_error(&err),
+        Some("monthNumber: date has no month component")
+    );
 }
