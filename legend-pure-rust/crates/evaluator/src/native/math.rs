@@ -311,6 +311,38 @@ impl NativeFunction for ToDecimal {
     }
 }
 
+/// Pure `parseBoolean(String[1]):Boolean[1]` — case-insensitive
+/// `"true"` / `"false"`.
+///
+/// The platform tests `testParseTrue` / `testParseFalse` accept all
+/// case combinations (`'True'`, `'tRue'`, `'TRUE'`, …) — Java Pure's
+/// `Boolean.parseBoolean` semantics. Returns an `EvaluationError` for
+/// any other input.
+#[derive(Debug)]
+pub struct ParseBoolean;
+
+impl NativeFunction for ParseBoolean {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("parseBoolean", &values, 1)?;
+        let s = values[0].as_string()?;
+        let lower = s.as_str().to_ascii_lowercase();
+        let b = match lower.as_str() {
+            "true" => Ok(true),
+            "false" => Ok(false),
+            _ => Err(PureRuntimeError::EvaluationError(format!(
+                "parseBoolean: expected \"true\" or \"false\" (case-insensitive), got {:?}",
+                s.as_str()
+            ))),
+        }?;
+        Ok(Evaluated::new(Value::Boolean(b)))
+    }
+}
+
 /// Register the fished mathematical natives under their mangled Pure FQNs.
 pub fn register(registry: &mut NativeRegistry) {
     // rounding
@@ -332,6 +364,9 @@ pub fn register(registry: &mut NativeRegistry) {
     // numeric conversion
     registry.register("toFloat_Number_1__Float_1_", ToFloat);
     registry.register("toDecimal_Number_1__Decimal_1_", ToDecimal);
+
+    // string parsing
+    registry.register("parseBoolean_String_1__Boolean_1_", ParseBoolean);
 }
 
 #[cfg(test)]
@@ -636,6 +671,72 @@ mod tests {
     #[test]
     fn to_decimal_type_mismatch() {
         assert!(ToDecimal.execute(&[lit_str("x")], &mut MockCtx).is_err());
+    }
+
+    #[test]
+    fn parse_boolean_true() {
+        let r = ParseBoolean
+            .execute(&[lit_str("true")], &mut MockCtx)
+            .unwrap();
+        assert_eq!(r.into_value(), Value::Boolean(true));
+    }
+
+    #[test]
+    fn parse_boolean_false() {
+        let r = ParseBoolean
+            .execute(&[lit_str("false")], &mut MockCtx)
+            .unwrap();
+        assert_eq!(r.into_value(), Value::Boolean(false));
+    }
+
+    #[test]
+    fn parse_boolean_case_insensitive() {
+        // Phase 7: Java Pure parity — `True` / `TRUE` / `False` are
+        // all accepted by `parseBoolean`. The PCT testParseTrue and
+        // testParseFalse pin every case combination.
+        for variant in ["True", "TRUE", "tRue", "trUe", "truE"] {
+            let r = ParseBoolean
+                .execute(&[lit_str(variant)], &mut MockCtx)
+                .unwrap();
+            assert_eq!(
+                r.into_value(),
+                Value::Boolean(true),
+                "expected true for {variant}"
+            );
+        }
+        for variant in ["False", "FALSE", "fAlse", "faLse", "falSe", "falsE"] {
+            let r = ParseBoolean
+                .execute(&[lit_str(variant)], &mut MockCtx)
+                .unwrap();
+            assert_eq!(
+                r.into_value(),
+                Value::Boolean(false),
+                "expected false for {variant}"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_boolean_invalid_errors() {
+        assert!(
+            ParseBoolean
+                .execute(&[lit_str("yes")], &mut MockCtx)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn parse_boolean_wrong_arg_count() {
+        assert!(ParseBoolean.execute(&[], &mut MockCtx).is_err());
+    }
+
+    #[test]
+    fn parse_boolean_type_mismatch() {
+        assert!(
+            ParseBoolean
+                .execute(&[lit_bool(true)], &mut MockCtx)
+                .is_err()
+        );
     }
 
     #[test]
