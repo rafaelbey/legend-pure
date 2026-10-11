@@ -820,6 +820,46 @@ different evaluator, not a faster walk; it is listed under "Later,
 outside the MVP". The bridge's own cost (the per-call re-lowering and the
 crossing, Step 2 "Deferred") is a separate phase after this one.
 
+**Progress (2026-10-11, items 1, 2, 3a, 4, 5, 6, 7 and the natives' own
+cost landed, each with the four `Rust_JNI` numbers unchanged).** Two
+corrections first. The clock on this machine ticks every 41.7 ns, so
+every sub-microsecond reading in the table above and in the first commit
+messages was quantised to that step; both harnesses now time batches of
+32 calls, and the figures below are per call at that resolution. And the
+compiled engine's generated method is faster than first read: 36 to 220
+ns on the twelve, not 167 to 292. Where the twelve stand, release build,
+median ns per call, Rust evaluator against the generated method:
+
+| Expression | Before | Now | Compiled Java |
+|---|---|---|---|
+| `1 + 2` | 792 | 121 | 167 |
+| `(3 * 4) + (10 - 2)` | 1,916 | 244 | 220 |
+| `let x = 5; $x * $x` | 1,042 | 213 | 96 |
+| `if(1 < 2, ...)` | 417 | 207 | 69 |
+| `map` then `fold` over five | 9,542 | 2,230 | 587 |
+| `range` of a hundred, `filter`, `size` | 36,875 | 14,736 | 2,346 |
+| `sort` then `at` | 959 | 380 | 50 |
+| `format` | 667 | 238 | 50 |
+| `adjust` a date | 84 | 96 | 113 |
+| `match` | 1,208 | 763 | 36 |
+| `removeDuplicates` then `size` | 750 | 483 | 96 |
+| `joinStrings` | 375 | 260 | 66 |
+
+Arithmetic and dates are at or below the generated method; `let`, `if`,
+`joinStrings` and the collection pipelines sit at 2 to 6x; `sort`,
+`format` and `match` at 5 to 21x, where the cost is the native's own
+work over a persistent vector plus the dispatch layers around it.
+
+Item 3b (variables as slots), item 8 and `match` wait for the files
+natives round 2 holds. Item 8 is decided by measurement: against the
+persistent vector, a reference-counted slice (`Rc<[Value]>`) builds a
+two-element collection in 18 ns instead of 68 and a hundred-element one
+in 176 instead of 865, iterates a hundred in 27 instead of 146, indexes
+in 38 instead of 206, clones at the same cost, and loses only on
+appending to a large collection (489 against 194 at a hundred), which
+Pure copies anyway. The representation is shared with the heap and the
+bridge, so it is one change across every native.
+
 ### Step 3 — Read PELT
 
 **Goal.** Decode every PELT file type into in-memory structures, with no
