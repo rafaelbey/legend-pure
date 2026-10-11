@@ -151,6 +151,29 @@ impl NativeFunction for Hour {
     }
 }
 
+/// Pure `minute(DateTime[1]): Integer[1]`. Throws "Cannot get minute
+/// for `<date>`" when no minute component (`testMinuteError`).
+#[derive(Debug)]
+pub struct Minute;
+
+impl NativeFunction for Minute {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("minute", &values, 1)?;
+        let d = values[0].as_date()?;
+        match d.get_minute() {
+            Some(m) => Ok(Evaluated::new(Value::Integer(i64::from(m)))),
+            None => {
+                Err(PureRuntimeError::EvaluationError(format!("Cannot get minute for {d}")).into())
+            }
+        }
+    }
+}
+
 /// Pure `datePart(Date[1]): Date[1]` — drop the time component.
 ///
 /// Per the platform comment on `datePart` (`essential/date/extract/
@@ -784,6 +807,7 @@ impl NativeFunction for DateConstruct {
 pub fn register(registry: &mut NativeRegistry) {
     registry.register("dayOfMonth_Date_1__Integer_1_", DayOfMonth);
     registry.register("hour_Date_1__Integer_1_", Hour);
+    registry.register("minute_Date_1__Integer_1_", Minute);
 
     registry.register("datePart_Date_1__Date_1_", DatePart);
     registry.register(

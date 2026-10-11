@@ -32,6 +32,7 @@ const DATE_DIFF: &str = "dateDiff_Date_1__Date_1__DurationUnit_1__Integer_1_";
 const DATE_PART: &str = "datePart_Date_1__Date_1_";
 const DAY_OF_MONTH: &str = "dayOfMonth_Date_1__Integer_1_";
 const HOUR: &str = "hour_Date_1__Integer_1_";
+const MINUTE: &str = "minute_Date_1__Integer_1_";
 
 /// `%y` — a year-only date.
 fn year_only(year: i16) -> ValueSpec {
@@ -336,4 +337,18 @@ fn hour_reads_the_hour_or_fails_with_the_java_message() {
     // testHourError
     let err = apply(&mut eval, HOUR, year_only(2017)).unwrap_err();
     assert_eq!(evaluation_error(&err), Some("Cannot get hour for 2017"));
+}
+
+#[test]
+fn minute_reads_the_minute_or_fails_with_the_java_message() {
+    let model = ModelBuilder::new().finish();
+    let registry = NativeRegistry::standard();
+    let mut eval = Evaluator::new(&model, &registry);
+    // testMinute: every fixture from minute precision down.
+    for date in (2..=4).map(extract_fixture) {
+        assert_eq!(apply(&mut eval, MINUTE, date).unwrap(), Value::Integer(9));
+    }
+    // testMinuteError
+    let err = apply(&mut eval, MINUTE, year_only(2017)).unwrap_err();
+    assert_eq!(evaluation_error(&err), Some("Cannot get minute for 2017"));
 }
