@@ -28,6 +28,7 @@ use legend_pure_metamodel::types::{DateValue, ValueSpec};
 
 const ADJUST: &str = "adjust_Date_1__Integer_1__DurationUnit_1__Date_1_";
 const DATE_DIFF: &str = "dateDiff_Date_1__Date_1__DurationUnit_1__Integer_1_";
+const DATE_PART: &str = "datePart_Date_1__Date_1_";
 
 /// The platform's `meta::pure::functions::date::DurationUnit` (`_structures.pure`).
 fn duration_unit_model() -> (PureModel, ElementId) {
@@ -204,4 +205,41 @@ fn adjust_rejects_an_argument_that_is_not_a_duration_unit() {
         vec![strict(2015, 4, 15), expr::int(1), expr::int(3)],
     );
     assert!(eval.eval(&call).is_err());
+}
+
+#[test]
+fn date_part_drops_the_time_and_keeps_partial_dates() {
+    let model = ModelBuilder::new().finish();
+    let registry = NativeRegistry::standard();
+    let mut eval = Evaluator::new(&model, &registry);
+    let part = |date: ValueSpec| expr::call(DATE_PART, vec![date]);
+    // testDatePart, testDatePartTrivial
+    assert_eq!(
+        eval.eval(&part(second_precision(2015, 4, 15, 17, 9, 21)))
+            .unwrap(),
+        strict_value(2015, 4, 15)
+    );
+    assert_eq!(
+        eval.eval(&part(strict(2015, 4, 15))).unwrap(),
+        strict_value(2015, 4, 15)
+    );
+    // testDatePartYearOnly, testDatePartYearMonthOnly
+    let year_only = expr::date(DateValue::StrictDate {
+        year: 1973,
+        month: None,
+        day: None,
+    });
+    assert_eq!(
+        eval.eval(&part(year_only)).unwrap(),
+        Value::Date(PureDate::year(1973).unwrap())
+    );
+    let year_month = expr::date(DateValue::StrictDate {
+        year: 1973,
+        month: Some(11),
+        day: None,
+    });
+    assert_eq!(
+        eval.eval(&part(year_month)).unwrap(),
+        Value::Date(PureDate::year_month(1973, 11).unwrap())
+    );
 }

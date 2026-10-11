@@ -43,6 +43,7 @@ const FISHED: &[&str] = &[
     // datetime
     "adjust_Date_1__Integer_1__DurationUnit_1__Date_1_",
     "dateDiff_Date_1__Date_1__DurationUnit_1__Integer_1_",
+    "datePart_Date_1__Date_1_",
     "date_Integer_1__Date_1_",
     "date_Integer_1__Integer_1__Date_1_",
     "date_Integer_1__Integer_1__Integer_1__StrictDate_1_",

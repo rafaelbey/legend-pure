@@ -100,6 +100,39 @@ fn duration_unit(v: &Value) -> Result<DurationUnit, PureRuntimeError> {
     }
 }
 
+/// Pure `datePart(Date[1]): Date[1]` — drop the time component.
+///
+/// Per the platform comment on `datePart` (`essential/date/extract/
+/// datePart.pure:17`): "For dates that are month or year precision, the
+/// date is returned unchanged." Day-or-finer precision drops to
+/// strict-date (year+month+day, no time); year- or month-only inputs
+/// pass through. The platform tests `testDatePartYearOnly` and
+/// `testDatePartYearMonthOnly` lock this behavior.
+#[derive(Debug)]
+pub struct DatePart;
+
+impl NativeFunction for DatePart {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("datePart", &values, 1)?;
+        let d = values[0].as_date()?;
+        // Year- or month-only: pass through unchanged.
+        let Some(month) = d.get_month() else {
+            return Ok(Evaluated::new(Value::Date(d)));
+        };
+        let Some(day) = d.get_day() else {
+            return Ok(Evaluated::new(Value::Date(d)));
+        };
+        let year = d.get_year();
+        let result = PureDate::strict_date(year, month, day).map(Value::Date)?;
+        Ok(Evaluated::new(result))
+    }
+}
+
 /// Count Sunday boundaries crossed between two civil dates.
 ///
 /// Returns a positive integer when `b > a`, negative when `b < a`, and
@@ -542,6 +575,7 @@ impl NativeFunction for DateConstruct {
 
 /// Register the fished date and time natives under their platform keys.
 pub fn register(registry: &mut NativeRegistry) {
+    registry.register("datePart_Date_1__Date_1_", DatePart);
     registry.register(
         "dateDiff_Date_1__Date_1__DurationUnit_1__Integer_1_",
         DateDiff,
@@ -629,6 +663,16 @@ mod tests {
     // a real `Evaluator` in `tests/datetime.rs`. The tests below only
     // exercise the natives' own defensive checks — `expect_args` for
     // arity, `as_date()` type assertion — which need no evaluator.
+
+    #[test]
+    fn date_part_wrong_arg_count() {
+        assert!(DatePart.execute(&[], &mut MockCtx).is_err());
+    }
+
+    #[test]
+    fn date_part_type_mismatch() {
+        assert!(DatePart.execute(&[lit_int(5)], &mut MockCtx).is_err());
+    }
 
     #[test]
     fn date_diff_wrong_arg_count() {
