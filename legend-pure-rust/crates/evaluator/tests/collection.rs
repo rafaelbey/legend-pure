@@ -17,11 +17,14 @@
 //! allocate heap objects (`zip`) and the `Map` natives. Literal-only
 //! cases stay inline in `native/collection.rs`.
 
+use std::cell::RefCell;
+use std::rc::Rc;
+
 use legend_pure_evaluator::builders::{ModelBuilder, expr, named, param};
 use legend_pure_evaluator::error::{PureExceptionKind, PureRuntimeError};
 use legend_pure_evaluator::eval::Evaluator;
 use legend_pure_evaluator::native::NativeRegistry;
-use legend_pure_evaluator::value::Value;
+use legend_pure_evaluator::value::{MapState, Value, ValueKey};
 use legend_pure_metamodel::bootstrap::INTEGER_ID;
 use legend_pure_metamodel::model::PureModel;
 use legend_pure_metamodel::types::{Multiplicity, ValueSpec};
@@ -52,6 +55,7 @@ const CONCATENATE: &str = "concatenate_T_MANY__T_MANY__T_MANY_";
 const FOR_ALL: &str = "forAll_T_MANY__Function_1__Boolean_1_";
 const INIT: &str = "init_T_MANY__T_MANY_";
 const LAST: &str = "last_T_MANY__T_$0_1$_";
+const PUT: &str = "put_Map_1__U_1__V_1__Map_1_";
 const TIMES: &str = "times_Number_MANY__Number_1_";
 const EQ: &str = "eq_Any_1__Any_1__Boolean_1_";
 const PLUS: &str = "plus_Number_MANY__Number_1_";
@@ -579,4 +583,74 @@ fn last_returns_the_final_element_or_nothing() {
         Value::Integer(7)
     );
     assert_eq!(run(&expr::call(LAST, vec![ints(&[])])), Value::Unit);
+}
+
+/// A `Map<String, Integer>` value holding `entries`, built directly (no
+/// native involved).
+fn string_int_map(entries: &[(&str, i64)]) -> Value {
+    let mut state = MapState::default();
+    for (k, v) in entries {
+        state
+            .entries
+            .insert(ValueKey::String((*k).into()), Value::Integer(*v));
+    }
+    Value::Map(Rc::new(RefCell::new(state)))
+}
+
+/// The `(String, Integer)` entries of a map value, sorted by key.
+fn string_int_entries(map: &Value) -> Vec<(String, i64)> {
+    let Value::Map(cell) = map else {
+        panic!("expected a Map, got {map:?}");
+    };
+    let mut out: Vec<(String, i64)> = cell
+        .borrow()
+        .entries
+        .iter()
+        .map(|(k, v)| {
+            let ValueKey::String(k) = k else {
+                panic!("expected a String key, got {k:?}");
+            };
+            (k.to_string(), v.as_integer().expect("an Integer value"))
+        })
+        .collect();
+    out.sort();
+    out
+}
+
+#[test]
+fn put_returns_a_new_map_and_leaves_the_input_alone() {
+    let model = model();
+    let registry = NativeRegistry::standard();
+    let mut eval = Evaluator::new(&model, &registry);
+    eval.context_mut().push_scope();
+    eval.context_mut().set("m", string_int_map(&[("key1", 0)]));
+    let put = |key: &str, value: i64| {
+        expr::call(
+            PUT,
+            vec![expr::var("m"), expr::string(key), expr::int(value)],
+        )
+    };
+    let added = eval.eval(&put("key2", 1)).unwrap();
+    assert_eq!(
+        string_int_entries(&added),
+        [("key1".to_string(), 0), ("key2".to_string(), 1)]
+    );
+    let overridden = eval.eval(&put("key1", 1)).unwrap();
+    assert_eq!(string_int_entries(&overridden), [("key1".to_string(), 1)]);
+    // `m` itself still holds its single original entry.
+    assert_eq!(
+        string_int_entries(eval.context().get("m").unwrap()),
+        [("key1".to_string(), 0)]
+    );
+    // A collection is not a valid key.
+    let err = eval
+        .eval(&expr::call(
+            PUT,
+            vec![expr::var("m"), ints(&[1, 2]), expr::int(0)],
+        ))
+        .unwrap_err();
+    assert!(
+        format!("{err:?}").contains("Map key must be a hashable"),
+        "{err:?}"
+    );
 }

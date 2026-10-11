@@ -24,12 +24,14 @@
 
 use im_rc::Vector as PVector;
 use legend_pure_metamodel::types::ValueSpec;
+use smol_str::SmolStr;
 
 use crate::error::{PureException, PureRuntimeError};
+use crate::heap::ObjectHandle;
 use crate::native::{
     EvalContextTrait, Evaluated, NativeFunction, NativeRegistry, expect_args, force_all,
 };
-use crate::value::Value;
+use crate::value::{MapState, Value, ValueKey};
 
 /// Pure `fold(T[*], Function<{T[1],V[m]->V[m]}>[1], V[m]): V[m]`
 ///
@@ -834,6 +836,130 @@ impl NativeFunction for Last {
     }
 }
 
+/// Coerce a runtime [`Value`] into a hashable [`ValueKey`].
+///
+/// Primitives + dates map to their direct `ValueKey` variant. Heap objects
+/// default to identity (`ValueKey::Object(ObjectHandle)`) unless the owning
+/// class annotates one or more properties with `<<equality.Key>>` — in
+/// that case the key extracts those properties' values and becomes
+/// `ValueKey::ObjectByEqualityKeys`, so instances with equal annotated
+/// fields collide in the same bucket even across distinct `ObjectHandle`s.
+/// Collections, maps, and functions never compare meaningfully and raise
+/// an explicit error.
+#[allow(clippy::result_large_err)]
+fn value_to_key(v: &Value, ctx: &dyn EvalContextTrait) -> Result<ValueKey, PureException> {
+    match v {
+        Value::Boolean(b) => Ok(ValueKey::Boolean(*b)),
+        Value::Integer(i) => Ok(ValueKey::Integer(*i)),
+        Value::Decimal(d) => Ok(ValueKey::Decimal(*d)),
+        Value::String(s) => Ok(ValueKey::String(s.clone())),
+        Value::Date(d) => Ok(ValueKey::Date(*d)),
+        Value::StrictTime(t) => Ok(ValueKey::StrictTime(*t)),
+        Value::EnumValue { enum_id, member } => Ok(ValueKey::EnumValue {
+            enum_id: *enum_id,
+            member: member.clone(),
+        }),
+        Value::Object(id) => object_equality_key(id.clone(), ctx),
+        other => Err(PureRuntimeError::EvaluationError(format!(
+            "Map key must be a hashable primitive or object identity, got {}",
+            other.type_name()
+        ))
+        .into()),
+    }
+}
+
+/// Resolve a heap object into a `ValueKey`.
+///
+/// Walks the object's classifier to its owning Class, then looks for
+/// `<<equality.Key>>`-annotated properties. If any exist, extract their
+/// current values and build `ObjectByEqualityKeys`; otherwise fall back
+/// to identity equality via `ValueKey::Object(ObjectHandle)`.
+#[allow(clippy::result_large_err)]
+fn object_equality_key(
+    id: ObjectHandle,
+    ctx: &dyn EvalContextTrait,
+) -> Result<ValueKey, PureException> {
+    let classifier = ctx.heap().classifier(&id)?.to_string();
+    let Some(class_id) = crate::m3_paths::resolve(ctx.model(), &classifier) else {
+        return Ok(ValueKey::Object(id));
+    };
+
+    // Canonical `<<equality.Key>>` property list (profile identity +
+    // stereotype label both checked in the shared helper).
+    let equality_props = crate::native::equality::equality_key_properties(ctx.model(), class_id);
+
+    if equality_props.is_empty() {
+        return Ok(ValueKey::Object(id));
+    }
+
+    let mut fields: Vec<(SmolStr, ValueKey)> = Vec::with_capacity(equality_props.len());
+    for prop_name in equality_props {
+        let values = ctx.heap().get_property_values(&id, prop_name.as_str())?;
+        let field_key = match values.iter().next() {
+            Some(v) => value_to_key(v, ctx)?,
+            // Absent annotated field — represent as a sentinel string so
+            // two instances both missing the field still collide.
+            None => ValueKey::String(SmolStr::new_static("")),
+        };
+        fields.push((prop_name, field_key));
+    }
+    Ok(ValueKey::ObjectByEqualityKeys { class_id, fields })
+}
+
+/// Wrap a freshly-built [`MapState`] in the `Rc<RefCell<…>>` cell that
+/// `Value::Map` carries. Keeps the construction site for new map
+/// identities centralised — every `put` / `putAll` / `replaceAll` / etc.
+/// allocates a fresh cell so Pure semantics ("`put` returns a new map")
+/// stays intact, while `getIfAbsentPutWithKey` mutates an existing cell.
+fn new_map_cell(
+    entries: im_rc::HashMap<ValueKey, Value>,
+    get_if_absent_counter: i64,
+) -> std::rc::Rc<std::cell::RefCell<MapState>> {
+    std::rc::Rc::new(std::cell::RefCell::new(MapState {
+        entries,
+        get_if_absent_counter,
+    }))
+}
+
+/// Pure `put<U,V>(m:Map<U,V>[1], key:U[1], value:V[1]):Map<U,V>[1]`
+///
+/// Returns a **new** map (fresh `Rc<RefCell<MapState>>`) carrying every
+/// entry of `m` plus `key -> value`. Mirrors Java Pure's `Put.java`:
+///
+/// ```java
+/// MapCoreInstance newMap = new MapCoreInstance(map, true, processorSupport);
+/// newMap.getMap().put(key, value);
+/// return newMap;
+/// ```
+///
+/// `m` is untouched — HAMT structural sharing keeps the entry copy
+/// O(log N), and the returned cell has `get_if_absent_counter` reset
+/// to zero (Java's `MapCoreInstance` copy ctor does the same when
+/// `copyData=true` would normally clone the stats — but `Put` never
+/// reads the stats so reset is the simplest correct choice; tests that
+/// observe stats use `getIfAbsentPutWithKey`, which mutates in place
+/// and never goes through `Put`).
+#[derive(Debug)]
+pub struct Put;
+
+impl NativeFunction for Put {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("put", &values, 3)?;
+        let Value::Map(m) = &values[0] else {
+            return Err(PureRuntimeError::type_mismatch("Map", &values[0]).into());
+        };
+        let key = value_to_key(&values[1], ctx)?;
+        let mut updated = m.borrow().entries.clone();
+        updated.insert(key, values[2].clone());
+        Ok(Evaluated::new(Value::Map(new_map_cell(updated, 0))))
+    }
+}
+
 /// Register the fished collection natives.
 pub fn register(registry: &mut NativeRegistry) {
     registry.register("fold_T_MANY__Function_1__V_m__V_m_", Fold);
@@ -867,6 +993,7 @@ pub fn register(registry: &mut NativeRegistry) {
     registry.register("forAll_T_MANY__Function_1__Boolean_1_", ForAll);
     registry.register("init_T_MANY__T_MANY_", Init);
     registry.register("last_T_MANY__T_$0_1$_", Last);
+    registry.register("put_Map_1__U_1__V_1__Map_1_", Put);
 }
 
 #[cfg(test)]
