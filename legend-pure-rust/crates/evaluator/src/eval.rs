@@ -74,6 +74,10 @@ use crate::value::{FunctionValue, LambdaClosure, Value};
 ///
 /// # Lazy call stack
 ///
+/// Per chunk, per local index: not looked up yet, or the registry entry
+/// (or its absence) for that element.
+type NativeByElement<'model> = Vec<Vec<Option<Option<&'model dyn NativeFunction>>>>;
+
 /// The evaluator has **no call stack field**. The Pure-level call stack is
 /// built lazily via `map_err` only when an error propagates through the
 /// recursive `eval()` calls.
@@ -94,6 +98,11 @@ pub struct Evaluator<'model, H: EvalHooks = NoOpHooks> {
 
     /// Immutable registry of native functions.
     natives: &'model NativeRegistry,
+
+    /// The registry entry of each function element, found once: indexed
+    /// by chunk and local index, `None` until looked up, then the entry
+    /// or its absence.
+    native_by_element: std::cell::RefCell<NativeByElement<'model>>,
 
     /// Memoised per-class member wrappers (`.properties`,
     /// `.qualifiedProperties`, `.propertiesFromAssociations`). Keyed by
@@ -124,6 +133,7 @@ impl<'model> Evaluator<'model, NoOpHooks> {
             heap,
             context: VariableContext::new(),
             natives,
+            native_by_element: std::cell::RefCell::new(Vec::new()),
             member_wrapper_cache: HashMap::new(),
             hooks: NoOpHooks,
             rendering_depth: 0,
@@ -152,6 +162,7 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
             heap,
             context: VariableContext::new(),
             natives,
+            native_by_element: std::cell::RefCell::new(Vec::new()),
             member_wrapper_cache: HashMap::new(),
             hooks,
             rendering_depth: 0,
@@ -524,16 +535,18 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
             Some(id) => self.model.get_node(id).name.as_str(),
             None => function_name,
         };
+        let native = match function {
+            Some(id) => self.native_for(id),
+            None => self.natives.get(lookup_key),
+        };
+        if let Some(native) = native {
+            return self.dispatch_native(native, lookup_key, arguments, source_info);
+        }
         let is_native = match function {
             Some(id) => matches!(self.model.get_element(id), Element::Function(f) if f.is_native),
             None => true,
         };
-
-        if is_native {
-            if let Some(native) = self.natives.get(lookup_key) {
-                return self.dispatch_native(native, lookup_key, arguments, source_info);
-            }
-        } else if let Some(element_id) = function {
+        if !is_native && let Some(element_id) = function {
             let mut args = Vec::with_capacity(arguments.len());
             for arg in arguments {
                 args.push(self.eval(arg)?);
@@ -549,6 +562,40 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
             source_info.clone(),
             Vec::new(),
         ))
+    }
+
+    /// The registry entry of a native function element, by element: the
+    /// mangled name is hashed once per element for the evaluator's life,
+    /// never per call. A Pure-bodied function, a package or a native the
+    /// registry lacks has none.
+    fn native_for(&self, id: ElementId) -> Option<&'model dyn NativeFunction> {
+        let ElementId::InstanceId {
+            chunk_id,
+            local_idx,
+        } = id
+        else {
+            return None;
+        };
+        let (chunk, index) = (usize::from(chunk_id), local_idx as usize);
+        let mut cache = self.native_by_element.borrow_mut();
+        if cache.len() <= chunk {
+            cache.resize_with(chunk + 1, Vec::new);
+        }
+        let slots = &mut cache[chunk];
+        if slots.len() <= index {
+            slots.resize(index + 1, None);
+        }
+        if let Some(known) = slots[index] {
+            return known;
+        }
+        let found = match self.model.get_element(id) {
+            Element::Function(f) if f.is_native => {
+                self.natives.get(self.model.get_node(id).name.as_str())
+            }
+            _ => None,
+        };
+        slots[index] = Some(found);
+        found
     }
 
     /// Dispatch a native function using the expression-activator model.
@@ -1803,7 +1850,7 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
         mangled: &SmolStr,
         args: &[Value],
     ) -> Result<Value, PureException> {
-        if let Some(native) = self.natives.get(mangled.as_str()) {
+        if let Some(native) = self.native_for(id) {
             return self.execute_native_with_values(native, args);
         }
         let is_native = matches!(self.model.get_element(id), Element::Function(f) if f.is_native);
