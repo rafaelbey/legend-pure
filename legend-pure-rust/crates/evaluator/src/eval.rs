@@ -1867,6 +1867,29 @@ impl<H: EvalHooks> crate::native::EvalContextTrait for EvalContext<'_, '_, H> {
         self.evaluator.eval(spec).map(Evaluated::new)
     }
 
+    fn for_each_value(
+        &mut self,
+        spec: &ValueSpec,
+        each: &mut dyn FnMut(Value) -> Result<(), PureException>,
+    ) -> Result<(), PureException> {
+        let elements: &[ValueSpec] = match &*spec.kind {
+            ExprKind::Collection { elements } => elements,
+            _ => std::slice::from_ref(spec),
+        };
+        for element in elements {
+            match self.evaluator.eval(element)? {
+                Value::Collection(items) => {
+                    for item in items.iter() {
+                        each(item.clone())?;
+                    }
+                }
+                Value::Unit => {}
+                single => each(single)?,
+            }
+        }
+        Ok(())
+    }
+
     fn context(&self) -> &VariableContext {
         &self.evaluator.context
     }

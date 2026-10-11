@@ -153,6 +153,30 @@ pub trait EvalContextTrait {
     /// Propagates any `PureException` raised while evaluating the expression.
     fn evaluate(&mut self, spec: &ValueSpec) -> Result<Evaluated, PureException>;
 
+    /// Hand every element of `spec`'s value to `each`, in order, without
+    /// building the collection: the elements of a `Collection` literal are
+    /// evaluated one at a time, any other result is unpacked (`Unit` is
+    /// nothing, a scalar is one element).
+    ///
+    /// # Errors
+    /// Propagates any `PureException` raised while evaluating or by `each`.
+    fn for_each_value(
+        &mut self,
+        spec: &ValueSpec,
+        each: &mut dyn FnMut(Value) -> Result<(), PureException>,
+    ) -> Result<(), PureException> {
+        match self.evaluate(spec)?.into_value() {
+            Value::Collection(items) => {
+                for item in items.iter() {
+                    each(item.clone())?;
+                }
+                Ok(())
+            }
+            Value::Unit => Ok(()),
+            single => each(single),
+        }
+    }
+
     /// Access the variable context immutably.
     fn context(&self) -> &VariableContext;
 
