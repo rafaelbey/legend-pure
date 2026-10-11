@@ -235,6 +235,24 @@ impl NativeFunction for Log {
     }
 }
 
+/// Pure `pow(Number[1], Number[1]):Float[1]` — `base^exponent`.
+#[derive(Debug)]
+pub struct Pow;
+
+impl NativeFunction for Pow {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("pow", &values, 2)?;
+        let base = number_to_f64("pow", &values[0])?;
+        let exp = number_to_f64("pow", &values[1])?;
+        Ok(Evaluated::new(Value::Float(base.powf(exp))))
+    }
+}
+
 /// Pure `toFloat(Number[1]):Float[1]` — numeric → Float coercion.
 #[derive(Debug)]
 pub struct ToFloat;
@@ -305,6 +323,11 @@ pub fn register(registry: &mut NativeRegistry) {
     // analytic
     registry.register("exp_Number_1__Float_1_", Exp);
     registry.register("log_Number_1__Float_1_", Log);
+    registry.register("pow_Number_1__Number_1__Float_1_", Pow);
+    // Platform declares `pow(Number,Number):Number` — `Number` is the
+    // common supertype of the actual `Float` return. Alias under both
+    // so exact-FQN dispatch hits the impl either way.
+    registry.register("pow_Number_1__Number_1__Number_1_", Pow);
 
     // numeric conversion
     registry.register("toFloat_Number_1__Float_1_", ToFloat);
@@ -514,6 +537,41 @@ mod tests {
     #[test]
     fn log_type_mismatch() {
         assert!(Log.execute(&[lit_str("x")], &mut MockCtx).is_err());
+    }
+
+    #[test]
+    fn pow_squares() {
+        let r = Pow
+            .execute(&[lit_float(3.0), lit_float(2.0)], &mut MockCtx)
+            .unwrap();
+        match r.into_value() {
+            Value::Float(f) => assert!(approx_eq(f, 9.0)),
+            other => panic!("expected Float, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn pow_integer_exponent() {
+        let r = Pow
+            .execute(&[lit_int(2), lit_int(10)], &mut MockCtx)
+            .unwrap();
+        match r.into_value() {
+            Value::Float(f) => assert!(approx_eq(f, 1024.0)),
+            other => panic!("expected Float, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn pow_wrong_arg_count() {
+        assert!(Pow.execute(&[lit_float(1.0)], &mut MockCtx).is_err());
+    }
+
+    #[test]
+    fn pow_type_mismatch() {
+        assert!(
+            Pow.execute(&[lit_float(1.0), lit_str("x")], &mut MockCtx)
+                .is_err()
+        );
     }
 
     #[test]
