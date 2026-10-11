@@ -392,6 +392,17 @@ impl std::fmt::Debug for JavaNode {
 
 impl JavaNode {
     fn fetch(&self, name: &str) -> Result<PVector<Value>, String> {
+        self.call_descriptions(self.shared.methods.property_values, name)
+            .map(|values| values.unwrap_or_default())
+    }
+
+    /// Call a bridge method `(long id, String name) -> NodeDescription[]`
+    /// and decode the result; a Java `null` is `None`.
+    fn call_descriptions(
+        &self,
+        method: jni::objects::JMethodID,
+        name: &str,
+    ) -> Result<Option<PVector<Value>>, String> {
         let mut guard = self
             .shared
             .vm
@@ -402,7 +413,7 @@ impl JavaNode {
         let result = unsafe {
             env.call_method_unchecked(
                 self.shared.bridge.as_obj(),
-                self.shared.methods.property_values,
+                method,
                 ReturnType::Array,
                 &[
                     JValue::Long(self.id).as_jni(),
@@ -411,6 +422,7 @@ impl JavaNode {
             )
         };
         let arr = match result.and_then(|v| v.l()) {
+            Ok(obj) if obj.is_null() => return Ok(None),
             Ok(obj) => JObjectArray::from(obj),
             Err(e) => {
                 let _ = env.exception_clear();
@@ -427,7 +439,7 @@ impl JavaNode {
             let v = description_to_value(&self.shared, d).map_err(|e| e.to_string())?;
             values.push_back(v);
         }
-        Ok(values)
+        Ok(Some(values))
     }
 }
 
@@ -477,6 +489,19 @@ impl TypedObject for JavaNode {
 
     fn source_info(&self) -> Option<SourceInfo> {
         self.source.clone()
+    }
+
+    /// The values a lambda captured, read from the Java
+    /// `LambdaWithContext` behind this node; `None` when the node is a
+    /// plain lambda (or not a lambda at all).
+    fn captured_values(&self, name: &str) -> Option<PVector<Value>> {
+        match self.call_descriptions(self.shared.methods.captured_value, name) {
+            Ok(values) => values,
+            Err(message) => {
+                self.shared.note_error(message);
+                None
+            }
+        }
     }
 
     fn set_property(&mut self, name: &str, value: Value) -> Result<(), PureRuntimeError> {

@@ -241,6 +241,57 @@ public class TestRustEvaluatorBoundary
         Assert.assertTrue(cause.getSourceInformation().getColumn() > 0);
     }
 
+    /**
+     * A Pure-bodied function the lambda calls is lowered with it,
+     * transitively, and runs through the evaluator's own dispatch.
+     */
+    @Test
+    public void pureBodiedFunctionsLowerTransitively()
+    {
+        CoreInstance lambda = findLambda(pctTest(PlatformCodeRepositoryProvider.grammarFunctions, "testLetAsLastStatement"));
+        CoreInstance result = evaluator.start(lambda, Lists.immutable.empty());
+        Assert.assertEquals("last statement string", values(result).get(0).getName());
+    }
+
+    /**
+     * A lambda that closes over its test's variables can only run with
+     * its context (the interpreted engine's {@code LambdaWithContext});
+     * the bare graph node reports what it lacks.
+     */
+    @Test
+    public void aBareLambdaWithOpenVariablesIsUnsupported()
+    {
+        CoreInstance test = pctTest(PlatformCodeRepositoryProvider.essentialFunctions, "testSimpleSortWithFunctionVariables");
+        CoreInstance lambda = findLambdaWithOpenVariables(test);
+        Assert.assertNotNull(lambda);
+        PureRustEvaluationException e = Assert.assertThrows(PureRustEvaluationException.class,
+                () -> evaluator.start(lambda, Lists.immutable.empty()));
+        Assert.assertEquals(PureRustEvaluationException.Kind.UNSUPPORTED, e.getKind());
+        Assert.assertTrue(e.getMessage(), e.getMessage().startsWith("Unsupported: lowering captured variables"));
+    }
+
+    private static CoreInstance findLambdaWithOpenVariables(CoreInstance node)
+    {
+        if (LAMBDA_FUNCTION.equals(PackageableElement.getUserPathForPackageableElement(node.getClassifier()))
+                && node.getValueForMetaPropertyToMany(M3Properties.openVariables).notEmpty()
+                && node.getValueForMetaPropertyToMany(M3Properties.openVariables).noneSatisfy(v -> "f".equals(v.getName())))
+        {
+            return node;
+        }
+        for (String property : new String[]{M3Properties.expressionSequence, M3Properties.parametersValues, M3Properties.values})
+        {
+            for (CoreInstance child : node.getValueForMetaPropertyToMany(property))
+            {
+                CoreInstance found = findLambdaWithOpenVariables(child);
+                if (found != null)
+                {
+                    return found;
+                }
+            }
+        }
+        return null;
+    }
+
     private static CoreInstance pctTest(ReportScope scope, String simpleName)
     {
         MutableList<CoreInstance> tests = TestCollection.buildPCTTestCollection(scope._package, scope.filePath, ps).getAllTestFunctions();

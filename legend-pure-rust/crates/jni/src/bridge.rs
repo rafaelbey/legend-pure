@@ -112,6 +112,7 @@ impl Default for JniHandleTable {
 pub struct BridgeMethods {
     pub describe: JMethodID,
     pub property_values: JMethodID,
+    pub captured_value: JMethodID,
     pub new_boolean: JMethodID,
     pub new_integer: JMethodID,
     pub new_float: JMethodID,
@@ -147,6 +148,11 @@ impl BridgeMethods {
             property_values: env.get_method_id(
                 &cls,
                 "propertyValues",
+                format!("(JLjava/lang/String;)[{desc}"),
+            )?,
+            captured_value: env.get_method_id(
+                &cls,
+                "capturedValue",
                 format!("(JLjava/lang/String;)[{desc}"),
             )?,
             new_boolean: env.get_method_id(&cls, "newBoolean", format!("(Z){ci}"))?,

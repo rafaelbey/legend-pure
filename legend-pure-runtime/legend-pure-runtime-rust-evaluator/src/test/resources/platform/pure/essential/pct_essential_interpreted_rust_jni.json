@@ -3,11 +3,11 @@
   "exclusions": [
     {
       "test": "meta::pure::functions::collection::tests::add::testAddWithOffset_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering captured variables (`set` of a lambda without its context)"
+      "expectedError": "FunctionNotFound: add_T_MANY__Integer_1__T_1__T_$1_MANY$_"
     },
     {
       "test": "meta::pure::functions::collection::tests::add::testAdd_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering captured variables (`set` of a lambda without its context)"
+      "expectedError": "FunctionNotFound: add_T_MANY__T_1__T_$1_MANY$_"
     },
     {
       "test": "meta::pure::functions::collection::tests::at::testAtError_Function_1__Boolean_1_",
@@ -15,15 +15,15 @@
     },
     {
       "test": "meta::pure::functions::collection::tests::at::testAtOtherScenario_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering meta::pure::metamodel::function::ConcreteFunctionDefinition bodies"
+      "expectedError": "FunctionNotFound: at_T_MANY__Integer_1__T_1_"
     },
     {
       "test": "meta::pure::functions::collection::tests::at::testAtWithVariable_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering captured variables (`collection` of a lambda without its context)"
+      "expectedError": "FunctionNotFound: at_T_MANY__Integer_1__T_1_"
     },
     {
       "test": "meta::pure::functions::collection::tests::at::testAt_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering captured variables (`collection` of a lambda without its context)"
+      "expectedError": "FunctionNotFound: at_T_MANY__Integer_1__T_1_"
     },
     {
       "test": "meta::pure::functions::collection::tests::concatenate::testConcatenateMixedType_Function_1__Boolean_1_",
@@ -39,15 +39,15 @@
     },
     {
       "test": "meta::pure::functions::collection::tests::contains::testContainsNonPrimitive_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering meta::pure::metamodel::function::ConcreteFunctionDefinition bodies"
+      "expectedError": "FunctionNotFound: exists_T_MANY__Function_1__Boolean_1_"
     },
     {
       "test": "meta::pure::functions::collection::tests::contains::testContainsPrimitive_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering meta::pure::metamodel::function::ConcreteFunctionDefinition bodies"
+      "expectedError": "FunctionNotFound: exists_T_MANY__Function_1__Boolean_1_"
     },
     {
       "test": "meta::pure::functions::collection::tests::contains::testContainsWithFunction_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering meta::pure::metamodel::function::ConcreteFunctionDefinition bodies"
+      "expectedError": "Unsupported: lowering meta::pure::metamodel::function::property::Property as an element (no user path)"
     },
     {
       "test": "meta::pure::functions::collection::tests::drop::testDropExceedsSizeOnEmptyList_Function_1__Boolean_1_",
@@ -59,7 +59,7 @@
     },
     {
       "test": "meta::pure::functions::collection::tests::drop::testDropInList_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering meta::pure::metamodel::function::ConcreteFunctionDefinition bodies"
+      "expectedError": "Unsupported: lowering meta::pure::metamodel::type::Class as an element"
     },
     {
       "test": "meta::pure::functions::collection::tests::drop::testDropManyOnEmptyList_Function_1__Boolean_1_",
@@ -103,11 +103,11 @@
     },
     {
       "test": "meta::pure::functions::collection::tests::find::testFindInstance_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering meta::pure::metamodel::function::ConcreteFunctionDefinition bodies"
+      "expectedError": "Unsupported: lowering meta::pure::metamodel::function::property::Property as an element (no user path)"
     },
     {
       "test": "meta::pure::functions::collection::tests::find::testFindLiteralFromVar_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering captured variables (`set` of a lambda without its context)"
+      "expectedError": "FunctionNotFound: find_T_MANY__Function_1__T_$0_1$_"
     },
     {
       "test": "meta::pure::functions::collection::tests::find::testFindLiteral_Function_1__Boolean_1_",
@@ -115,7 +115,7 @@
     },
     {
       "test": "meta::pure::functions::collection::tests::find::testFindUsingVarForFunction_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering captured variables (`branche` of a lambda without its context)"
+      "expectedError": "Unsupported: lowering meta::pure::metamodel::function::property::Property as an element (no user path)"
     },
     {
       "test": "meta::pure::functions::collection::tests::fold::testFoldCollectionAccumulator_Function_1__Boolean_1_",
@@ -151,7 +151,7 @@
     },
     {
       "test": "meta::pure::functions::collection::tests::fold::testFold_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering meta::pure::metamodel::function::ConcreteFunctionDefinition bodies"
+      "expectedError": "Unsupported: lowering meta::pure::metamodel::function::property::Property as an element (no user path)"
     },
     {
       "test": "meta::pure::functions::collection::tests::fold::testIntegerSum_Function_1__Boolean_1_",
@@ -159,7 +159,7 @@
     },
     {
       "test": "meta::pure::functions::collection::tests::fold::testStringSum_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering meta::pure::metamodel::function::ConcreteFunctionDefinition bodies"
+      "expectedError": "FunctionNotFound: fold_T_MANY__Function_1__V_m__V_m_"
     },
     {
       "test": "meta::pure::functions::collection::tests::forall::testforAllOnEmptySet_Function_1__Boolean_1_",
@@ -167,11 +167,11 @@
     },
     {
       "test": "meta::pure::functions::collection::tests::forall::testforAllOnNonEmptySetIsFalse_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering meta::pure::metamodel::function::ConcreteFunctionDefinition bodies"
+      "expectedError": "FunctionNotFound: forAll_T_MANY__Function_1__Boolean_1_"
     },
     {
       "test": "meta::pure::functions::collection::tests::forall::testforAllOnNonEmptySetIsTrue_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering meta::pure::metamodel::function::ConcreteFunctionDefinition bodies"
+      "expectedError": "FunctionNotFound: forAll_T_MANY__Function_1__Boolean_1_"
     },
     {
       "test": "meta::pure::functions::collection::tests::get::testGet_Function_1__Boolean_1_",
@@ -179,19 +179,19 @@
     },
     {
       "test": "meta::pure::functions::collection::tests::head::testHeadComplex_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering meta::pure::metamodel::function::ConcreteFunctionDefinition bodies"
+      "expectedError": "FunctionNotFound: first_T_MANY__T_$0_1$_"
     },
     {
       "test": "meta::pure::functions::collection::tests::head::testHeadOnEmptySet_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering meta::pure::metamodel::function::ConcreteFunctionDefinition bodies"
+      "expectedError": "FunctionNotFound: first_T_MANY__T_$0_1$_"
     },
     {
       "test": "meta::pure::functions::collection::tests::head::testHeadOnOneElement_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering meta::pure::metamodel::function::ConcreteFunctionDefinition bodies"
+      "expectedError": "FunctionNotFound: first_T_MANY__T_$0_1$_"
     },
     {
       "test": "meta::pure::functions::collection::tests::head::testHeadSimple_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering meta::pure::metamodel::function::ConcreteFunctionDefinition bodies"
+      "expectedError": "FunctionNotFound: first_T_MANY__T_$0_1$_"
     },
     {
       "test": "meta::pure::functions::collection::tests::indexof::testIndexOfOneElement_Function_1__Boolean_1_",
@@ -231,7 +231,7 @@
     },
     {
       "test": "meta::pure::functions::collection::tests::put::testPut_addsEntry_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering meta::pure::metamodel::function::ConcreteFunctionDefinition bodies"
+      "expectedError": "Unsupported: lowering meta::pure::metamodel::type::Class as an element"
     },
     {
       "test": "meta::pure::functions::collection::tests::put::testPut_emptyMap_Function_1__Boolean_1_",
@@ -239,7 +239,7 @@
     },
     {
       "test": "meta::pure::functions::collection::tests::put::testPut_overridesEntry_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering meta::pure::metamodel::function::ConcreteFunctionDefinition bodies"
+      "expectedError": "Unsupported: lowering meta::pure::metamodel::type::Class as an element"
     },
     {
       "test": "meta::pure::functions::collection::tests::putAll::testPutAll_emptyInputMap_Function_1__Boolean_1_",
@@ -247,39 +247,39 @@
     },
     {
       "test": "meta::pure::functions::collection::tests::putAll::testPutAll_emptyPutEntries_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering meta::pure::metamodel::function::ConcreteFunctionDefinition bodies"
+      "expectedError": "Unsupported: lowering meta::pure::metamodel::type::Class as an element"
     },
     {
       "test": "meta::pure::functions::collection::tests::putAll::testPutAll_overridesExistingAndAddNew_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering meta::pure::metamodel::function::ConcreteFunctionDefinition bodies"
+      "expectedError": "Unsupported: lowering meta::pure::metamodel::type::Class as an element"
     },
     {
       "test": "meta::pure::functions::collection::tests::removeDuplicates::testRemoveDuplicatesEmptyListExplicit_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering meta::pure::metamodel::function::ConcreteFunctionDefinition bodies"
+      "expectedError": "FunctionNotFound: removeDuplicates_T_MANY__Function_$0_1$__Function_$0_1$__T_MANY_"
     },
     {
       "test": "meta::pure::functions::collection::tests::removeDuplicates::testRemoveDuplicatesEmptyList_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering meta::pure::metamodel::function::ConcreteFunctionDefinition bodies"
+      "expectedError": "FunctionNotFound: removeDuplicates_T_MANY__Function_$0_1$__Function_$0_1$__T_MANY_"
     },
     {
       "test": "meta::pure::functions::collection::tests::removeDuplicates::testRemoveDuplicatesPrimitiveNonStandardFunction_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering meta::pure::metamodel::function::ConcreteFunctionDefinition bodies"
+      "expectedError": "FunctionNotFound: removeDuplicates_T_MANY__Function_$0_1$__Function_$0_1$__T_MANY_"
     },
     {
       "test": "meta::pure::functions::collection::tests::removeDuplicates::testRemoveDuplicatesPrimitiveStandardFunctionExplicit_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering meta::pure::metamodel::function::ConcreteFunctionDefinition bodies"
+      "expectedError": "FunctionNotFound: removeDuplicates_T_MANY__Function_$0_1$__Function_$0_1$__T_MANY_"
     },
     {
       "test": "meta::pure::functions::collection::tests::removeDuplicates::testRemoveDuplicatesPrimitiveStandardFunctionMixedTypes_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering meta::pure::metamodel::function::ConcreteFunctionDefinition bodies"
+      "expectedError": "FunctionNotFound: removeDuplicates_T_MANY__Function_$0_1$__Function_$0_1$__T_MANY_"
     },
     {
       "test": "meta::pure::functions::collection::tests::removeDuplicates::testRemoveDuplicatesPrimitiveStandardFunctionSimple_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering meta::pure::metamodel::function::ConcreteFunctionDefinition bodies"
+      "expectedError": "FunctionNotFound: removeDuplicates_T_MANY__Function_$0_1$__Function_$0_1$__T_MANY_"
     },
     {
       "test": "meta::pure::functions::collection::tests::removeDuplicatesBy::testRemoveDuplicatesByPrimitive_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering meta::pure::metamodel::function::ConcreteFunctionDefinition bodies"
+      "expectedError": "FunctionNotFound: removeDuplicates_T_MANY__Function_$0_1$__Function_$0_1$__T_MANY_"
     },
     {
       "test": "meta::pure::functions::collection::tests::reverse::testReverseEmpty_Function_1__Boolean_1_",
@@ -299,7 +299,7 @@
     },
     {
       "test": "meta::pure::functions::collection::tests::slice::testSliceInList_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering meta::pure::metamodel::function::ConcreteFunctionDefinition bodies"
+      "expectedError": "Unsupported: lowering meta::pure::metamodel::type::Class as an element"
     },
     {
       "test": "meta::pure::functions::collection::tests::slice::testSliceOnBounds_Function_1__Boolean_1_",
@@ -319,19 +319,19 @@
     },
     {
       "test": "meta::pure::functions::collection::tests::sort::testMixedSortNoComparator_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering meta::pure::metamodel::function::ConcreteFunctionDefinition bodies"
+      "expectedError": "FunctionNotFound: sort_T_m__Function_$0_1$__Function_$0_1$__T_m_"
     },
     {
       "test": "meta::pure::functions::collection::tests::sort::testSimpleSortNoComparator_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering meta::pure::metamodel::function::ConcreteFunctionDefinition bodies"
+      "expectedError": "FunctionNotFound: sort_T_m__Function_$0_1$__Function_$0_1$__T_m_"
     },
     {
       "test": "meta::pure::functions::collection::tests::sort::testSimpleSortReversed_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering meta::pure::metamodel::function::ConcreteFunctionDefinition bodies"
+      "expectedError": "FunctionNotFound: sort_T_m__Function_$0_1$__Function_$0_1$__T_m_"
     },
     {
       "test": "meta::pure::functions::collection::tests::sort::testSimpleSortWithFunctionVariables_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering captured variables (`comp` of a lambda without its context)"
+      "expectedError": "FunctionNotFound: sort_T_m__Function_$0_1$__Function_$0_1$__T_m_"
     },
     {
       "test": "meta::pure::functions::collection::tests::sort::testSimpleSortWithKey_Function_1__Boolean_1_",
@@ -339,11 +339,11 @@
     },
     {
       "test": "meta::pure::functions::collection::tests::sort::testSimpleSort_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering meta::pure::metamodel::function::ConcreteFunctionDefinition bodies"
+      "expectedError": "FunctionNotFound: sort_T_m__Function_$0_1$__Function_$0_1$__T_m_"
     },
     {
       "test": "meta::pure::functions::collection::tests::sort::testSortEmptySet_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering meta::pure::metamodel::function::ConcreteFunctionDefinition bodies"
+      "expectedError": "FunctionNotFound: sort_T_m__Function_$0_1$__Function_$0_1$__T_m_"
     },
     {
       "test": "meta::pure::functions::collection::tests::tail::testTailOnEmptySet_Function_1__Boolean_1_",
@@ -367,7 +367,7 @@
     },
     {
       "test": "meta::pure::functions::collection::tests::take::testTakeInList_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering meta::pure::metamodel::function::ConcreteFunctionDefinition bodies"
+      "expectedError": "Unsupported: lowering meta::pure::metamodel::type::Class as an element"
     },
     {
       "test": "meta::pure::functions::collection::tests::take::testTakeManyOnEmptyList_Function_1__Boolean_1_",
@@ -407,39 +407,39 @@
     },
     {
       "test": "meta::pure::functions::collection::tests::zip::testZipBothListsAreOfPairs_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering captured variables (`x` of a lambda without its context)"
+      "expectedError": "FunctionNotFound: zip_T_MANY__U_MANY__Pair_MANY_"
     },
     {
       "test": "meta::pure::functions::collection::tests::zip::testZipBothListsEmpty_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering captured variables (`a` of a lambda without its context)"
+      "expectedError": "FunctionNotFound: zip_T_MANY__U_MANY__Pair_MANY_"
     },
     {
       "test": "meta::pure::functions::collection::tests::zip::testZipBothListsSameLength_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering captured variables (`a` of a lambda without its context)"
+      "expectedError": "FunctionNotFound: zip_T_MANY__U_MANY__Pair_MANY_"
     },
     {
       "test": "meta::pure::functions::collection::tests::zip::testZipFirstListEmpty_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering captured variables (`a` of a lambda without its context)"
+      "expectedError": "FunctionNotFound: zip_T_MANY__U_MANY__Pair_MANY_"
     },
     {
       "test": "meta::pure::functions::collection::tests::zip::testZipFirstListLonger_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering captured variables (`a` of a lambda without its context)"
+      "expectedError": "FunctionNotFound: zip_T_MANY__U_MANY__Pair_MANY_"
     },
     {
       "test": "meta::pure::functions::collection::tests::zip::testZipFirstListsIsOfPairs_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering captured variables (`c` of a lambda without its context)"
+      "expectedError": "FunctionNotFound: zip_T_MANY__U_MANY__Pair_MANY_"
     },
     {
       "test": "meta::pure::functions::collection::tests::zip::testZipSecondListEmpty_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering captured variables (`a` of a lambda without its context)"
+      "expectedError": "FunctionNotFound: zip_T_MANY__U_MANY__Pair_MANY_"
     },
     {
       "test": "meta::pure::functions::collection::tests::zip::testZipSecondListLonger_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering captured variables (`a` of a lambda without its context)"
+      "expectedError": "FunctionNotFound: zip_T_MANY__U_MANY__Pair_MANY_"
     },
     {
       "test": "meta::pure::functions::collection::tests::zip::testZipSecondListsIsOfPairs_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering captured variables (`a` of a lambda without its context)"
+      "expectedError": "FunctionNotFound: zip_T_MANY__U_MANY__Pair_MANY_"
     },
     {
       "test": "meta::pure::functions::date::tests::testAdjustByDaysBigNumber_Function_1__Boolean_1_",
@@ -667,11 +667,11 @@
     },
     {
       "test": "meta::pure::functions::lang::tests::if::testMultiIf_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering meta::pure::metamodel::function::ConcreteFunctionDefinition bodies"
+      "expectedError": "Unsupported: lowering meta::pure::metamodel::function::property::Property as an element (no user path)"
     },
     {
       "test": "meta::pure::functions::lang::tests::match::testMatchManyWithMany_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering meta::pure::metamodel::function::ConcreteFunctionDefinition bodies"
+      "expectedError": "FunctionNotFound: match_Any_MANY__Function_$1_MANY$__T_m_"
     },
     {
       "test": "meta::pure::functions::lang::tests::match::testMatchOneWithMany_Function_1__Boolean_1_",
@@ -683,23 +683,23 @@
     },
     {
       "test": "meta::pure::functions::lang::tests::match::testMatchOneWith_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering meta::pure::metamodel::function::ConcreteFunctionDefinition bodies"
+      "expectedError": "FunctionNotFound: match_Any_MANY__Function_$1_MANY$__T_m_"
     },
     {
       "test": "meta::pure::functions::lang::tests::match::testMatchWithExtraParam_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering meta::pure::metamodel::function::ConcreteFunctionDefinition bodies"
+      "expectedError": "FunctionNotFound: match_Any_MANY__Function_$1_MANY$__P_o__T_m_"
     },
     {
       "test": "meta::pure::functions::lang::tests::match::testMatchWithExtraParamsAndFunctionsAsParam_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering captured variables (`lambdas` of a lambda without its context)"
+      "expectedError": "FunctionNotFound: match_Any_MANY__Function_$1_MANY$__P_o__T_m_"
     },
     {
       "test": "meta::pure::functions::lang::tests::match::testMatchWithFunctionsAsParamManyMatch_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering captured variables (`lambdas` of a lambda without its context)"
+      "expectedError": "FunctionNotFound: match_Any_MANY__Function_$1_MANY$__T_m_"
     },
     {
       "test": "meta::pure::functions::lang::tests::match::testMatchWithFunctionsAsParam_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering captured variables (`lambdas` of a lambda without its context)"
+      "expectedError": "FunctionNotFound: match_Any_MANY__Function_$1_MANY$__T_m_"
     },
     {
       "test": "meta::pure::functions::lang::tests::match::testMatchWithFunctionsManyMatch_Function_1__Boolean_1_",
@@ -775,11 +775,11 @@
     },
     {
       "test": "meta::pure::functions::math::tests::exp::testNumberExpLowPrecision_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering captured variables (`z` of a lambda without its context)"
+      "expectedError": "FunctionNotFound: eval_Function_1__T_n__V_m_"
     },
     {
       "test": "meta::pure::functions::math::tests::exp::testNumberExp_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering captured variables (`z` of a lambda without its context)"
+      "expectedError": "FunctionNotFound: eval_Function_1__T_n__V_m_"
     },
     {
       "test": "meta::pure::functions::math::tests::exp::testSimpleLowPrecision_Function_1__Boolean_1_",
@@ -819,7 +819,7 @@
     },
     {
       "test": "meta::pure::functions::math::tests::log10::testNumberLog10_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering captured variables (`z` of a lambda without its context)"
+      "expectedError": "FunctionNotFound: eval_Function_1__T_n__V_m_"
     },
     {
       "test": "meta::pure::functions::math::tests::log10::testSimpleLog10_Function_1__Boolean_1_",
@@ -827,11 +827,11 @@
     },
     {
       "test": "meta::pure::functions::math::tests::log::testNumberLogLowPrecision_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering captured variables (`z` of a lambda without its context)"
+      "expectedError": "FunctionNotFound: eval_Function_1__T_n__V_m_"
     },
     {
       "test": "meta::pure::functions::math::tests::log::testNumberLog_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering captured variables (`z` of a lambda without its context)"
+      "expectedError": "FunctionNotFound: eval_Function_1__T_n__V_m_"
     },
     {
       "test": "meta::pure::functions::math::tests::log::testSimpleLowPrecision_Function_1__Boolean_1_",
@@ -855,7 +855,7 @@
     },
     {
       "test": "meta::pure::functions::math::tests::pow::testNumberPow_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering captured variables (`z` of a lambda without its context)"
+      "expectedError": "FunctionNotFound: eval_Function_1__T_n__U_p__V_m_"
     },
     {
       "test": "meta::pure::functions::math::tests::pow::testSimplePow_Function_1__Boolean_1_",
@@ -1095,27 +1095,27 @@
     },
     {
       "test": "meta::pure::functions::string::tests::indexOf::testFromIndex_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering captured variables (`string` of a lambda without its context)"
+      "expectedError": "FunctionNotFound: indexOf_String_1__String_1__Integer_1__Integer_1_"
     },
     {
       "test": "meta::pure::functions::string::tests::indexOf::testSimple_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering captured variables (`string` of a lambda without its context)"
+      "expectedError": "FunctionNotFound: indexOf_String_1__String_1__Integer_1_"
     },
     {
       "test": "meta::pure::functions::string::tests::joinStrings::testJoinStringsNoStrings_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering meta::pure::metamodel::function::ConcreteFunctionDefinition bodies"
+      "expectedError": "FunctionNotFound: tail_T_MANY__T_MANY_"
     },
     {
       "test": "meta::pure::functions::string::tests::joinStrings::testJoinStringsSingleString_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering meta::pure::metamodel::function::ConcreteFunctionDefinition bodies"
+      "expectedError": "FunctionNotFound: joinStrings_String_MANY__String_1__String_1__String_1__String_1_"
     },
     {
       "test": "meta::pure::functions::string::tests::joinStrings::testJoinStringsUsingGenericArrow_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering meta::pure::metamodel::function::ConcreteFunctionDefinition bodies"
+      "expectedError": "FunctionNotFound: joinStrings_String_MANY__String_1__String_1__String_1__String_1_"
     },
     {
       "test": "meta::pure::functions::string::tests::joinStrings::testJoinStrings_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering meta::pure::metamodel::function::ConcreteFunctionDefinition bodies"
+      "expectedError": "FunctionNotFound: joinStrings_String_MANY__String_1__String_1__String_1__String_1_"
     },
     {
       "test": "meta::pure::functions::string::tests::length::testEmptyLength_Function_1__Boolean_1_",
@@ -1199,11 +1199,11 @@
     },
     {
       "test": "meta::pure::functions::string::tests::substring::testStartEnd_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering captured variables (`string` of a lambda without its context)"
+      "expectedError": "FunctionNotFound: substring_String_1__Integer_1__Integer_1__String_1_"
     },
     {
       "test": "meta::pure::functions::string::tests::substring::testStart_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering captured variables (`string` of a lambda without its context)"
+      "expectedError": "FunctionNotFound: substring_String_1__Integer_1__String_1_"
     },
     {
       "test": "meta::pure::functions::string::tests::toString::testBooleanToString_Function_1__Boolean_1_",
@@ -1263,7 +1263,7 @@
     },
     {
       "test": "meta::pure::functions::string::tests::toString::testPairCollectionToString_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering meta::pure::metamodel::function::ConcreteFunctionDefinition bodies"
+      "expectedError": "Unsupported: lowering meta::pure::metamodel::function::property::QualifiedProperty as an element (no user path)"
     },
     {
       "test": "meta::pure::functions::string::tests::toString::testPairToString_Function_1__Boolean_1_",
@@ -1271,7 +1271,7 @@
     },
     {
       "test": "meta::pure::functions::string::tests::toString::testPersonToString_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering captured variables (`str` of a lambda without its context)"
+      "expectedError": "FunctionNotFound: startsWith_String_1__String_1__Boolean_1_"
     },
     {
       "test": "meta::pure::functions::string::tests::toString::testSimpleDateToString_Function_1__Boolean_1_",

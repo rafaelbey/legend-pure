@@ -21,6 +21,7 @@ import org.eclipse.collections.api.list.MutableList;
 import org.eclipse.collections.api.map.MutableMap;
 import org.finos.legend.pure.m3.navigation.Instance;
 import org.finos.legend.pure.m3.navigation.M3Paths;
+import org.finos.legend.pure.m3.navigation.M3Properties;
 import org.finos.legend.pure.m3.navigation.PackageableElement.PackageableElement;
 import org.finos.legend.pure.m3.navigation.PrimitiveUtilities;
 import org.finos.legend.pure.m3.navigation.ProcessorSupport;
@@ -42,6 +43,7 @@ import org.finos.legend.pure.m4.coreinstance.primitive.date.LatestDate;
 import org.finos.legend.pure.m4.coreinstance.primitive.date.PureDate;
 import org.finos.legend.pure.m4.coreinstance.primitive.strictTime.PureStrictTime;
 import org.finos.legend.pure.m4.coreinstance.primitive.strictTime.StrictTimeFunctions;
+import org.finos.legend.pure.runtime.java.interpreted.LambdaWithContext;
 
 import java.util.IdentityHashMap;
 
@@ -246,6 +248,36 @@ final class RustNodeBridge
     {
         CoreInstance node = this.nodes.get((int) id);
         ListIterable<? extends CoreInstance> values = Instance.getValueForMetaPropertyToManyResolved(node, key, this.processorSupport);
+        NodeDescription[] out = new NodeDescription[values.size()];
+        for (int i = 0; i < out.length; i++)
+        {
+            out[i] = describe(values.get(i));
+        }
+        return out;
+    }
+
+    /**
+     * The values of a variable a lambda captured from the scope it was
+     * evaluated in. The interpreted engine hands such a lambda over as a
+     * {@code LambdaWithContext}; the values live in its variable context,
+     * not in a graph property. {@code null} when the node is not such a
+     * lambda, empty when it holds no variable of that name.
+     */
+    NodeDescription[] capturedValue(long id, String name)
+    {
+        CoreInstance node = this.nodes.get((int) id);
+        if (!(node instanceof LambdaWithContext))
+        {
+            return null;
+        }
+        CoreInstance value = ((LambdaWithContext) node).getVariableContext().getValue(name);
+        if (value == null)
+        {
+            return new NodeDescription[0];
+        }
+        ListIterable<? extends CoreInstance> values = Instance.instanceOf(value, M3Paths.InstanceValue, this.processorSupport)
+                ? Instance.getValueForMetaPropertyToManyResolved(value, M3Properties.values, this.processorSupport)
+                : Lists.immutable.with(value);
         NodeDescription[] out = new NodeDescription[values.size()];
         for (int i = 0; i < out.length; i++)
         {

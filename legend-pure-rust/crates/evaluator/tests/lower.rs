@@ -335,3 +335,231 @@ fn specs_carry_the_node_s_span() {
     );
     let _ = Multiplicity::PureOne;
 }
+
+fn string_type() -> Value {
+    m3::generic(Some(Value::Element(STRING_ID)), Vec::new())
+}
+
+fn str_lit(s: &str) -> Value {
+    m3::iv(
+        vec![Value::String(s.into())],
+        Some(string_type()),
+        Some(one()),
+    )
+}
+
+#[test]
+fn a_pure_bodied_function_lowers_with_its_body_and_runs() {
+    // `function twice(x:Integer[1]):Integer[1] { plus([$x, $x]) }`
+    let mut model = PureModel::bootstrapped();
+    let twice = m3::concrete_function(
+        "my::pkg::twice_Integer_1__Integer_1_",
+        "twice",
+        m3::function_type(vec![m3::param("x", integer(), one())], integer(), one()),
+        vec![plus(vec![m3::var("x"), m3::var("x")])],
+    );
+    let lambda = root(vec![m3::sfe(twice.clone(), "twice", vec![int(21)])]);
+    assert_eq!(lower_and_run(&mut model, &lambda), Ok(Value::Integer(42)));
+    let id = model
+        .resolve_fqn_str("my::pkg::twice_Integer_1__Integer_1_")
+        .expect("lowered");
+    assert!(
+        matches!(model.get_element(id), Element::Function(f) if !f.is_native && f.body.len() == 1 && f.parameters[0].name == "x")
+    );
+}
+
+#[test]
+fn mutually_recursive_functions_lower_once_each() {
+    // `isEven(n) = if(n == 0, |true, |isOdd(n - 1))`, `isOdd(n) = if(n == 0, |false, |isEven(n - 1))`.
+    let mut model = PureModel::bootstrapped();
+    let boolean = || m3::generic(Some(Value::Element(BOOLEAN_ID)), Vec::new());
+    let eq = || {
+        m3::native_function(
+            EQ,
+            "eq",
+            m3::function_type(
+                vec![
+                    m3::param("l", integer(), one()),
+                    m3::param("r", integer(), one()),
+                ],
+                boolean(),
+                one(),
+            ),
+        )
+    };
+    let if_fn = || {
+        m3::native_function(
+            IF,
+            "if",
+            m3::function_type(Vec::new(), m3::type_parameter("T"), many()),
+        )
+    };
+    let minus = || {
+        m3::native_function(
+            "meta::pure::functions::math::minus_Integer_MANY__Integer_1_",
+            "minus",
+            m3::function_type(
+                vec![m3::param("values", integer(), many())],
+                integer(),
+                one(),
+            ),
+        )
+    };
+    let branch = |body: Value| {
+        m3::iv(
+            vec![m3::lambda(Vec::new(), vec![body], boolean(), one()).build()],
+            None,
+            None,
+        )
+    };
+    let bool_lit = |b: bool| m3::iv(vec![Value::Boolean(b)], Some(boolean()), Some(one()));
+    let n_minus_1 = || {
+        m3::sfe(
+            minus(),
+            "minus",
+            vec![m3::iv(
+                vec![m3::var("n"), int(1)],
+                Some(integer()),
+                Some(many()),
+            )],
+        )
+    };
+    // Build the two function nodes so each body references the other node
+    // (the Java graph is a cycle; `TestNode` values are shared handles).
+    let signature = || m3::function_type(vec![m3::param("n", integer(), one())], boolean(), one());
+    let is_odd_shell = TestNode::new(legend_pure_evaluator::m3_paths::CONCRETE_FUNCTION_DEFINITION)
+        .path("my::pkg::isOdd_Integer_1__Boolean_1_")
+        .one("functionName", Value::String("isOdd".into()))
+        .one(
+            "classifierGenericType",
+            m3::classifier_generic_type(signature()),
+        )
+        .build();
+    let is_even = m3::concrete_function(
+        "my::pkg::isEven_Integer_1__Boolean_1_",
+        "isEven",
+        signature(),
+        vec![m3::sfe(
+            if_fn(),
+            "if",
+            vec![
+                m3::sfe(eq(), "eq", vec![m3::var("n"), int(0)]),
+                branch(bool_lit(true)),
+                branch(m3::sfe(is_odd_shell.clone(), "isOdd", vec![n_minus_1()])),
+            ],
+        )],
+    );
+    // Fill isOdd's body now that isEven exists: a TestNode is a heap
+    // object, so set the property through the heap view.
+    let Value::Object(h) = &is_odd_shell else {
+        unreachable!()
+    };
+    h.borrow_mut()
+        .mutate_set(
+            "expressionSequence",
+            &[m3::sfe(
+                if_fn(),
+                "if",
+                vec![
+                    m3::sfe(eq(), "eq", vec![m3::var("n"), int(0)]),
+                    branch(bool_lit(false)),
+                    branch(m3::sfe(is_even.clone(), "isEven", vec![n_minus_1()])),
+                ],
+            )],
+        )
+        .unwrap();
+    let lambda = root(vec![m3::sfe(is_even, "isEven", vec![int(6)])]);
+    let chunk = u16::try_from(model.chunks.len()).unwrap();
+    let mut lowering = Lowering::new(&model, chunk, 0);
+    let closure = lowering.lower_root_lambda(&lambda).unwrap();
+    let extension = lowering.into_extension();
+    // isEven, isOdd, if, eq, minus: five elements, each once.
+    assert_eq!(extension.len(), 5);
+    extension.apply(&mut model);
+    assert_eq!(run(&model, closure), Value::Boolean(true));
+}
+
+#[test]
+fn a_function_referenced_as_a_value_becomes_an_element_reference() {
+    let model = PureModel::bootstrapped();
+    let plus_fn = m3::native_function(
+        PLUS,
+        "plus",
+        m3::function_type(
+            vec![m3::param("values", integer(), many())],
+            integer(),
+            one(),
+        ),
+    );
+    let lambda = root(vec![m3::iv(vec![plus_fn], None, Some(one()))]);
+    let mut lowering = Lowering::new(&model, 1, 0);
+    let closure = lowering.lower_root_lambda(&lambda).unwrap();
+    assert!(matches!(
+        &*closure.body[0].kind,
+        ExprKind::PackageableElementRef { .. }
+    ));
+    let extension = lowering.into_extension();
+    assert_eq!(extension.len(), 1);
+    assert!(extension.lookup(PLUS).is_some());
+}
+
+#[test]
+fn captured_variables_become_the_closure_s_captures() {
+    let mut model = PureModel::bootstrapped();
+    let lambda = m3::lambda(
+        Vec::new(),
+        vec![plus(vec![m3::var("k"), int(1)])],
+        integer(),
+        one(),
+    )
+    .captured("k", vec![Value::Integer(41)])
+    .build();
+    let chunk = u16::try_from(model.chunks.len()).unwrap();
+    let mut lowering = Lowering::new(&model, chunk, 0);
+    let closure = lowering.lower_root_lambda(&lambda).unwrap();
+    assert_eq!(closure.captures.get("k"), Some(&Value::Integer(41)));
+    lowering.into_extension().apply(&mut model);
+    assert_eq!(run(&model, closure), Value::Integer(42));
+}
+
+#[test]
+fn a_captured_lambda_is_lowered_into_a_closure() {
+    // `let g = {x | $x + 1}; |$g->eval(5)` — the captured lambda arrives
+    // as a node and must become a function value; `eval` is not fished,
+    // so apply it directly.
+    let mut model = PureModel::bootstrapped();
+    let g = m3::lambda(
+        vec![m3::param("x", integer(), one())],
+        vec![plus(vec![m3::var("x"), int(1)])],
+        integer(),
+        one(),
+    )
+    .build();
+    let lambda = m3::lambda(Vec::new(), vec![str_lit("unused")], string_type(), one())
+        .captured("g", vec![g])
+        .build();
+    let (f, extension) = {
+        let mut lowering = Lowering::new(&model, 1, 0);
+        let closure = lowering.lower_root_lambda(&lambda).unwrap();
+        let Some(Value::Function(f)) = closure.captures.get("g") else {
+            panic!(
+                "expected a function value, got {:?}",
+                closure.captures.get("g")
+            );
+        };
+        let FunctionValue::Lambda(g) = &**f else {
+            panic!("expected a lambda closure");
+        };
+        assert_eq!(g.parameters.len(), 1);
+        assert_eq!(g.parameters[0].name, "x");
+        (f.clone(), lowering.into_extension())
+    };
+    extension.apply(&mut model);
+    let registry = NativeRegistry::standard();
+    let mut eval = Evaluator::new(&model, &registry);
+    eval.context_mut().push_scope();
+    let applied = eval
+        .apply_callable(&Value::Function(f), &[Value::Integer(5)])
+        .unwrap();
+    assert_eq!(applied, Value::Integer(6));
+}

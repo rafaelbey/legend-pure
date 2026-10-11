@@ -72,10 +72,11 @@ impl Lowering<'_> {
 
     /// A `NativeFunction` or `ConcreteFunctionDefinition` node into a
     /// [`Function`] element whose node name is the Java mangled name,
-    /// verbatim: dispatch reads it as the registry key.
+    /// verbatim: dispatch reads it as the registry key. A Pure body is
+    /// lowered with it, transitively.
     ///
     /// # Errors
-    /// The node has no path or name, or (for now) a body.
+    /// The node has no path or name, or its body cannot be lowered.
     pub fn lower_function(&mut self, node: &Node) -> Result<ElementId, LowerError> {
         if let Some(id) = self.ext.lookup_node(node.key()) {
             return Ok(id);
@@ -94,11 +95,14 @@ impl Lowering<'_> {
             .string("functionName")
             .unwrap_or_else(|| SmolStr::new(mangled.split('_').next().unwrap_or(mangled.as_str())));
         let (parameters, return_type, return_multiplicity) = self.function_signature(node);
-        let body: Vec<legend_pure_metamodel::types::ValueSpec> = if is_native {
-            Vec::new()
-        } else {
-            return Err(Self::unsupported(node, "bodies"));
-        };
+        // The id is reserved, so a body that calls this function (directly
+        // or through a sibling) resolves to it while it is being lowered.
+        let mut body: Vec<legend_pure_metamodel::types::ValueSpec> = Vec::new();
+        if !is_native {
+            for e in node.nodes("expressionSequence") {
+                body.push(self.lower_expr(&e)?);
+            }
+        }
         self.ext.fill(
             id,
             Element::Function(Function {
