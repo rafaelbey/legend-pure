@@ -18,7 +18,7 @@
 //! Two helpers the evaluator itself calls live here
 //! (`MultiplicityReference` evaluation and `classifierGenericType` on a
 //! function), next to the meta natives fished so far: `match`,
-//! `extractEnumValue`. The rest
+//! `extractEnumValue`, `cast`. The rest
 //! stay on the archive until a PCT row asks for them (plan, Appendix A
 //! table 3).
 //!
@@ -28,7 +28,7 @@
 use legend_pure_metamodel::bootstrap;
 use legend_pure_metamodel::ids::ElementId;
 use legend_pure_metamodel::model::{Element, PureModel};
-use legend_pure_metamodel::types::{TypeExpr, ValueSpec};
+use legend_pure_metamodel::types::{ConstValue, ExprKind, TypeExpr, ValueSpec};
 use smol_str::SmolStr;
 
 use crate::date::DatePrecision;
@@ -386,8 +386,8 @@ fn value_matches_type(
 /// True when `descendant` extends (transitively) `ancestor` — or is `ancestor`.
 ///
 /// Walks `Class::super_types` and `PrimitiveType::super_type` upward. Used by
-/// `value_matches_type` so hierarchy-aware runtime checks don't each
-/// re-implement the chain walk.
+/// `value_matches_type` and `cast_compatible` so hierarchy-aware runtime
+/// checks don't each re-implement the chain walk.
 fn type_extends(model: &PureModel, descendant: ElementId, ancestor: ElementId) -> bool {
     let mut stack: Vec<ElementId> = vec![descendant];
     let mut visited: std::collections::HashSet<ElementId> = std::collections::HashSet::new();
@@ -534,6 +534,237 @@ fn resolve_value_type(
     }
 }
 
+/// Pure `cast<V|m>(p:Any[m], typ:V[1]):V[m]`
+///
+/// Runtime type coercion — returns the value unchanged if it is an instance
+/// of the target type (or the target refines the value's type), otherwise
+/// raises `Cast exception: X cannot be cast to Y`. Constraints declared on
+/// a primitive target (and its parametric primitive ancestors) are checked
+/// against every element.
+///
+/// A relation-type target (`cast(@(cols))`) is not supported yet: its
+/// structural branch stays on the archive.
+#[derive(Debug)]
+pub struct Cast;
+
+impl NativeFunction for Cast {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("cast", &values, 2)?;
+        let subject = values[0].clone();
+
+        // Structural-RelationType target — `cast(@(cols))` evaluates to a
+        // heap object, never to an element. Java parity (`Cast.java`)
+        // takes a dedicated RelationType branch there; it is not fished.
+        if matches!(values[1], Value::Object(_)) {
+            return Err(
+                PureRuntimeError::Unsupported("cast to a relation type `@(cols)`".into()).into(),
+            );
+        }
+
+        let type_id = as_element_id(&values[1])?;
+        let type_name = ctx.model().element_name(type_id).to_string();
+        // Extract type-variable-values from the source `@P(8)` reference.
+        // Forced `Value::Element` drops them; we peek the original spec
+        // tree so `cast(10, @P(8))` can bind `x = 8` for the constraint
+        // evaluation below. The compiler stores them as
+        // `TypeExpr::Named { value_arguments }` in the `TypeReference`
+        // ExprKind produced by `@P(8)`.
+        let type_value_args: Vec<ConstValue> = if args.len() > 1 {
+            match &*args[1].kind {
+                ExprKind::TypeReference {
+                    type_expr:
+                        TypeExpr::Named {
+                            value_arguments, ..
+                        },
+                } => value_arguments.clone(),
+                _ => Vec::new(),
+            }
+        } else {
+            Vec::new()
+        };
+        // Error text follows the Java runtime's `Cast exception: X cannot
+        // be cast to Y` format. Platform tests (`assertError(|…->cast(@T),
+        // 'Cast exception: …')`) match on the string verbatim — the wording
+        // is a behavioural contract, not a stylistic choice.
+        let mk_err = |v: &Value| {
+            PureException::from(PureRuntimeError::EvaluationError(format!(
+                "Cast exception: {} cannot be cast to {type_name}",
+                v.type_name()
+            )))
+        };
+        // Two-phase: first verify type compatibility for every element
+        // (immutable borrow of the heap), then evaluate constraints
+        // (mutable borrow of the context). Collecting each item up front
+        // keeps the closure's immutable borrow of `ctx` scoped to the
+        // first loop.
+        let items: Vec<Value> = match &subject {
+            Value::Collection(coll) => coll.iter().cloned().collect(),
+            Value::Unit => return Ok(Evaluated::new(Value::Unit)),
+            other => vec![other.clone()],
+        };
+        for v in &items {
+            if !cast_compatible(v, type_id, ctx.model(), ctx.heap()) {
+                return Err(mk_err(v));
+            }
+        }
+        for v in &items {
+            evaluate_primitive_constraints(ctx, type_id, v, &type_value_args)?;
+        }
+        Ok(Evaluated::new(subject))
+    }
+}
+
+/// Run every constraint declared on the target primitive type (and its
+/// ancestor parametric primitives) against `subject`. Raises
+/// [`ConstraintViolation`](crate::error::PureExceptionKind::ConstraintViolation)
+/// on the first failure, matching Java Pure's message shape
+/// `"Constraint :[<id>] violated in the Class <name>[, Message: <msg>]"`.
+///
+/// Inheritance walk: when the target's `super_type` is itself a
+/// parametric primitive (`Primitive OP8 extends OP(8)`), the parent's
+/// constraints are evaluated with the parent's `super_type_value_arguments`
+/// bound in scope — that's how `@OP8` inherits OP's `$this < $x` with
+/// `x = 8`. The walk stops at the first bootstrap primitive (Integer /
+/// String / etc.) since those carry no constraints.
+///
+/// Scope bindings for each constraint body:
+/// - `$this` → the value being cast
+/// - each `type_variable_parameter` at this level → the matching
+///   positional `value_args` entry (either the caller's `@P(8)` bindings
+///   or the child's `extends OP(8)` bindings when walking up).
+///
+/// Non-primitive targets and primitives with no constraints in their
+/// inheritance chain are a no-op.
+fn evaluate_primitive_constraints(
+    ctx: &mut dyn EvalContextTrait,
+    type_id: ElementId,
+    subject: &Value,
+    type_value_args: &[ConstValue],
+) -> Result<(), PureException> {
+    // Collect the inheritance chain up front (element_id, value_args used
+    // to bind that level's type variables). Starts at the cast target
+    // with caller-supplied args; each step uses the child's
+    // `super_type_value_arguments` to bind the parent's parameters.
+    let mut chain: Vec<(ElementId, Vec<ConstValue>)> = Vec::new();
+    {
+        let mut current = Some((type_id, type_value_args.to_vec()));
+        let mut visited: std::collections::HashSet<ElementId> = std::collections::HashSet::new();
+        while let Some((id, args)) = current {
+            if !visited.insert(id) {
+                break;
+            }
+            match ctx.model().get_element(id) {
+                Element::PrimitiveType(prim) => {
+                    let next_args = prim.super_type_value_arguments.clone();
+                    current = prim.super_type.map(|s| (s, next_args));
+                }
+                _ => current = None,
+            }
+            chain.push((id, args));
+        }
+    }
+    for (level_id, level_args) in chain {
+        let (constraints, param_names, prim_name) = match ctx.model().get_element(level_id) {
+            Element::PrimitiveType(prim) if !prim.constraints.is_empty() => {
+                let names: Vec<SmolStr> = prim
+                    .type_variable_parameters
+                    .iter()
+                    .map(|p| p.name.clone())
+                    .collect();
+                (
+                    prim.constraints.clone(),
+                    names,
+                    ctx.model().element_name(level_id).clone(),
+                )
+            }
+            _ => continue,
+        };
+        ctx.context_mut().push_scope();
+        ctx.context_mut()
+            .set(SmolStr::new_static("this"), subject.clone());
+        for (i, name) in param_names.iter().enumerate() {
+            if let Some(cv) = level_args.get(i) {
+                let v = match cv {
+                    ConstValue::Integer(n) => Value::Integer(*n),
+                    ConstValue::String(s) => Value::String(SmolStr::new(s)),
+                };
+                ctx.context_mut().set(name.clone(), v);
+            }
+        }
+        let mut first_failure: Option<PureException> = None;
+        for (idx, constraint) in constraints.iter().enumerate() {
+            match ctx.evaluate(&constraint.function) {
+                Ok(eval) => {
+                    if matches!(eval.into_value(), Value::Boolean(true)) {
+                        continue;
+                    }
+                }
+                Err(e) => {
+                    first_failure = Some(e);
+                    break;
+                }
+            }
+            let message = match constraint.message.as_ref().map(|m| ctx.evaluate(m)) {
+                Some(Ok(eval)) => match &eval.into_value() {
+                    Value::String(s) => Some(s.to_string()),
+                    _ => None,
+                },
+                Some(Err(e)) => {
+                    first_failure = Some(e);
+                    break;
+                }
+                None => None,
+            };
+            let constraint_id = constraint
+                .name
+                .clone()
+                .unwrap_or_else(|| SmolStr::new(idx.to_string()));
+            first_failure = Some(PureException::constraint(
+                constraint_id,
+                crate::error::ConstraintKind::Class,
+                prim_name.clone(),
+                message,
+                constraint.source_info.clone(),
+                Vec::new(),
+            ));
+            break;
+        }
+        ctx.context_mut().pop_scope();
+        if let Some(e) = first_failure {
+            return Err(e);
+        }
+    }
+    Ok(())
+}
+
+/// Cast-direction type check — succeeds in either direction of the lattice.
+///
+/// A cast succeeds when:
+/// - the value already matches the target (`value_matches_type`, which also
+///   covers primitives and the instanceOf-direction subtype walk); **or**
+/// - the target extends the value's type — Pure's "primitive extension
+///   downcast" idiom (`1->cast(@P8)` where `P8 extends Integer`). The target
+///   refines a supertype, and the runtime trusts the source of the cast.
+fn cast_compatible(
+    value: &Value,
+    target_id: ElementId,
+    model: &PureModel,
+    heap: &RuntimeHeap,
+) -> bool {
+    if value_matches_type(model, value, target_id, heap) {
+        return true;
+    }
+    let Ok(value_type_id) = resolve_value_type(value, model, heap) else {
+        return false;
+    };
+    type_extends(model, target_id, value_type_id)
+}
+
 /// Pure `extractEnumValue<T>(enumeration:Enumeration<T>[1], value:String[1]):T[1]`
 ///
 /// Returns `Value::EnumValue { enum_id, member }` so structural equality
@@ -590,4 +821,5 @@ pub fn register(registry: &mut NativeRegistry) {
         "extractEnumValue_Enumeration_1__String_1__T_1_",
         ExtractEnumValue,
     );
+    registry.register("cast_Any_m__T_1__T_m_", Cast);
 }

@@ -20,15 +20,18 @@
 //! `NativeRegistry::standard()` does not register the meta natives yet,
 //! so every test adds them with `native::meta::register`.
 
-use legend_pure_evaluator::builders::{ModelBuilder, class, expr, named, param, property};
+use legend_pure_evaluator::builders::{ModelBuilder, class, expr, named, param, property, source};
 use legend_pure_evaluator::error::{PureException, PureExceptionKind, PureRuntimeError};
 use legend_pure_evaluator::eval::Evaluator;
 use legend_pure_evaluator::native::{NativeRegistry, meta};
 use legend_pure_evaluator::value::Value;
-use legend_pure_metamodel::bootstrap::{ANY_ID, DATE_ID, INTEGER_ID, STRING_ID};
+use legend_pure_metamodel::bootstrap::{ANY_ID, DATE_ID, INTEGER_ID, NUMBER_ID, STRING_ID};
 use legend_pure_metamodel::ids::ElementId;
-use legend_pure_metamodel::model::PureModel;
-use legend_pure_metamodel::types::{DateValue, Multiplicity, TypeExpr, ValueSpec};
+use legend_pure_metamodel::model::{Element, PureModel};
+use legend_pure_metamodel::nodes::class::Constraint;
+use legend_pure_metamodel::types::{
+    ConstValue, DateValue, Multiplicity, PrimitiveType, TypeExpr, ValueSpec,
+};
 
 const NEW: &str = "new_Class_1__String_1__Any_MANY__T_1_";
 const MATCH: &str = "match_Any_MANY__Function_$1_MANY$__T_m_";
@@ -533,5 +536,194 @@ fn extract_enum_value_requires_an_enumeration() {
     assert_eq!(
         evaluation_error(&err),
         Some("extractEnumValue: first argument must reference an Enumeration")
+    );
+}
+
+const CAST: &str = "cast_Any_m__T_1__T_m_";
+const EQ: &str = "eq_Any_1__Any_1__Boolean_1_";
+
+/// `@Type`, optionally with type-variable values (`@P(8)`).
+fn type_ref_with(element: ElementId, value_arguments: Vec<ConstValue>) -> ValueSpec {
+    expr::type_ref(TypeExpr::Named {
+        element,
+        source_info: None,
+        type_arguments: Vec::new(),
+        multiplicity_arguments: Vec::new(),
+        value_arguments,
+    })
+}
+
+fn cast(subject: ValueSpec, target: ElementId) -> ValueSpec {
+    expr::call(CAST, vec![subject, expr::type_ref(named(target))])
+}
+
+/// `Primitive <path>(params) extends Integer [ name: $this == <rhs> ]`.
+fn integer_extension(
+    b: &mut ModelBuilder,
+    path: &str,
+    params: Vec<legend_pure_metamodel::types::Parameter>,
+    rhs: ValueSpec,
+) -> ElementId {
+    b.add(
+        path,
+        Element::PrimitiveType(PrimitiveType {
+            super_type: Some(INTEGER_ID),
+            super_type_value_arguments: Vec::new(),
+            type_variable_parameters: params,
+            constraints: vec![Constraint {
+                name: Some("matches".into()),
+                source_info: source(),
+                function: expr::call(EQ, vec![expr::var("this"), rhs]),
+                enforcement_level: None,
+                external_id: None,
+                message: None,
+            }],
+        }),
+    )
+}
+
+#[test]
+fn cast_returns_the_value_when_its_type_fits() {
+    let g = geography();
+    let registry = registry();
+    let mut eval = Evaluator::new(&g.model, &registry);
+    assert_eq!(
+        eval.eval(&cast(expr::int(1), INTEGER_ID)).unwrap(),
+        Value::Integer(1)
+    );
+    assert_eq!(
+        eval.eval(&cast(expr::int(1), NUMBER_ID)).unwrap(),
+        Value::Integer(1)
+    );
+    let geo = g
+        .model
+        .resolve_fqn_str("meta::pure::functions::lang::tests::match::Geo")
+        .unwrap();
+    let address = eval
+        .eval(&cast(new_instance(g.address, "name", "Hoboken, NJ"), geo))
+        .unwrap();
+    assert!(matches!(address, Value::Object(_)));
+    // An empty subject casts to anything and stays empty.
+    let empty = eval
+        .eval(&cast(expr::collection(Vec::new()), STRING_ID))
+        .unwrap();
+    assert!(empty.is_empty(), "{empty:?}");
+}
+
+#[test]
+fn cast_to_an_unrelated_type_carries_the_java_message() {
+    let g = geography();
+    let registry = registry();
+    let mut eval = Evaluator::new(&g.model, &registry);
+    let err = eval.eval(&cast(expr::string("a"), INTEGER_ID)).unwrap_err();
+    assert_eq!(
+        evaluation_error(&err),
+        Some("Cast exception: String cannot be cast to Integer")
+    );
+    let err = eval
+        .eval(&cast(
+            new_instance(g.person, "firstName", "Pierre"),
+            g.address,
+        ))
+        .unwrap_err();
+    assert_eq!(
+        evaluation_error(&err),
+        Some("Cast exception: Object cannot be cast to MA_Address")
+    );
+}
+
+#[test]
+fn an_empty_cast_feeds_match_its_zero_branch() {
+    let model = ModelBuilder::new().finish();
+    let registry = registry();
+    let mut eval = Evaluator::new(&model, &registry);
+    // testMatchZeroWithZero: `[]->cast(@String)->match([...])`
+    let call = match_call(
+        cast(expr::collection(Vec::new()), STRING_ID),
+        vec![
+            branch(
+                "i",
+                named(INTEGER_ID),
+                Multiplicity::Range {
+                    lower: 1,
+                    upper: Some(4),
+                },
+                expr::string("ints"),
+            ),
+            branch(
+                "s",
+                named(STRING_ID),
+                Multiplicity::Range {
+                    lower: 0,
+                    upper: Some(0),
+                },
+                expr::string("address"),
+            ),
+        ],
+    );
+    assert_eq!(eval.eval(&call).unwrap(), Value::String("address".into()));
+}
+
+#[test]
+fn cast_to_a_primitive_extension_checks_its_constraints() {
+    let mut b = ModelBuilder::new();
+    let one = integer_extension(&mut b, "my::One", Vec::new(), expr::int(1));
+    let p = integer_extension(
+        &mut b,
+        "my::P",
+        vec![param("x", named(INTEGER_ID), Multiplicity::PureOne)],
+        expr::var("x"),
+    );
+    let model = b.finish();
+    let registry = registry();
+    let mut eval = Evaluator::new(&model, &registry);
+
+    // The downcast direction: `One extends Integer`.
+    assert_eq!(
+        eval.eval(&cast(expr::int(1), one)).unwrap(),
+        Value::Integer(1)
+    );
+    let err = eval.eval(&cast(expr::int(2), one)).unwrap_err();
+    assert!(
+        matches!(
+            &err.kind,
+            PureExceptionKind::ConstraintViolation { constraint_id, owner, .. }
+                if constraint_id == "matches" && owner == "One"
+        ),
+        "{err:?}"
+    );
+
+    // `@P(8)` binds `x = 8` for the constraint.
+    let cast_p = |n: i64| {
+        expr::call(
+            CAST,
+            vec![expr::int(n), type_ref_with(p, vec![ConstValue::Integer(8)])],
+        )
+    };
+    assert_eq!(eval.eval(&cast_p(8)).unwrap(), Value::Integer(8));
+    assert!(matches!(
+        eval.eval(&cast_p(7)).unwrap_err().kind,
+        PureExceptionKind::ConstraintViolation { .. }
+    ));
+}
+
+#[test]
+fn cast_to_a_relation_type_is_unsupported() {
+    let g = geography();
+    let registry = registry();
+    let mut eval = Evaluator::new(&g.model, &registry);
+    // A heap object in the type slot is what `@(cols)` evaluates to.
+    let call = expr::call(
+        CAST,
+        vec![expr::int(1), new_instance(g.person, "firstName", "Pierre")],
+    );
+    let err = eval.eval(&call).unwrap_err();
+    assert!(
+        matches!(
+            &err.kind,
+            PureExceptionKind::ExecutionError(PureRuntimeError::Unsupported(m))
+                if m.contains("relation type")
+        ),
+        "{err:?}"
     );
 }
