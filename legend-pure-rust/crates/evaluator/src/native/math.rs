@@ -235,6 +235,23 @@ impl NativeFunction for Log {
     }
 }
 
+/// Pure `log10(Number[1]):Float[1]` — base-10 logarithm.
+#[derive(Debug)]
+pub struct Log10;
+
+impl NativeFunction for Log10 {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("log10", &values, 1)?;
+        let x = number_to_f64("log10", &values[0])?;
+        Ok(Evaluated::new(Value::Float(x.log10())))
+    }
+}
+
 /// Pure `pow(Number[1], Number[1]):Float[1]` — `base^exponent`.
 #[derive(Debug)]
 pub struct Pow;
@@ -377,6 +394,7 @@ pub fn register(registry: &mut NativeRegistry) {
     // analytic
     registry.register("exp_Number_1__Float_1_", Exp);
     registry.register("log_Number_1__Float_1_", Log);
+    registry.register("log10_Number_1__Float_1_", Log10);
     registry.register("pow_Number_1__Number_1__Float_1_", Pow);
     // Platform declares `pow(Number,Number):Number` — `Number` is the
     // common supertype of the actual `Float` return. Alias under both
@@ -595,6 +613,34 @@ mod tests {
     #[test]
     fn log_type_mismatch() {
         assert!(Log.execute(&[lit_str("x")], &mut MockCtx).is_err());
+    }
+
+    #[test]
+    fn log10_100_is_two() {
+        let r = Log10.execute(&[lit_float(100.0)], &mut MockCtx).unwrap();
+        match r.into_value() {
+            Value::Float(f) => assert!(approx_eq(f, 2.0)),
+            other => panic!("expected Float, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn log10_one_is_zero() {
+        let r = Log10.execute(&[lit_float(1.0)], &mut MockCtx).unwrap();
+        match r.into_value() {
+            Value::Float(f) => assert!(approx_eq(f, 0.0)),
+            other => panic!("expected Float, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn log10_wrong_arg_count() {
+        assert!(Log10.execute(&[], &mut MockCtx).is_err());
+    }
+
+    #[test]
+    fn log10_type_mismatch() {
+        assert!(Log10.execute(&[lit_bool(true)], &mut MockCtx).is_err());
     }
 
     #[test]
