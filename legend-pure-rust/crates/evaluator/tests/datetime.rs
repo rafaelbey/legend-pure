@@ -41,6 +41,7 @@ const HAS_MONTH: &str = "hasMonth_Date_1__Boolean_1_";
 const HAS_HOUR: &str = "hasHour_Date_1__Boolean_1_";
 const HAS_MINUTE: &str = "hasMinute_Date_1__Boolean_1_";
 const HAS_SECOND: &str = "hasSecond_Date_1__Boolean_1_";
+const HAS_SUBSECOND: &str = "hasSubsecond_Date_1__Boolean_1_";
 
 /// `%y` — a year-only date.
 fn year_only(year: i16) -> ValueSpec {
@@ -457,4 +458,10 @@ fn has_minute_holds_from_minute_precision() {
 #[test]
 fn has_second_holds_from_second_precision() {
     assert_precision_predicate(HAS_SECOND, 5);
+}
+
+/// testHasSubsecond: true only for `%2015-04-15T17:09:21.398`.
+#[test]
+fn has_subsecond_holds_only_with_a_fraction() {
+    assert_precision_predicate(HAS_SUBSECOND, 6);
 }
