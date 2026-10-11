@@ -29,6 +29,7 @@ const FOLD: &str = "fold_T_MANY__Function_1__V_m__V_m_";
 const DROP: &str = "drop_T_MANY__Integer_1__T_MANY_";
 const TAKE: &str = "take_T_MANY__Integer_1__T_MANY_";
 const ZIP: &str = "zip_T_MANY__U_MANY__Pair_MANY_";
+const FIRST: &str = "first_T_MANY__T_$0_1$_";
 const PLUS: &str = "plus_Number_MANY__Number_1_";
 const MINUS: &str = "minus_Number_MANY__Number_1_";
 
@@ -174,4 +175,17 @@ fn zip_pairs_up_to_the_shorter_side_and_the_pairs_read_back() {
     // Either side empty: no pairs.
     assert!(run(&expr::call(ZIP, vec![ints(&[]), strings(&["a"])])).is_empty());
     assert!(run(&expr::call(ZIP, vec![ints(&[1]), strings(&[])])).is_empty());
+}
+
+#[test]
+fn first_returns_the_head_or_nothing() {
+    assert_eq!(
+        run(&expr::call(FIRST, vec![strings(&["a", "b"])])),
+        Value::String("a".into())
+    );
+    assert_eq!(
+        run(&expr::call(FIRST, vec![expr::int(7)])),
+        Value::Integer(7)
+    );
+    assert_eq!(run(&expr::call(FIRST, vec![ints(&[])])), Value::Unit);
 }

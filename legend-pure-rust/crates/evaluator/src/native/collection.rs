@@ -137,12 +137,34 @@ fn collection_as_vec(v: &Value) -> Vec<Value> {
     }
 }
 
+/// Pure `first(Any[*]): Any[0..1]` — first element or Unit.
+#[derive(Debug)]
+pub struct First;
+
+impl NativeFunction for First {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("first", &values, 1)?;
+        let result = match &values[0] {
+            Value::Collection(v) => v.front().cloned().unwrap_or(Value::Unit),
+            Value::Unit => Value::Unit,
+            other => other.clone(), // scalar is its own first
+        };
+        Ok(Evaluated::new(result))
+    }
+}
+
 /// Register the fished collection natives.
 pub fn register(registry: &mut NativeRegistry) {
     registry.register("fold_T_MANY__Function_1__V_m__V_m_", Fold);
     registry.register("take_T_MANY__Integer_1__T_MANY_", Take);
     registry.register("drop_T_MANY__Integer_1__T_MANY_", Drop);
     registry.register("zip_T_MANY__U_MANY__Pair_MANY_", Zip);
+    registry.register("first_T_MANY__T_$0_1$_", First);
 }
 
 #[cfg(test)]
@@ -184,6 +206,28 @@ mod tests {
                 .unwrap()
                 .into_value(),
             int_collection(&[3, 4, 5])
+        );
+    }
+
+    #[test]
+    fn first_of_collection() {
+        assert_eq!(
+            First
+                .execute(&[int_spec(&[10, 20, 30])], &mut MockCtx)
+                .unwrap()
+                .into_value(),
+            Value::Integer(10)
+        );
+    }
+
+    #[test]
+    fn first_of_empty() {
+        assert_eq!(
+            First
+                .execute(&[lit_collection(vec![])], &mut MockCtx)
+                .unwrap()
+                .into_value(),
+            Value::Unit
         );
     }
 }
