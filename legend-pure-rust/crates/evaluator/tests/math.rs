@@ -32,6 +32,8 @@ const ROUND_DECIMAL: &str = "round_Decimal_1__Integer_1__Decimal_1_";
 const ROUND_FLOAT: &str = "round_Float_1__Integer_1__Float_1_";
 const LESS_THAN: &str = "lessThan_Number_1__Number_1__Boolean_1_";
 const REM: &str = "rem_Number_1__Number_1__Number_1_";
+const DIVIDE: &str = "divide_Number_1__Number_1__Float_1_";
+const DIVIDE_SCALED: &str = "divide_Decimal_1__Decimal_1__Integer_1__Decimal_1_";
 
 /// Evaluate one call node against the bootstrap model with every fished native.
 fn run(call: &ValueSpec) -> Value {
@@ -140,5 +142,37 @@ fn rem_keeps_the_dividend_sign_and_reports_java_s_zero_divisor_text() {
     assert_eq!(
         evaluation_error(&expr::call(REM, vec![expr::int(5), expr::int(0)])),
         "Cannot divide 5 by zero"
+    );
+}
+
+#[test]
+fn divide_returns_float_and_the_scaled_overload_returns_decimal() {
+    let div = |a: ValueSpec, b: ValueSpec| run(&expr::call(DIVIDE, vec![a, b]));
+    // testSimpleDivide / testDivideWithNonTerminatingExpansion
+    assert_eq!(div(expr::int(3), expr::int(2)), Value::Float(1.5));
+    assert_eq!(
+        div(expr::int(1), expr::int(96)),
+        Value::Float(0.010416666666666666)
+    );
+    // testDecimalDivide: Decimal operands still divide to Float …
+    assert_eq!(
+        div(expr::decimal(dec("1.1")), expr::decimal(dec("2.1"))),
+        Value::Float(0.5238095238095238)
+    );
+    assert_eq!(
+        div(expr::decimal(dec("1.0")), expr::float(2.0)),
+        Value::Float(0.5)
+    );
+    // … and the scale overload rounds half-to-even: `-3.1415d->divide(0.1d, 2)`.
+    assert_eq!(
+        run(&expr::call(
+            DIVIDE_SCALED,
+            vec![
+                expr::decimal(dec("-3.1415")),
+                expr::decimal(dec("0.1")),
+                expr::int(2)
+            ]
+        )),
+        Value::Decimal(dec("-31.42"))
     );
 }
