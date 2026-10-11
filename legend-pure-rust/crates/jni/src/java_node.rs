@@ -101,8 +101,6 @@ pub struct Description {
     pub precision: i32,
     /// Subsecond digits, when `precision == 6`.
     pub subsecond: Option<String>,
-    /// Property keys of a NODE.
-    pub keys: Vec<SmolStr>,
     /// Source span of the node, when the Java graph knows one.
     pub source: Option<SourceInfo>,
     /// Bridge id of the lambda definition a per-evaluation lambda value
@@ -154,19 +152,6 @@ pub fn read_description(
     let user_path = string_field(env, obj, fields.user_path)?.map(SmolStr::new);
     let payload = string_field(env, obj, fields.payload)?;
     let subsecond = string_field(env, obj, fields.subsecond)?;
-    let mut keys = Vec::new();
-    let keys_obj = env
-        .get_field_unchecked(obj, fields.keys, ReturnType::Array)?
-        .l()?;
-    if !keys_obj.is_null() {
-        let arr = JObjectArray::from(keys_obj);
-        let len = env.get_array_length(&arr)?;
-        for i in 0..len {
-            let k = env.get_object_array_element(&arr, i)?;
-            let s: String = env.get_string(&JString::from(k))?.into();
-            keys.push(SmolStr::new(s));
-        }
-    }
     let source = match string_field(env, obj, fields.source_id)? {
         // Java's anchor (`line`/`column`) is the span's start on this
         // side; the evaluator and `assertError` both read the anchor.
@@ -194,7 +179,6 @@ pub fn read_description(
         second: int(env, fields.second)?,
         precision: int(env, fields.precision)?,
         subsecond,
-        keys,
         source,
         definition,
     })
@@ -348,7 +332,7 @@ fn canonical_node(shared: &Rc<BridgeShared>, d: Description) -> ObjectHandle {
             .unwrap_or_else(|| SmolStr::new("meta::pure::metamodel::type::Any")),
         name: d.name,
         user_path: d.user_path,
-        keys: d.keys,
+        keys: RefCell::new(None),
         source: d.source,
         definition: (d.definition >= 0).then_some(d.definition),
         cache: RefCell::new(HashMap::new()),
@@ -373,8 +357,9 @@ pub struct JavaNode {
     pub name: Option<SmolStr>,
     /// User path, when the node is a packageable element.
     pub user_path: Option<SmolStr>,
-    /// Property keys reported by Java.
-    pub keys: Vec<SmolStr>,
+    /// Property keys reported by Java, read on first use: the lowering
+    /// reads properties by name and never asks.
+    keys: RefCell<Option<Vec<SmolStr>>>,
     /// The lambda definition this node is one evaluation of, when the
     /// engine wraps a lambda per evaluation (see [`Description::definition`]).
     pub definition: Option<i64>,
@@ -405,6 +390,59 @@ impl JavaNode {
     /// it ends or those nodes would never be freed.
     pub fn clear_cache(&self) {
         self.cache.borrow_mut().clear();
+    }
+
+    /// The node's property keys (`RustNodeBridge.keysOf`), read once.
+    fn keys(&self) -> Result<Vec<SmolStr>, PureException> {
+        if let Some(keys) = &*self.keys.borrow() {
+            return Ok(keys.clone());
+        }
+        self.shared.jni_reads.set(self.shared.jni_reads.get() + 1);
+        let mut guard = self
+            .shared
+            .vm
+            .attach_current_thread()
+            .map_err(|e| ffi_error(format!("attach: {e}")))?;
+        let env: &mut JNIEnv = &mut guard;
+        let shared = &self.shared;
+        let keys = in_local_frame(env, shared, 8, |env| {
+            let what = format!("reading the keys of Java node {}", self.id);
+            // SAFETY: `keys_of` was resolved on the bridge's class with the
+            // signature `(J)[Ljava/lang/String;`, the bridge global
+            // reference is an instance of that class, and the one argument
+            // is a `long`.
+            let result = unsafe {
+                env.call_method_unchecked(
+                    shared.bridge.as_obj(),
+                    shared.methods.keys_of,
+                    ReturnType::Array,
+                    &[JValue::Long(self.id).as_jni()],
+                )
+            };
+            let arr = result
+                .and_then(|v| v.l())
+                .map_err(|e| jni_failure(env, shared, &what, &e))?;
+            let arr = JObjectArray::from(arr);
+            let len = env
+                .get_array_length(&arr)
+                .map_err(|e| jni_failure(env, shared, &what, &e))?;
+            let mut keys = Vec::with_capacity(usize::try_from(len).unwrap_or(0));
+            for i in 0..len {
+                let key = in_local_frame(env, shared, 2, |env| {
+                    let k = env
+                        .get_object_array_element(&arr, i)
+                        .map_err(|e| jni_failure(env, shared, &what, &e))?;
+                    match env.get_string(&JString::from(k)) {
+                        Ok(s) => Ok(SmolStr::new(String::from(s))),
+                        Err(e) => Err(jni_failure(env, shared, &what, &e)),
+                    }
+                })?;
+                keys.push(key);
+            }
+            Ok(keys)
+        })?;
+        *self.keys.borrow_mut() = Some(keys.clone());
+        Ok(keys)
     }
 
     /// Keep a read failure, with its kind, for the end of the call: the
@@ -518,7 +556,10 @@ impl TypedObject for JavaNode {
     }
 
     fn property_names(&self) -> Vec<SmolStr> {
-        let mut names = self.keys.clone();
+        let mut names = self.keys().unwrap_or_else(|failure| {
+            self.note_failure(failure);
+            Vec::new()
+        });
         names.extend(self.local.keys().cloned());
         names
     }

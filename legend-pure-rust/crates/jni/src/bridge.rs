@@ -131,6 +131,7 @@ pub struct BridgeMethods {
     pub new_map: JMethodID,
     pub failure_of: JMethodID,
     pub forget: JMethodID,
+    pub keys_of: JMethodID,
 }
 
 /// Java class names the crate talks to.
@@ -199,6 +200,7 @@ impl BridgeMethods {
             )?,
             new_map: env.get_method_id(&cls, "newMap", format!("([{ci}[{ci}){ci}"))?,
             forget: env.get_method_id(&cls, "forget", "([J)V")?,
+            keys_of: env.get_method_id(&cls, "keysOf", "(J)[Ljava/lang/String;")?,
             failure_of: env.get_method_id(
                 &cls,
                 "failureOf",
@@ -228,7 +230,6 @@ pub struct DescriptionFields {
     pub second: JFieldID,
     pub precision: JFieldID,
     pub subsecond: JFieldID,
-    pub keys: JFieldID,
     pub source_id: JFieldID,
     pub line: JFieldID,
     pub column: JFieldID,
@@ -263,7 +264,6 @@ impl DescriptionFields {
             second: field("second", "I")?,
             precision: field("precision", "I")?,
             subsecond: field("subsecond", string)?,
-            keys: field("keys", "[Ljava/lang/String;")?,
             source_id: field("sourceId", string)?,
             line: field("line", "I")?,
             column: field("column", "I")?,

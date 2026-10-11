@@ -52,7 +52,6 @@ final class NodeDescription
      */
     int precision;
     String subsecond;
-    String[] keys;
     /**
      * For a lambda value the engine created for one evaluation (a lambda with
      * the scope it was evaluated in): the bridge id of the definition it

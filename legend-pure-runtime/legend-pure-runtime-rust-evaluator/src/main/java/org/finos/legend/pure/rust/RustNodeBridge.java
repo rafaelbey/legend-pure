@@ -173,13 +173,11 @@ final class RustNodeBridge
             d.kind = NodeDescription.PACKAGEABLE_ELEMENT;
             d.id = idOf(ci);
             d.userPath = userPath(ci);
-            d.keys = this.host.propertyKeys(ci).toArray(new String[0]);
         }
         else
         {
             d.kind = NodeDescription.NODE;
             d.id = idOf(ci);
-            d.keys = this.host.propertyKeys(ci).toArray(new String[0]);
             if (classifier == lambdaClass())
             {
                 Object definition = this.host.lambdaDefinition(ci);
@@ -312,6 +310,15 @@ final class RustNodeBridge
             out[i] = describe(values.get(i));
         }
         return out;
+    }
+
+    /**
+     * The property names of a node, read when the Rust side first asks for
+     * them (the lowering reads properties by name and never does).
+     */
+    String[] keysOf(long id)
+    {
+        return this.host.propertyKeys(this.nodes.get(id)).toArray(new String[0]);
     }
 
     /**
