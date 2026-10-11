@@ -16,8 +16,7 @@
 //!
 //! The nodes come from a Java graph through the JNI bridge today and from
 //! PELT files later; both reach this module as heap objects
-//! ([`TypedObject`](crate::heap::TypedObject)), the one node interface the
-//! plan asks for. A lowering turns expression nodes
+//! ([`TypedObject`](crate::heap::TypedObject)). A lowering turns expression nodes
 //! (`SimpleFunctionExpression`, `InstanceValue`, `VariableExpression`,
 //! `LambdaFunction`, `KeyExpression`) into [`ValueSpec`]s and the elements
 //! they reference (functions, classes, enumerations) into model elements

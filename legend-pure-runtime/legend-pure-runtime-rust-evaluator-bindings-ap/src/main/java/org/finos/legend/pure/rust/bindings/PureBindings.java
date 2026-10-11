@@ -50,10 +50,6 @@ import java.lang.annotation.Target;
  *       {@code libpure_rust_jni.{dylib,so,dll}} that the processor
  *       loads at compile time.</li>
  * </ul>
- *
- * <p>Only the {@code @Retention(SOURCE)} retention is needed — the
- * annotation is consumed entirely by the processor at compile time and
- * has no runtime presence.
  */
 @Retention(RetentionPolicy.SOURCE)
 @Target(ElementType.TYPE)
@@ -73,8 +69,7 @@ public @interface PureBindings
     /**
      * Optional fallback Java package for emitted classes. Used only
      * when the manifest does not declare a {@code @pkg:} directive of
-     * its own. Empty default — the manifest is the preferred home for
-     * this value because it then travels with the bindings JAR.
+     * its own.
      *
      * @return the root Java package, or empty to defer to the manifest
      */

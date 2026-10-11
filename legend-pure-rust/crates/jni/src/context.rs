@@ -29,12 +29,10 @@ use smol_str::SmolStr;
 use crate::bridge::{BridgeShared, JniHandleTable};
 use crate::java_node::JavaNode;
 
-/// Classifier of a `.par` native-function node: the only Java function
-/// shape that is callable before any lowering exists.
+/// Classifier of a `.par` native-function node.
 const NATIVE_FUNCTION: &str = "meta::pure::metamodel::function::NativeFunction";
 
-/// Classifier of a Java lambda: lowering it through the bridge is Step 3,
-/// so until then it is refused as unsupported rather than "not found".
+/// Classifier of a Java lambda.
 const LAMBDA_FUNCTION: &str = legend_pure_evaluator::m3_paths::LAMBDA_FUNCTION;
 
 fn ffi_error(message: String) -> PureException {
@@ -96,11 +94,6 @@ impl JniContext {
 
     /// Run a function with already-crossed arguments, one scope per call.
     ///
-    /// A model element runs through `apply_callable`; a Java `NativeFunction`
-    /// node whose name is a registered key runs through `call_native`; a Java
-    /// `LambdaFunction` is `Unsupported` until the bridge can lower it;
-    /// anything else is `FunctionNotFound` with the node's user path.
-    ///
     /// # Errors
     /// Whatever the evaluator raises, or a failure recorded while a Java
     /// node was read.
@@ -134,11 +127,8 @@ impl JniContext {
         result
     }
 
-    /// Phase A: lower the lambda and everything it references, reading
-    /// the model only. Phase B: if the lowering added elements, drop the
-    /// evaluator (the one `&PureModel` borrow besides the bridge's), apply
-    /// the extension, and build a fresh evaluator over the grown model.
-    /// Then run the closure in its own scope.
+    /// Lower the lambda and everything it references, then run the
+    /// closure in its own scope.
     fn lower_and_run(&mut self, function: &Value) -> Result<Value, PureException> {
         let result = self.lower_and_run_inner(function);
         // Whether the lowering or the run failed, the nodes this execution
@@ -197,8 +187,7 @@ impl JniContext {
     }
 
     /// Every value of a property of a Rust object held for Java; empty when
-    /// the property is unset (re-wrapping reads optional slots on every
-    /// value, so an absent property is not an error).
+    /// the property is unset.
     ///
     /// # Errors
     /// Stale handle.

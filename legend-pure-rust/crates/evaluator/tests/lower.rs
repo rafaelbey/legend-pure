@@ -133,8 +133,6 @@ fn a_native_call_lowers_to_an_element_named_by_its_mangled_signature() {
 
 #[test]
 fn the_bridge_chunk_is_whatever_comes_after_the_model_s_chunks() {
-    // A builder model already holds chunk 1, so the lowering lands in 2;
-    // a second lowering appends to the same chunk.
     let mut model = ModelBuilder::new().finish();
     assert_eq!(model.chunks.len(), 2);
     assert_eq!(
@@ -161,7 +159,6 @@ fn the_bridge_chunk_is_whatever_comes_after_the_model_s_chunks() {
     let mut lowering = Lowering::new(&model, chunk, model.chunk_len(chunk));
     let closure = lowering.lower_root_lambda(&root(body)).unwrap();
     let extension = lowering.into_extension();
-    // `plus` already exists in the model: only `eq` is new.
     assert_eq!(extension.len(), 1);
     extension.apply(&mut model);
     assert_eq!(model.chunk_len(2), 2);
@@ -276,8 +273,6 @@ fn every_literal_kind_lowers() {
     let Value::Collection(items) = &result else {
         panic!("expected a collection, got {result:?}");
     };
-    // `%latest` is compared by shape: `Value::Latest` is not equal to
-    // itself under the archived `PartialEq` (a Step 1 finding).
     assert_eq!(items.len(), 6);
     assert_eq!(items.iter().take(5).cloned().collect::<Vec<_>>(), values);
     assert!(matches!(items.last(), Some(Value::Latest)));
@@ -295,7 +290,6 @@ fn an_unknown_node_kind_is_unsupported_and_adds_nothing() {
         err,
         LowerError::Unsupported("lowering meta::x::Y as a value".into())
     );
-    // Nothing reached the model: the extension is dropped, not applied.
     drop(lowering);
     assert_eq!(model.chunk_len(chunk), 0);
 }
@@ -328,7 +322,6 @@ fn specs_carry_the_node_s_span() {
         (span.source.as_str(), span.start_line, span.start_column),
         ("f.pure", 3, 9)
     );
-    // A node without a span gets the placeholder, never a panic.
     assert_eq!(
         lower_and_run(&mut PureModel::bootstrapped(), &root(vec![int(1)])),
         Ok(Value::Integer(1))
@@ -350,7 +343,6 @@ fn str_lit(s: &str) -> Value {
 
 #[test]
 fn a_pure_bodied_function_lowers_with_its_body_and_runs() {
-    // `function twice(x:Integer[1]):Integer[1] { plus([$x, $x]) }`
     let mut model = PureModel::bootstrapped();
     let twice = m3::concrete_function(
         "my::pkg::twice_Integer_1__Integer_1_",
@@ -370,7 +362,6 @@ fn a_pure_bodied_function_lowers_with_its_body_and_runs() {
 
 #[test]
 fn mutually_recursive_functions_lower_once_each() {
-    // `isEven(n) = if(n == 0, |true, |isOdd(n - 1))`, `isOdd(n) = if(n == 0, |false, |isEven(n - 1))`.
     let mut model = PureModel::bootstrapped();
     let boolean = || m3::generic(Some(Value::Element(BOOLEAN_ID)), Vec::new());
     let eq = || {
@@ -424,8 +415,6 @@ fn mutually_recursive_functions_lower_once_each() {
             )],
         )
     };
-    // Build the two function nodes so each body references the other node
-    // (the Java graph is a cycle; `TestNode` values are shared handles).
     let signature = || m3::function_type(vec![m3::param("n", integer(), one())], boolean(), one());
     let is_odd_shell = TestNode::new(legend_pure_evaluator::m3_paths::CONCRETE_FUNCTION_DEFINITION)
         .path("my::pkg::isOdd_Integer_1__Boolean_1_")
@@ -449,8 +438,6 @@ fn mutually_recursive_functions_lower_once_each() {
             ],
         )],
     );
-    // Fill isOdd's body now that isEven exists: a TestNode is a heap
-    // object, so set the property through the heap view.
     let Value::Object(h) = &is_odd_shell else {
         unreachable!()
     };
@@ -473,7 +460,6 @@ fn mutually_recursive_functions_lower_once_each() {
     let mut lowering = Lowering::new(&model, chunk, 0);
     let closure = lowering.lower_root_lambda(&lambda).unwrap();
     let extension = lowering.into_extension();
-    // isEven, isOdd, if, eq, minus: five elements, each once.
     assert_eq!(extension.len(), 5);
     extension.apply(&mut model);
     assert_eq!(run(&model, closure), Value::Boolean(true));
@@ -524,9 +510,6 @@ fn captured_variables_become_the_closure_s_captures() {
 
 #[test]
 fn a_captured_lambda_is_lowered_into_a_closure() {
-    // `let g = {x | $x + 1}; |$g->eval(5)` — the captured lambda arrives
-    // as a node and must become a function value; `eval` is not fished,
-    // so apply it directly.
     let mut model = PureModel::bootstrapped();
     let g = m3::lambda(
         vec![m3::param("x", integer(), one())],
@@ -663,7 +646,6 @@ fn a_class_construction_lowers_the_class_and_builds_through_the_platform_new() {
     let mut model = PureModel::bootstrapped();
     let person = person_class();
     let property = m3::property("firstName", string_type(), one());
-    // `let p = ^Person(firstName='John'); $p.firstName`
     let let_fn = m3::native_function(
         LET,
         "letFunction",
@@ -694,8 +676,6 @@ fn a_class_construction_lowers_the_class_and_builds_through_the_platform_new() {
         &*new_call.arguments[0].kind,
         ExprKind::TypeReference { .. }
     ));
-    // One key expression lowers bare (one value), as the platform `new`
-    // accepts a singleton as well as a collection.
     assert!(
         matches!(&*new_call.arguments[2].kind, ExprKind::KeyExpression { key, add: false, .. } if key == "firstName")
     );
@@ -783,8 +763,6 @@ fn a_type_literal_lowers_to_a_type_reference() {
 #[test]
 fn a_type_that_cannot_lower_is_dropped_unless_an_element_is_half_built() {
     let model = PureModel::bootstrapped();
-    // An expression typed by an unknown kind of node: the type is advisory,
-    // the literal still lowers.
     let odd_type = m3::generic(Some(TestNode::new("meta::x::Y").build()), Vec::new());
     let lambda = root(vec![m3::iv(
         vec![Value::Integer(1)],
@@ -794,8 +772,6 @@ fn a_type_that_cannot_lower_is_dropped_unless_an_element_is_half_built() {
     let mut lowering = Lowering::new(&model, 1, 0);
     let closure = lowering.lower_root_lambda(&lambda).unwrap();
     assert!(closure.body[0].type_info.is_none());
-    // The same type on a class property is an error: the class would be
-    // half-built otherwise.
     let bad_class = m3::class(
         "my::model::Bad",
         vec![m3::property("p", odd_type, one())],

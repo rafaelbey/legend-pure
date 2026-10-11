@@ -107,8 +107,6 @@ public final class PureBindingsProcessor extends AbstractProcessor
             return true;
         }
 
-        // Dedupe across multiple @PureBindings markers in case two
-        // markers target overlapping packages.
         Set<String> emittedFqcns = new HashSet<>();
         for (Element marker : targets)
         {
@@ -126,17 +124,9 @@ public final class PureBindingsProcessor extends AbstractProcessor
         return true;
     }
 
-    /**
-     * Read the root manifest, resolve every {@code @import} chain into
-     * an external-bindings flat array, then call the JNI generator and
-     * emit each returned source file via Filer.
-     */
     private void processOneMarker(Element marker, PureBindings cfg, Set<String> emittedFqcns)
             throws BindingsException
     {
-        // Walk the import graph: BFS starting at the root manifest's
-        // path. The root manifest's @pkg / FQNs become local seeds; an
-        // imported manifest's @pkg + FQNs become external bindings.
         ParsedManifest root = readAndParseManifest(cfg.bindingsFile());
         String effectivePackage = !root.pkg.isEmpty() ? root.pkg : cfg.javaPackage();
         String effectiveFunctionsClass = !root.functionsClass.isEmpty()
@@ -204,7 +194,6 @@ public final class PureBindingsProcessor extends AbstractProcessor
             return;
         }
 
-        // alternating (relativePath, contents) entries
         for (int i = 0; i + 1 < generated.length; i += 2)
         {
             String relPath = generated[i];
@@ -311,24 +300,11 @@ public final class PureBindingsProcessor extends AbstractProcessor
      * Map a Pure FQN to the Java simple name the codegen emits for it.
      * Mirrors {@code legend_pure_java_codegen::naming::safe_java_identifier}'s
      * behaviour for the *leaf* segment.
-     *
-     * <p>For type FQNs (Class / Enumeration), the Java simple name is
-     * the leaf segment of the Pure FQN, escaped if it collides with a
-     * Java keyword. For mangled function FQNs the situation is
-     * different — those bind to a static method on the imported
-     * module's facade class — but external-bindings entries from the
-     * AP are only consulted by the codegen at <em>type reference
-     * sites</em>, which can only reference types. So this helper is
-     * called for type FQNs only.
      */
     private static String javaSimpleNameOf(String pureFqn)
     {
         int idx = pureFqn.lastIndexOf("::");
         String leaf = idx >= 0 ? pureFqn.substring(idx + 2) : pureFqn;
-        // Match the Rust safe_java_identifier rule: append `_` to the
-        // 53 Java reserved words. We don't enumerate them here (only the
-        // ones that show up in actual M3 FQNs realistically: `package`,
-        // `class`, `interface`, `default`, …) — pragmatic v1.
         switch (leaf)
         {
             case "package":

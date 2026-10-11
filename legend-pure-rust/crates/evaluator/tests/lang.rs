@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! The language natives fished in Step 1 milestone 3, driven through
+//! The language natives, driven through
 //! hand-built nodes: `letFunction`, `if`, `new`, `copy`, `eq`/`equal`,
 //! `and`/`or`/`not`, `minus`, plus property and qualified-property access
 //! on the instances `new` builds.
@@ -237,7 +237,6 @@ fn copy_overrides_one_property_and_leaves_the_source_alone() {
         eval.eval(&expr::prop(expr::var("p"), "name")).unwrap(),
         Value::String("Ann".into())
     );
-    // `eq` is identity: the copy is a different object.
     let same = expr::call(EQ, vec![expr::var("p"), expr::var("p")]);
     let other = expr::call(EQ, vec![expr::var("p"), expr::var("q")]);
     assert_eq!(eval.eval(&same).unwrap(), Value::Boolean(true));

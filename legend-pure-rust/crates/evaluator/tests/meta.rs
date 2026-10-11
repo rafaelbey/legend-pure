@@ -16,9 +16,6 @@
 //! hand-built classes, enumerations and lambdas. The cases mirror the
 //! platform PCT tests (`essential/lang/flow/match.pure`,
 //! `essential/lang/eval/eval.pure`, …).
-//!
-//! `NativeRegistry::standard()` does not register the meta natives yet,
-//! so every test adds them with `native::meta::register`.
 
 use legend_pure_evaluator::builders::{ModelBuilder, class, expr, named, param, property, source};
 use legend_pure_evaluator::error::{PureException, PureExceptionKind, PureRuntimeError};
@@ -177,7 +174,6 @@ fn match_dispatches_an_instance_on_its_class_and_falls_back_to_any() {
     let one = |subject: ValueSpec| match_call(subject, branches(Multiplicity::PureOne, "Any1"));
     let many = |subject: ValueSpec| match_call(subject, branches(Multiplicity::ZeroOrMany, "Any*"));
 
-    // testMatch
     assert_eq!(
         eval.eval(&one(new_instance(g.address, "name", "Hoboken, NJ")))
             .unwrap(),
@@ -218,8 +214,6 @@ fn match_gates_each_branch_on_the_subject_count() {
         upper: Some(4),
     };
 
-    // testMatchManyWithMany: three strings skip `Integer[1..4]` and land
-    // on `String[*]`, which receives the whole collection.
     let three = expr::collection(vec![
         expr::string("w"),
         expr::string("w"),
@@ -244,7 +238,6 @@ fn match_gates_each_branch_on_the_subject_count() {
     );
     assert_eq!(eval.eval(&call).unwrap(), strings(&["w", "w", "w"]));
 
-    // `[x:Integer[*] | $x]` takes a collection `Integer[1]` refuses.
     let call = match_call(
         expr::collection(vec![expr::int(1), expr::int(2), expr::int(3)]),
         vec![
@@ -264,7 +257,6 @@ fn match_gates_each_branch_on_the_subject_count() {
     );
     assert_eq!(eval.eval(&call).unwrap(), ints(&[1, 2, 3]));
 
-    // testMatchOneWithZeroOne
     let call = match_call(
         expr::collection(vec![expr::int(1)]),
         vec![
@@ -284,8 +276,6 @@ fn match_gates_each_branch_on_the_subject_count() {
     );
     assert_eq!(eval.eval(&call).unwrap(), Value::Integer(1));
 
-    // testMatchZeroWithZero: an empty subject matches the first branch
-    // whose lower bound is zero, whatever its type.
     let call = match_call(
         expr::collection(Vec::new()),
         vec![
@@ -309,7 +299,6 @@ fn match_picks_the_branch_whose_type_fits_a_primitive_subject() {
     let model = ModelBuilder::new().finish();
     let registry = registry();
     let mut eval = Evaluator::new(&model, &registry);
-    // testMatchWithFunctions: `[{a:Integer[1]|1}, {a:String[1]|[1,2]}, {a:Date[1]|[4,5,6]}]`
     let branches = || {
         vec![
             branch("a", named(INTEGER_ID), Multiplicity::PureOne, expr::int(1)),
@@ -352,7 +341,6 @@ fn match_with_an_extra_parameter_passes_it_to_the_chosen_branch() {
     let model = ModelBuilder::new().finish();
     let registry = registry();
     let mut eval = Evaluator::new(&model, &registry);
-    // testMatchWithExtraParam
     let call = expr::call(
         MATCH_WITH,
         vec![
@@ -429,11 +417,9 @@ fn eval_applies_a_lambda_to_its_arguments() {
     let registry = registry();
     let mut eval = Evaluator::new(&model, &registry);
 
-    // `{|7}->eval()`
     let call = expr::call(EVAL_0, vec![expr::lambda(Vec::new(), vec![expr::int(7)])]);
     assert_eq!(eval.eval(&call).unwrap(), Value::Integer(7));
 
-    // testNumberExp's shape: `let z = {a | $a + 41}; $z->eval(1)`
     eval.context_mut().push_scope();
     let add_41 = expr::call(
         PLUS,
@@ -451,7 +437,6 @@ fn eval_applies_a_lambda_to_its_arguments() {
     ];
     assert_eq!(eval.eval_body(&body).unwrap(), Value::Integer(42));
 
-    // testNumberPow's shape: two parameters.
     let call = expr::call(
         EVAL_2,
         vec![
@@ -462,7 +447,6 @@ fn eval_applies_a_lambda_to_its_arguments() {
     );
     assert_eq!(eval.eval(&call).unwrap(), Value::Integer(5));
 
-    // The widest arity: seven parameters.
     let names = ["a", "b", "c", "d", "e", "f", "g"];
     let mut args = vec![expr::lambda(integer_params(&names), vec![sum_of(&names)])];
     args.extend((1..=7).map(expr::int));
@@ -507,7 +491,6 @@ fn extract_enum_value_yields_the_literal_enum_value() {
             member: "GREEN".into(),
         }
     );
-    // testEqualEnum's shape: equal to the `my::Colour.GREEN` literal.
     let same = expr::call(
         EQUAL,
         vec![extract("GREEN"), expr::enum_value(colour, "GREEN")],
@@ -603,7 +586,6 @@ fn cast_returns_the_value_when_its_type_fits() {
         .eval(&cast(new_instance(g.address, "name", "Hoboken, NJ"), geo))
         .unwrap();
     assert!(matches!(address, Value::Object(_)));
-    // An empty subject casts to anything and stays empty.
     let empty = eval
         .eval(&cast(expr::collection(Vec::new()), STRING_ID))
         .unwrap();
@@ -637,7 +619,6 @@ fn an_empty_cast_feeds_match_its_zero_branch() {
     let model = ModelBuilder::new().finish();
     let registry = registry();
     let mut eval = Evaluator::new(&model, &registry);
-    // testMatchZeroWithZero: `[]->cast(@String)->match([...])`
     let call = match_call(
         cast(expr::collection(Vec::new()), STRING_ID),
         vec![
@@ -678,7 +659,6 @@ fn cast_to_a_primitive_extension_checks_its_constraints() {
     let registry = registry();
     let mut eval = Evaluator::new(&model, &registry);
 
-    // The downcast direction: `One extends Integer`.
     assert_eq!(
         eval.eval(&cast(expr::int(1), one)).unwrap(),
         Value::Integer(1)
@@ -693,7 +673,6 @@ fn cast_to_a_primitive_extension_checks_its_constraints() {
         "{err:?}"
     );
 
-    // `@P(8)` binds `x = 8` for the constraint.
     let cast_p = |n: i64| {
         expr::call(
             CAST,
@@ -712,7 +691,6 @@ fn cast_to_a_relation_type_is_unsupported() {
     let g = geography();
     let registry = registry();
     let mut eval = Evaluator::new(&g.model, &registry);
-    // A heap object in the type slot is what `@(cols)` evaluates to.
     let call = expr::call(
         CAST,
         vec![expr::int(1), new_instance(g.person, "firstName", "Pierre")],

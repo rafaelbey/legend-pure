@@ -21,12 +21,6 @@ package org.finos.legend.pure.rust.bindings;
  * which in turn invokes {@code legend_pure_java_codegen::generate} and
  * returns a flat {@code String[]} of alternating
  * {@code (relativePath, contents)} pairs.
- *
- * <p>The cdylib is loaded once per JVM via {@link #ensureLoaded(String)}
- * — the JVM's own library cache makes a second {@code System.load}
- * call by absolute path a no-op, so the runtime
- * {@code PureRustEvaluator} and the compile-time AP can both use the
- * same shared library without conflict.
  */
 public final class PureBindingsGenerator
 {
@@ -66,8 +60,7 @@ public final class PureBindingsGenerator
      * Run the Rust codegen and return its emitted Java source set as
      * a flat array of alternating {@code (relativePath, contents)}
      * pairs. The relative path uses forward slashes regardless of host
-     * OS so the caller can convert it to a fully-qualified class name
-     * with a single {@code replace('/', '.')}.
+     * OS.
      *
      * @param javaPackage          Java root package every emitted class lives under
      * @param functions            mangled function FQNs

@@ -23,8 +23,6 @@
 //! as `PureRustException` rather than aborting the JVM.
 
 #![deny(missing_docs)]
-// PureException carries a call stack (Vec) so its size is inherently large;
-// the evaluator crate allows the same lint for the same reason.
 #![allow(clippy::result_large_err)]
 
 pub mod bridge;
@@ -56,9 +54,7 @@ const PURE_RUST_EVAL_EXC: &str = "org/finos/legend/pure/rust/PureRustEvaluationE
 /// Best-effort: if any JNI call fails (e.g. the rich constructor isn't
 /// found because the Java side is older than this binary), falls back
 /// to `env.throw_new(PURE_RUST_EVAL_EXC, message)` which targets the
-/// pre-existing message-only constructor. The fallback path is also
-/// what end users see if they swap in an older
-/// `legend-pure-runtime-rust-evaluator` JAR.
+/// pre-existing message-only constructor.
 pub(crate) fn throw_pure_exception(env: &mut JNIEnv, exc: &PureException) {
     let payload = pure_exception_to_payload(exc);
     if try_throw_rich(env, &payload).is_err() {
@@ -71,7 +67,7 @@ pub(crate) fn throw_pure_exception(env: &mut JNIEnv, exc: &PureException) {
     }
 }
 
-#[allow(clippy::too_many_lines)] // Linear JNI plumbing — splitting hurts readability
+#[allow(clippy::too_many_lines)]
 fn try_throw_rich(env: &mut JNIEnv, payload: &ExceptionPayload) -> jni::errors::Result<()> {
     use jni::objects::{JObject, JValue};
     let message = env.new_string(&payload.message)?;
