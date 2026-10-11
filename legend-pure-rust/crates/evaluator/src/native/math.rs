@@ -464,6 +464,23 @@ impl NativeFunction for Acos {
     }
 }
 
+/// Pure `atan(Number[1]):Float[1]` — inverse tangent (radians).
+#[derive(Debug)]
+pub struct Atan;
+
+impl NativeFunction for Atan {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("atan", &values, 1)?;
+        let x = number_to_f64("atan", &values[0])?;
+        Ok(Evaluated::new(Value::Float(x.atan())))
+    }
+}
+
 /// Pure `toFloat(Number[1]):Float[1]` — numeric → Float coercion.
 #[derive(Debug)]
 pub struct ToFloat;
@@ -605,6 +622,7 @@ pub fn register(registry: &mut NativeRegistry) {
     registry.register("cot_Number_1__Float_1_", Cot);
     registry.register("asin_Number_1__Float_1_", Asin);
     registry.register("acos_Number_1__Float_1_", Acos);
+    registry.register("atan_Number_1__Float_1_", Atan);
 
     // numeric conversion
     registry.register("toFloat_Number_1__Float_1_", ToFloat);
@@ -1173,6 +1191,34 @@ mod tests {
     #[test]
     fn acos_type_mismatch() {
         assert!(Acos.execute(&[lit_bool(false)], &mut MockCtx).is_err());
+    }
+
+    #[test]
+    fn atan_zero() {
+        let r = Atan.execute(&[lit_float(0.0)], &mut MockCtx).unwrap();
+        match r.into_value() {
+            Value::Float(f) => assert!(approx_eq(f, 0.0)),
+            other => panic!("expected Float, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn atan_one_is_pi_over_four() {
+        let r = Atan.execute(&[lit_float(1.0)], &mut MockCtx).unwrap();
+        match r.into_value() {
+            Value::Float(f) => assert!(approx_eq(f, std::f64::consts::FRAC_PI_4)),
+            other => panic!("expected Float, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn atan_wrong_arg_count() {
+        assert!(Atan.execute(&[], &mut MockCtx).is_err());
+    }
+
+    #[test]
+    fn atan_type_mismatch() {
+        assert!(Atan.execute(&[lit_str("x")], &mut MockCtx).is_err());
     }
 
     #[test]

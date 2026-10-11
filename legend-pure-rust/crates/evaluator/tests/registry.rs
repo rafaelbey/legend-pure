@@ -80,6 +80,7 @@ const FISHED: &[&str] = &[
     "cot_Number_1__Float_1_",
     "asin_Number_1__Float_1_",
     "acos_Number_1__Float_1_",
+    "atan_Number_1__Float_1_",
     "toFloat_Number_1__Float_1_",
     "toDecimal_Number_1__Decimal_1_",
     "parseFloat_String_1__Float_1_",
