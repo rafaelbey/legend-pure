@@ -1022,6 +1022,23 @@ impl NativeFunction for Ltrim {
     }
 }
 
+/// Pure `rtrim(String[1]): String[1]` — remove trailing whitespace.
+#[derive(Debug)]
+pub struct Rtrim;
+
+impl NativeFunction for Rtrim {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("rtrim", &values, 1)?;
+        let s = values[0].as_string()?;
+        Ok(Evaluated::new(Value::String(SmolStr::new(s.trim_end()))))
+    }
+}
+
 fn i64_arg(v: &Value, ctx: &str) -> Result<i64, PureException> {
     match v {
         Value::Integer(n) => Ok(*n),
@@ -1064,6 +1081,7 @@ pub fn register(registry: &mut NativeRegistry) {
     registry.register("toLower_String_1__String_1_", ToLower);
     registry.register("toUpper_String_1__String_1_", ToUpper);
     registry.register("ltrim_String_1__String_1_", Ltrim);
+    registry.register("rtrim_String_1__String_1_", Rtrim);
 }
 
 #[cfg(test)]
@@ -1402,6 +1420,43 @@ mod tests {
     #[test]
     fn ltrim_type_mismatch() {
         assert!(Ltrim.execute(&[lit_int(1)], &mut MockCtx).is_err());
+    }
+
+    #[test]
+    fn rtrim_strips_trailing_whitespace() {
+        assert_eq!(
+            Rtrim
+                .execute(&[lit_str("  hi  ")], &mut MockCtx)
+                .unwrap()
+                .into_value(),
+            Value::String("  hi".into())
+        );
+    }
+
+    #[test]
+    fn rtrim_empty_string() {
+        assert_eq!(
+            Rtrim
+                .execute(&[lit_str("")], &mut MockCtx)
+                .unwrap()
+                .into_value(),
+            Value::String("".into())
+        );
+    }
+
+    #[test]
+    fn rtrim_wrong_arg_count() {
+        assert!(
+            Rtrim
+                .execute(&[lit_str("a"), lit_str("b")], &mut MockCtx)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn rtrim_type_mismatch() {
+        use crate::native::lit_bool;
+        assert!(Rtrim.execute(&[lit_bool(true)], &mut MockCtx).is_err());
     }
 
     // -- reverseString --
