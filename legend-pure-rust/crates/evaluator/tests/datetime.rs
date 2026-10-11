@@ -42,6 +42,8 @@ const HAS_HOUR: &str = "hasHour_Date_1__Boolean_1_";
 const HAS_MINUTE: &str = "hasMinute_Date_1__Boolean_1_";
 const HAS_SECOND: &str = "hasSecond_Date_1__Boolean_1_";
 const HAS_SUBSECOND: &str = "hasSubsecond_Date_1__Boolean_1_";
+const HAS_SUBSECOND_AT_LEAST: &str =
+    "hasSubsecondWithAtLeastPrecision_Date_1__Integer_1__Boolean_1_";
 
 /// `%y` — a year-only date.
 fn year_only(year: i16) -> ValueSpec {
@@ -464,4 +466,32 @@ fn has_second_holds_from_second_precision() {
 #[test]
 fn has_subsecond_holds_only_with_a_fraction() {
     assert_precision_predicate(HAS_SUBSECOND, 6);
+}
+
+/// testHasSubsecondWithAtLeastPrecision: `.398` has three digits; coarser
+/// dates have none.
+#[test]
+fn has_subsecond_with_at_least_precision_counts_the_digits() {
+    let model = ModelBuilder::new().finish();
+    let registry = NativeRegistry::standard();
+    let mut eval = Evaluator::new(&model, &registry);
+    let mut at_least = |date: ValueSpec, digits: i64| {
+        eval.eval(&expr::call(
+            HAS_SUBSECOND_AT_LEAST,
+            vec![date, expr::int(digits)],
+        ))
+        .unwrap()
+    };
+    for digits in 1..=5 {
+        assert_eq!(
+            at_least(extract_fixture(4), digits),
+            Value::Boolean(digits <= 3),
+            "{digits} digits"
+        );
+    }
+    let mut coarser = vec![year_only(2015)];
+    coarser.extend(extract_ladder().into_iter().take(5));
+    for date in coarser {
+        assert_eq!(at_least(date, 1), Value::Boolean(false));
+    }
 }

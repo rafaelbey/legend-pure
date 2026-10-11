@@ -600,6 +600,32 @@ impl NativeFunction for HasSubsecond {
     }
 }
 
+/// Pure `hasSubsecondWithAtLeastPrecision(Date[1], Integer[1]): Boolean[1]`.
+///
+/// The second argument is the required number of subsecond digits (1–9).
+/// Returns `true` iff the date carries subsecond precision whose digit
+/// count is at least that value.
+#[derive(Debug)]
+pub struct HasSubsecondWithAtLeastPrecision;
+
+impl NativeFunction for HasSubsecondWithAtLeastPrecision {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("hasSubsecondWithAtLeastPrecision", &values, 2)?;
+        let d = values[0].as_date()?;
+        let required = values[1].as_integer()?;
+        let have = match d.precision() {
+            DatePrecision::Time(TimePrecision::Subsecond(digits)) => i64::from(digits),
+            _ => return Ok(Evaluated::new(Value::Boolean(false))),
+        };
+        Ok(Evaluated::new(Value::Boolean(have >= required)))
+    }
+}
+
 /// Pure `parseDate(String[1]): Date[1]`.
 ///
 /// Accepts the same family of ISO-like literals the Pure compiler
@@ -1020,6 +1046,10 @@ pub fn register(registry: &mut NativeRegistry) {
     registry.register("hasMinute_Date_1__Boolean_1_", HasMinute);
     registry.register("hasSecond_Date_1__Boolean_1_", HasSecond);
     registry.register("hasSubsecond_Date_1__Boolean_1_", HasSubsecond);
+    registry.register(
+        "hasSubsecondWithAtLeastPrecision_Date_1__Integer_1__Boolean_1_",
+        HasSubsecondWithAtLeastPrecision,
+    );
 
     registry.register("parseDate_String_1__Date_1_", ParseDate);
 
@@ -1132,6 +1162,15 @@ mod tests {
     #[test]
     fn adjust_wrong_arg_count() {
         assert!(Adjust.execute(&[], &mut MockCtx).is_err());
+    }
+
+    #[test]
+    fn has_subsecond_with_at_least_precision_wrong_args() {
+        assert!(
+            HasSubsecondWithAtLeastPrecision
+                .execute(&[], &mut MockCtx)
+                .is_err()
+        );
     }
 
     // ---- parseDate ----

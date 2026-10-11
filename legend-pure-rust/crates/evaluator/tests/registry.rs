@@ -63,6 +63,7 @@ const FISHED: &[&str] = &[
     "hasMinute_Date_1__Boolean_1_",
     "hasSecond_Date_1__Boolean_1_",
     "hasSubsecond_Date_1__Boolean_1_",
+    "hasSubsecondWithAtLeastPrecision_Date_1__Integer_1__Boolean_1_",
     // lang
     "letFunction_String_1__T_m__T_m_",
     "if_Boolean_1__Function_1__Function_1__T_m_",
