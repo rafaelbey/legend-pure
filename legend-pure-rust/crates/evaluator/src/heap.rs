@@ -117,6 +117,13 @@ pub trait TypedObject: 'static {
         Vec::new()
     }
 
+    /// The node's own name (`getName()`) when the object is a node of
+    /// another graph: a function's mangled signature, a variable's name.
+    /// The default is none.
+    fn node_name(&self) -> Option<SmolStr> {
+        None
+    }
+
     /// User path (`a::b::C`) when the object is a packageable element of
     /// another graph; the lowering unifies such nodes with model elements
     /// by this path. The default is none.

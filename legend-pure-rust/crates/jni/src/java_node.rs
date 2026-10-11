@@ -467,6 +467,10 @@ impl TypedObject for JavaNode {
         names
     }
 
+    fn node_name(&self) -> Option<SmolStr> {
+        self.name.clone()
+    }
+
     fn user_path(&self) -> Option<SmolStr> {
         self.user_path.clone()
     }

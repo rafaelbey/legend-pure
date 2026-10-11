@@ -194,24 +194,70 @@ public class TestRustEvaluatorBoundary
     }
 
     /**
-     * The body of every PCT test hands a lambda to its adapter; until Step 3
-     * lowers Java lambdas through the bridge, that lambda is Unsupported, and
-     * this is the message the Rust_JNI manifests record.
+     * A PCT lambda lowers through the bridge and runs: {@code |1 + 2} is 3.
+     * The native it calls became a model element named by its mangled
+     * signature, so dispatch hit the registry exactly.
      */
     @Test
-    public void aJavaLambdaIsUnsupportedUntilTheBridgeLowersIt()
+    public void aPctLambdaLowersAndRuns()
     {
-        CoreInstance lambda = findLambda(firstPctTest());
-        Assert.assertNotNull(lambda);
+        CoreInstance lambda = findLambda(pctTest(PlatformCodeRepositoryProvider.grammarFunctions, "testSimplePlus"));
+        CoreInstance result = evaluator.start(lambda, Lists.immutable.empty());
+        Assert.assertEquals("3", values(result).get(0).getName());
+    }
+
+    /**
+     * A node kind the lowering does not know yet is reported as such, with
+     * its classifier, and nothing else is evaluated.
+     */
+    @Test
+    public void anUnlowerableNodeIsUnsupportedByClassifier()
+    {
+        CoreInstance lambda = findLambda(pctTest(PlatformCodeRepositoryProvider.grammarFunctions, "testAssignNewInstance"));
         PureRustEvaluationException e = Assert.assertThrows(PureRustEvaluationException.class,
                 () -> evaluator.start(lambda, Lists.immutable.empty()));
         Assert.assertEquals(PureRustEvaluationException.Kind.UNSUPPORTED, e.getKind());
-        Assert.assertEquals("Unsupported: evaluating a Java LambdaFunction through the bridge", e.getMessage());
+        Assert.assertTrue(e.getMessage(), e.getMessage().startsWith("Unsupported: lowering meta::pure::metamodel::type::Class"));
+        Assert.assertEquals(e.getMessage().substring("Unsupported: ".length()), e.getInfo());
     }
 
+    /**
+     * A failure raised inside a lowered lambda is anchored at the Java
+     * source span of the call that raised it, and that anchor is what the
+     * Pure cause reports.
+     */
+    @Test
+    public void failuresInsideALoweredLambdaCarryTheJavaSpan()
+    {
+        CoreInstance lambda = findLambda(pctTest(PlatformCodeRepositoryProvider.essentialFunctions, "testAtError"));
+        PureRustEvaluationException e = Assert.assertThrows(PureRustEvaluationException.class,
+                () -> evaluator.start(lambda, Lists.immutable.empty()));
+        Assert.assertEquals(PureRustEvaluationException.Kind.FUNCTION_NOT_FOUND, e.getKind());
+        PureException cause = PureException.findPureException(e);
+        Assert.assertNotNull(cause);
+        Assert.assertNotNull(cause.getSourceInformation());
+        Assert.assertEquals("/platform/pure/essential/collection/index/at.pure", cause.getSourceInformation().getSourceId());
+        Assert.assertEquals(lambda.getSourceInformation().getLine(), cause.getSourceInformation().getLine());
+        Assert.assertTrue(cause.getSourceInformation().getColumn() > 0);
+    }
+
+    private static CoreInstance pctTest(ReportScope scope, String simpleName)
+    {
+        MutableList<CoreInstance> tests = TestCollection.buildPCTTestCollection(scope._package, scope.filePath, ps).getAllTestFunctions();
+        CoreInstance test = tests.detect(t -> t.getName().startsWith(simpleName + "_"));
+        Assert.assertNotNull(simpleName, test);
+        return test;
+    }
+
+    /**
+     * The first lambda in a test body that closes over nothing: the one a
+     * PCT test hands to {@code $f->eval(...)}. An {@code assertError}
+     * wrapper lambda captures {@code $f} and is skipped.
+     */
     private static CoreInstance findLambda(CoreInstance node)
     {
-        if (LAMBDA_FUNCTION.equals(PackageableElement.getUserPathForPackageableElement(node.getClassifier())))
+        if (LAMBDA_FUNCTION.equals(PackageableElement.getUserPathForPackageableElement(node.getClassifier()))
+                && node.getValueForMetaPropertyToMany(M3Properties.openVariables).isEmpty())
         {
             return node;
         }
