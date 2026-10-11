@@ -311,6 +311,28 @@ impl NativeFunction for ToDecimal {
     }
 }
 
+/// Pure `parseFloat(String[1]):Float[1]` — decimal string → `Float`.
+///
+/// Returns an `EvaluationError` if the string is not a valid `f64`.
+#[derive(Debug)]
+pub struct ParseFloat;
+
+impl NativeFunction for ParseFloat {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("parseFloat", &values, 1)?;
+        let s = values[0].as_string()?;
+        let f = s.parse::<f64>().map_err(|e| {
+            PureRuntimeError::EvaluationError(format!("parseFloat: cannot parse {s:?}: {e}"))
+        })?;
+        Ok(Evaluated::new(Value::Float(f)))
+    }
+}
+
 /// Pure `parseBoolean(String[1]):Boolean[1]` — case-insensitive
 /// `"true"` / `"false"`.
 ///
@@ -366,6 +388,7 @@ pub fn register(registry: &mut NativeRegistry) {
     registry.register("toDecimal_Number_1__Decimal_1_", ToDecimal);
 
     // string parsing
+    registry.register("parseFloat_String_1__Float_1_", ParseFloat);
     registry.register("parseBoolean_String_1__Boolean_1_", ParseBoolean);
 }
 
@@ -671,6 +694,40 @@ mod tests {
     #[test]
     fn to_decimal_type_mismatch() {
         assert!(ToDecimal.execute(&[lit_str("x")], &mut MockCtx).is_err());
+    }
+
+    #[test]
+    #[allow(clippy::approx_constant)] // 3.14 is the test decimal value, not π
+    fn parse_float_decimal_form() {
+        let r = ParseFloat
+            .execute(&[lit_str("3.14")], &mut MockCtx)
+            .unwrap();
+        assert_eq!(r.into_value(), Value::Float(3.14));
+    }
+
+    #[test]
+    fn parse_float_integer_form() {
+        let r = ParseFloat.execute(&[lit_str("7")], &mut MockCtx).unwrap();
+        assert_eq!(r.into_value(), Value::Float(7.0));
+    }
+
+    #[test]
+    fn parse_float_invalid_errors() {
+        assert!(
+            ParseFloat
+                .execute(&[lit_str("not-a-number")], &mut MockCtx)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn parse_float_wrong_arg_count() {
+        assert!(ParseFloat.execute(&[], &mut MockCtx).is_err());
+    }
+
+    #[test]
+    fn parse_float_type_mismatch() {
+        assert!(ParseFloat.execute(&[lit_float(1.0)], &mut MockCtx).is_err());
     }
 
     #[test]
