@@ -836,6 +836,24 @@ impl NativeFunction for EndsWith {
     }
 }
 
+/// Pure `length(String[1]): Integer[1]`
+#[derive(Debug)]
+pub struct Length;
+
+impl NativeFunction for Length {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("length", &values, 1)?;
+        let s = values[0].as_string()?;
+        #[allow(clippy::cast_possible_wrap)]
+        Ok(Evaluated::new(Value::Integer(s.len() as i64)))
+    }
+}
+
 fn i64_arg(v: &Value, ctx: &str) -> Result<i64, PureException> {
     match v {
         Value::Integer(n) => Ok(*n),
@@ -866,6 +884,7 @@ pub fn register(registry: &mut NativeRegistry) {
     );
     registry.register("contains_String_1__String_1__Boolean_1_", Contains);
     registry.register("endsWith_String_1__String_1__Boolean_1_", EndsWith);
+    registry.register("length_String_1__Integer_1_", Length);
 }
 
 #[cfg(test)]
@@ -1079,6 +1098,23 @@ mod tests {
         assert_eq!(ends("lazy dog"), Value::Boolean(true));
         assert_eq!(ends("brown fox"), Value::Boolean(false));
         assert!(EndsWith.execute(&[lit_str(fox)], &mut MockCtx).is_err());
+    }
+
+    #[test]
+    fn string_length() {
+        assert_eq!(
+            Length
+                .execute(&[lit_str("hello")], &mut MockCtx)
+                .unwrap()
+                .into_value(),
+            Value::Integer(5)
+        );
+    }
+
+    #[test]
+    fn length_wrong_arg_count_and_type_mismatch_error() {
+        assert!(Length.execute(&[], &mut MockCtx).is_err());
+        assert!(Length.execute(&[lit_int(1)], &mut MockCtx).is_err());
     }
 
     // -- joinStrings --
