@@ -25,7 +25,10 @@
 //!
 //! The lowering reads what the Java compiler already resolved — calls
 //! carry their target function, every expression its inferred type — and
-//! recomputes nothing. A node shape it does not know is an
+//! recomputes nothing. The one exception today is a qualified-property
+//! call, lowered by name and dispatched by name and arity at run time;
+//! carrying the resolved property is a Step 5 item. A node shape it does
+//! not know is an
 //! [`Unsupported`](LowerError::Unsupported) failure naming the classifier,
 //! which the PCT manifests then record per test.
 

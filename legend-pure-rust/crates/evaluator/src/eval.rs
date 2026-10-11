@@ -524,17 +524,16 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
             Some(id) => self.model.get_node(id).name.as_str(),
             None => function_name,
         };
+        let is_native = match function {
+            Some(id) => matches!(self.model.get_element(id), Element::Function(f) if f.is_native),
+            None => true,
+        };
 
-        if let Some(native) = self.natives.get(lookup_key) {
-            return self.dispatch_native(native, lookup_key, arguments, source_info);
-        }
-
-        if let Some(element_id) = function
-            && matches!(
-                self.model.get_element(element_id),
-                Element::Function(f) if !f.is_native
-            )
-        {
+        if is_native {
+            if let Some(native) = self.natives.get(lookup_key) {
+                return self.dispatch_native(native, lookup_key, arguments, source_info);
+            }
+        } else if let Some(element_id) = function {
             let mut args = Vec::with_capacity(arguments.len());
             for arg in arguments {
                 args.push(self.eval(arg)?);
@@ -1436,9 +1435,9 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
             }
         }
 
-        Err(PureException::from(PureRuntimeError::EvaluationError(
-            format!("Qualified property access not yet supported: {property}"),
-        )))
+        Err(PureException::from(PureRuntimeError::Unsupported(format!(
+            "qualified property `{property}` resolved by name and arity on the receiver's own class"
+        ))))
     }
 
     fn eval_enum_value(enum_element: ElementId, value: &str) -> Value {
