@@ -223,6 +223,23 @@ impl NativeFunction for Sign {
     }
 }
 
+/// Pure `cbrt(Number[1]):Float[1]` — cube root.
+#[derive(Debug)]
+pub struct Cbrt;
+
+impl NativeFunction for Cbrt {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("cbrt", &values, 1)?;
+        let x = number_to_f64("cbrt", &values[0])?;
+        Ok(Evaluated::new(Value::Float(x.cbrt())))
+    }
+}
+
 /// Pure `exp(Number[1]):Float[1]` — natural exponential, `e^x`.
 #[derive(Debug)]
 pub struct Exp;
@@ -417,6 +434,7 @@ pub fn register(registry: &mut NativeRegistry) {
     registry.register("sign_Number_1__Integer_1_", Sign);
 
     // analytic
+    registry.register("cbrt_Number_1__Float_1_", Cbrt);
     registry.register("exp_Number_1__Float_1_", Exp);
     registry.register("log_Number_1__Float_1_", Log);
     registry.register("log10_Number_1__Float_1_", Log10);
@@ -614,6 +632,34 @@ mod tests {
     #[test]
     fn sign_type_mismatch() {
         assert!(Sign.execute(&[lit_str("x")], &mut MockCtx).is_err());
+    }
+
+    #[test]
+    fn cbrt_positive() {
+        let r = Cbrt.execute(&[lit_float(27.0)], &mut MockCtx).unwrap();
+        match r.into_value() {
+            Value::Float(f) => assert!(approx_eq(f, 3.0), "expected ~3.0, got {f}"),
+            other => panic!("expected Float, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn cbrt_negative() {
+        let r = Cbrt.execute(&[lit_float(-8.0)], &mut MockCtx).unwrap();
+        match r.into_value() {
+            Value::Float(f) => assert!(approx_eq(f, -2.0), "expected ~-2.0, got {f}"),
+            other => panic!("expected Float, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn cbrt_wrong_arg_count() {
+        assert!(Cbrt.execute(&[], &mut MockCtx).is_err());
+    }
+
+    #[test]
+    fn cbrt_type_mismatch() {
+        assert!(Cbrt.execute(&[lit_bool(false)], &mut MockCtx).is_err());
     }
 
     #[test]
