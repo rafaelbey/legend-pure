@@ -36,6 +36,7 @@ const MINUTE: &str = "minute_Date_1__Integer_1_";
 const SECOND: &str = "second_Date_1__Integer_1_";
 const MONTH_NUMBER: &str = "monthNumber_Date_1__Integer_1_";
 const YEAR: &str = "year_Date_1__Integer_1_";
+const HAS_DAY: &str = "hasDay_Date_1__Boolean_1_";
 
 /// `%y` — a year-only date.
 fn year_only(year: i16) -> ValueSpec {
@@ -79,6 +80,24 @@ fn extract_ladder() -> Vec<ValueSpec> {
     let mut ladder = vec![year_month(2015, 4), strict(2015, 4, 15)];
     ladder.extend((1..=4).map(extract_fixture));
     ladder
+}
+
+/// Assert a `has*` predicate over the fixtures of
+/// `essential/date/has/*.pure` — `%2015`, then the extract ladder — is
+/// false for the `first_true` coarsest ones and true from there on.
+fn assert_precision_predicate(key: &str, first_true: usize) {
+    let model = ModelBuilder::new().finish();
+    let registry = NativeRegistry::standard();
+    let mut eval = Evaluator::new(&model, &registry);
+    let mut ladder = vec![year_only(2015)];
+    ladder.extend(extract_ladder());
+    for (i, date) in ladder.into_iter().enumerate() {
+        assert_eq!(
+            apply(&mut eval, key, date).unwrap(),
+            Value::Boolean(i >= first_true),
+            "{key} on fixture {i}"
+        );
+    }
 }
 
 /// Apply a one-argument date native to `date`.
@@ -404,4 +423,10 @@ fn year_reads_the_year_at_every_precision() {
     for date in dates {
         assert_eq!(apply(&mut eval, YEAR, date).unwrap(), Value::Integer(2015));
     }
+}
+
+/// testHasDay: true from `%2015-04-15` down.
+#[test]
+fn has_day_holds_from_day_precision() {
+    assert_precision_predicate(HAS_DAY, 2);
 }

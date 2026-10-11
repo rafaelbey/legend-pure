@@ -26,7 +26,7 @@
 
 use legend_pure_metamodel::types::ValueSpec;
 
-use crate::date::{PureDate, TimePrecision};
+use crate::date::{DatePrecision, PureDate, TimePrecision};
 use crate::error::{PureException, PureRuntimeError};
 use crate::native::{
     EvalContextTrait, Evaluated, NativeFunction, NativeRegistry, expect_args, force_all,
@@ -468,6 +468,41 @@ impl NativeFunction for Adjust {
     }
 }
 
+fn has_precision_at_least(d: &PureDate, at: DatePrecision) -> bool {
+    match (d.precision(), at) {
+        // Non-time-vs-non-time comparison falls back to enum Ord.
+        (DatePrecision::Year, DatePrecision::Year) => true,
+        (p, DatePrecision::Year) => p >= DatePrecision::Year || matches!(p, DatePrecision::Time(_)),
+        (p, DatePrecision::Month) => {
+            p >= DatePrecision::Month || matches!(p, DatePrecision::Time(_))
+        }
+        (p, DatePrecision::Day) => p >= DatePrecision::Day || matches!(p, DatePrecision::Time(_)),
+        // Time comparison: Time(a) >= Time(b) iff a >= b on the nested enum.
+        (DatePrecision::Time(a), DatePrecision::Time(b)) => a >= b,
+        (_, DatePrecision::Time(_)) => false,
+    }
+}
+
+/// Pure `hasDay(Date[1]): Boolean[1]`.
+#[derive(Debug)]
+pub struct HasDay;
+
+impl NativeFunction for HasDay {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("hasDay", &values, 1)?;
+        let d = values[0].as_date()?;
+        Ok(Evaluated::new(Value::Boolean(has_precision_at_least(
+            &d,
+            DatePrecision::Day,
+        ))))
+    }
+}
+
 /// Pure `parseDate(String[1]): Date[1]`.
 ///
 /// Accepts the same family of ISO-like literals the Pure compiler
@@ -882,6 +917,8 @@ pub fn register(registry: &mut NativeRegistry) {
     );
     registry.register("adjust_Date_1__Integer_1__DurationUnit_1__Date_1_", Adjust);
 
+    registry.register("hasDay_Date_1__Boolean_1_", HasDay);
+
     registry.register("parseDate_String_1__Date_1_", ParseDate);
 
     // `date(...)` overloads — the platform declares return types that
@@ -910,7 +947,6 @@ pub fn register(registry: &mut NativeRegistry) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::date::DatePrecision;
     use crate::native::{MockCtx, lit_int, lit_str};
 
     // ---- helpers ----
