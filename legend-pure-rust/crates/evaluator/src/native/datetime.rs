@@ -99,6 +99,166 @@ fn duration_unit(v: &Value) -> Result<DurationUnit, PureRuntimeError> {
     }
 }
 
+/// Count Sunday boundaries crossed between two civil dates.
+///
+/// Returns a positive integer when `b > a`, negative when `b < a`, and
+/// 0 when they're equal. Forward intervals count Sundays in `(a, b]`;
+/// backward intervals count Sundays in `[b, a)` and negate. Matches
+/// Java Pure's `dateDiff(WEEKS)` contract — see `testDateDiffWeeks`.
+///
+/// Direction asymmetry note: the half-open intervals differ at the
+/// endpoints — forward includes the latest date, backward includes the
+/// earliest. This matches the test fixtures where Sat → Sun = 1 (Sun
+/// included) while Sun → Sat = 0 (Sun excluded going backward).
+fn sunday_boundaries_between(a: jiff::civil::Date, b: jiff::civil::Date, days: i64) -> i64 {
+    use jiff::civil::Weekday;
+    /// Days until the *next* Sunday strictly after this weekday.
+    /// Sunday → 7 (a full week to the next Sunday).
+    fn to_next_sun(w: Weekday) -> i64 {
+        match w {
+            Weekday::Sunday => 7,
+            Weekday::Monday => 6,
+            Weekday::Tuesday => 5,
+            Weekday::Wednesday => 4,
+            Weekday::Thursday => 3,
+            Weekday::Friday => 2,
+            Weekday::Saturday => 1,
+        }
+    }
+    /// Days from this weekday to the next Sunday on/after it (Sunday
+    /// itself → 0).
+    fn to_this_or_next_sun(w: Weekday) -> i64 {
+        match w {
+            Weekday::Sunday => 0,
+            other => to_next_sun(other),
+        }
+    }
+    if days == 0 {
+        return 0;
+    }
+    if days > 0 {
+        // Forward (a, b]: count Sundays strictly after a, on/before b.
+        let span = days;
+        let to_first = to_next_sun(a.weekday());
+        if to_first > span {
+            0
+        } else {
+            (span - to_first) / 7 + 1
+        }
+    } else {
+        // Backward [b, a): count Sundays on/after b, strictly before a.
+        let span = -days;
+        let to_first = to_this_or_next_sun(b.weekday());
+        if to_first >= span {
+            0
+        } else {
+            -(((span - to_first - 1) / 7) + 1)
+        }
+    }
+}
+
+/// Pure `dateDiff(Date[1], Date[1], DurationUnit[1]): Integer[1]`.
+///
+/// Returns the signed span `d2 - d1` in the requested unit. Sub-second
+/// units require both inputs to have at least second precision; larger
+/// units require the corresponding component on both sides.
+#[derive(Debug)]
+pub struct DateDiff;
+
+impl NativeFunction for DateDiff {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("dateDiff", &values, 3)?;
+        let d1 = values[0].as_date()?;
+        let d2 = values[1].as_date()?;
+        let unit = duration_unit(&values[2])?;
+
+        // Time-based units require datetime precision on both sides; date-
+        // based units (Year/Month/Week/Day) only need day precision.
+        let needs_time = matches!(
+            unit,
+            DurationUnit::Hours
+                | DurationUnit::Minutes
+                | DurationUnit::Seconds
+                | DurationUnit::Milliseconds
+                | DurationUnit::Microseconds
+                | DurationUnit::Nanoseconds
+        );
+
+        if needs_time {
+            let a = d1.to_civil_datetime()?;
+            let b = d2.to_civil_datetime()?;
+            let jiff_unit = match unit {
+                DurationUnit::Hours => jiff::Unit::Hour,
+                DurationUnit::Minutes => jiff::Unit::Minute,
+                DurationUnit::Seconds => jiff::Unit::Second,
+                DurationUnit::Milliseconds => jiff::Unit::Millisecond,
+                DurationUnit::Microseconds => jiff::Unit::Microsecond,
+                DurationUnit::Nanoseconds => jiff::Unit::Nanosecond,
+                _ => unreachable!(),
+            };
+            let span = a
+                .until((jiff_unit, b))
+                .map_err(|e| PureRuntimeError::EvaluationError(format!("dateDiff: {e}")))?;
+            let v = match unit {
+                DurationUnit::Hours => i64::from(span.get_hours()),
+                DurationUnit::Minutes => span.get_minutes(),
+                DurationUnit::Seconds => span.get_seconds(),
+                DurationUnit::Milliseconds => span.get_milliseconds(),
+                DurationUnit::Microseconds => span.get_microseconds(),
+                DurationUnit::Nanoseconds => span.get_nanoseconds(),
+                _ => unreachable!(),
+            };
+            Ok(Evaluated::new(Value::Integer(v)))
+        } else {
+            // Calendar-component math for date-based units. Java Pure's
+            // `dateDiff(a, b, YEARS)` returns `b.year - a.year` regardless
+            // of the day/time within each year — so `dateDiff(2015-12-31,
+            // 2016-01-01, YEARS) == 1`. jiff's `Span.years` measures
+            // *elapsed* years (the same call would yield 0). Same shape
+            // for Months: `(b.year - a.year) * 12 + (b.month - a.month)`.
+            // Days/Weeks use the calendar-day delta (Days = epoch diff;
+            // Weeks = Sunday boundaries crossed, see below).
+            let a = d1.to_civil_date()?;
+            let b = d2.to_civil_date()?;
+            let v = match unit {
+                DurationUnit::Years => i64::from(b.year()) - i64::from(a.year()),
+                DurationUnit::Months => {
+                    (i64::from(b.year()) - i64::from(a.year())) * 12
+                        + (i64::from(b.month()) - i64::from(a.month()))
+                }
+                DurationUnit::Days => {
+                    let span = a
+                        .until(b)
+                        .map_err(|e| PureRuntimeError::EvaluationError(format!("dateDiff: {e}")))?;
+                    i64::from(span.get_days())
+                }
+                DurationUnit::Weeks => {
+                    // Java Pure semantics: count of Sunday boundaries
+                    // crossed, NOT raw `days / 7`. Forward (a < b):
+                    // # Sundays in (a, b]; Backward (a > b): negative #
+                    // Sundays in [b, a). Concretely Sat → Sun = 1 even
+                    // though it's only 1 day, because one Sunday boundary
+                    // is crossed; Sun → Sat = 0 because no Sunday is
+                    // included. Tested by testDateDiffWeeks in
+                    // essential/date/operation/dateDiff.pure.
+                    let span = a
+                        .until(b)
+                        .map_err(|e| PureRuntimeError::EvaluationError(format!("dateDiff: {e}")))?;
+                    let days = i64::from(span.get_days());
+                    sunday_boundaries_between(a, b, days)
+                }
+                _ => unreachable!(),
+            };
+            Ok(Evaluated::new(Value::Integer(v)))
+        }
+    }
+}
+
 /// Pure `adjust(Date[1], Integer[1], DurationUnit[1]): Date[1]`.
 ///
 /// Every unit goes through the matching `PureDate::add_*`; a week is
@@ -139,6 +299,10 @@ impl NativeFunction for Adjust {
 
 /// Register the fished date and time natives under their platform keys.
 pub fn register(registry: &mut NativeRegistry) {
+    registry.register(
+        "dateDiff_Date_1__Date_1__DurationUnit_1__Integer_1_",
+        DateDiff,
+    );
     registry.register("adjust_Date_1__Integer_1__DurationUnit_1__Date_1_", Adjust);
 }
 
@@ -183,6 +347,11 @@ mod tests {
     // arity, `as_date()` type assertion — which need no evaluator.
 
     #[test]
+    fn date_diff_wrong_arg_count() {
+        assert!(DateDiff.execute(&[], &mut MockCtx).is_err());
+    }
+
+    #[test]
     fn adjust_wrong_arg_count() {
         assert!(Adjust.execute(&[], &mut MockCtx).is_err());
     }
@@ -195,6 +364,10 @@ mod tests {
         register(&mut reg);
         assert!(
             reg.get("adjust_Date_1__Integer_1__DurationUnit_1__Date_1_")
+                .is_some()
+        );
+        assert!(
+            reg.get("dateDiff_Date_1__Date_1__DurationUnit_1__Integer_1_")
                 .is_some()
         );
     }

@@ -27,6 +27,7 @@ use legend_pure_metamodel::model::PureModel;
 use legend_pure_metamodel::types::{DateValue, ValueSpec};
 
 const ADJUST: &str = "adjust_Date_1__Integer_1__DurationUnit_1__Date_1_";
+const DATE_DIFF: &str = "dateDiff_Date_1__Date_1__DurationUnit_1__Integer_1_";
 
 /// The platform's `meta::pure::functions::date::DurationUnit` (`_structures.pure`).
 fn duration_unit_model() -> (PureModel, ElementId) {
@@ -134,6 +135,62 @@ fn adjust_moves_a_date_by_each_calendar_unit() {
         ))
         .unwrap(),
         second_value(2015, 4, 17, 0, 12, 11)
+    );
+}
+
+#[test]
+fn date_diff_counts_calendar_and_clock_units() {
+    let (model, unit) = duration_unit_model();
+    let registry = NativeRegistry::standard();
+    let mut eval = Evaluator::new(&model, &registry);
+    let mut diff = |from: ValueSpec, to: ValueSpec, member: &str| {
+        eval.eval(&expr::call(
+            DATE_DIFF,
+            vec![from, to, expr::enum_value(unit, member)],
+        ))
+        .unwrap()
+    };
+    // testDateDiffWeeks: Sunday boundaries crossed, not days / 7.
+    for (from, to, weeks) in [
+        ((2015, 7, 5), (2015, 7, 5), 0),
+        ((2015, 7, 3), (2015, 7, 4), 0),
+        ((2015, 7, 4), (2015, 7, 5), 1),
+        ((2015, 7, 5), (2015, 7, 4), 0),
+        ((2015, 7, 12), (2015, 7, 5), -1),
+        ((2015, 8, 2), (2015, 7, 6), -3),
+        ((2015, 1, 1), (2016, 1, 1), 52),
+    ] {
+        assert_eq!(
+            diff(
+                strict(from.0, from.1, from.2),
+                strict(to.0, to.1, to.2),
+                "WEEKS"
+            ),
+            Value::Integer(weeks),
+            "{from:?} -> {to:?}"
+        );
+    }
+    // testDateDiffYears, testDateDiffMonths, testDateDiffDays
+    assert_eq!(
+        diff(strict(2015, 12, 31), strict(2016, 1, 1), "YEARS"),
+        Value::Integer(1)
+    );
+    assert_eq!(
+        diff(strict(2015, 12, 31), strict(2016, 2, 1), "MONTHS"),
+        Value::Integer(2)
+    );
+    assert_eq!(
+        diff(strict(2015, 2, 28), strict(2015, 3, 1), "DAYS"),
+        Value::Integer(1)
+    );
+    // testDateDiffHours
+    assert_eq!(
+        diff(
+            second_precision(2015, 7, 5, 10, 0, 0),
+            second_precision(2015, 7, 6, 12, 30, 0),
+            "HOURS"
+        ),
+        Value::Integer(26)
     );
 }
 
