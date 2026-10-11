@@ -1005,6 +1005,23 @@ impl NativeFunction for ToUpper {
     }
 }
 
+/// Pure `ltrim(String[1]): String[1]` — remove leading whitespace.
+#[derive(Debug)]
+pub struct Ltrim;
+
+impl NativeFunction for Ltrim {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("ltrim", &values, 1)?;
+        let s = values[0].as_string()?;
+        Ok(Evaluated::new(Value::String(SmolStr::new(s.trim_start()))))
+    }
+}
+
 fn i64_arg(v: &Value, ctx: &str) -> Result<i64, PureException> {
     match v {
         Value::Integer(n) => Ok(*n),
@@ -1046,6 +1063,7 @@ pub fn register(registry: &mut NativeRegistry) {
     registry.register("reverseString_String_1__String_1_", ReverseString);
     registry.register("toLower_String_1__String_1_", ToLower);
     registry.register("toUpper_String_1__String_1_", ToUpper);
+    registry.register("ltrim_String_1__String_1_", Ltrim);
 }
 
 #[cfg(test)]
@@ -1350,6 +1368,40 @@ mod tests {
         assert_eq!(upper("TesT"), Value::String("TEST".into()));
         assert_eq!(upper("TEST"), Value::String("TEST".into()));
         assert!(ToUpper.execute(&[lit_int(1)], &mut MockCtx).is_err());
+    }
+
+    // -- ltrim / rtrim --
+
+    #[test]
+    fn ltrim_strips_leading_whitespace() {
+        assert_eq!(
+            Ltrim
+                .execute(&[lit_str("  hi  ")], &mut MockCtx)
+                .unwrap()
+                .into_value(),
+            Value::String("hi  ".into())
+        );
+    }
+
+    #[test]
+    fn ltrim_empty_string() {
+        assert_eq!(
+            Ltrim
+                .execute(&[lit_str("")], &mut MockCtx)
+                .unwrap()
+                .into_value(),
+            Value::String("".into())
+        );
+    }
+
+    #[test]
+    fn ltrim_wrong_arg_count() {
+        assert!(Ltrim.execute(&[], &mut MockCtx).is_err());
+    }
+
+    #[test]
+    fn ltrim_type_mismatch() {
+        assert!(Ltrim.execute(&[lit_int(1)], &mut MockCtx).is_err());
     }
 
     // -- reverseString --
