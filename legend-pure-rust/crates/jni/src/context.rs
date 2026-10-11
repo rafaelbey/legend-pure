@@ -112,34 +112,87 @@ impl CachedClosure {
             open_variables: closure.captures.keys().cloned().collect(),
         }
     }
+}
 
-    /// The closure for this evaluation: the cached body over the values
-    /// the node captured this time, lowered as the full lowering lowers
-    /// them.
-    fn instantiate(
-        &self,
-        lowering: &mut Lowering,
-        handle: &ObjectHandle,
-    ) -> Result<LambdaClosure, LowerError> {
-        let node = Node::new(handle.clone());
-        let mut captures = HashMap::with_capacity(self.open_variables.len());
-        for name in &self.open_variables {
-            let Some(values) = node.captured_values(name) else {
-                return Err(LowerError::Unsupported(format!(
-                    "lowering captured variables (`{name}` of a lambda without its context)"
-                )));
-            };
-            let values: Vec<Value> = values.iter().cloned().collect();
-            captures.insert(
-                name.clone(),
-                lowering.lower_value(&Value::from_vec(values))?,
-            );
+/// One call's lowering of values through the closure cache: a lambda
+/// whose definition is cached is instantiated over the values it
+/// captured this time; any other value goes through the lowering's
+/// `lower_value`. Lambdas lowered in full are kept in `added` and enter
+/// the cache once the call's lowering is complete.
+struct CachedLowering<'c, 'm> {
+    lowering: Lowering<'m>,
+    model: &'m PureModel,
+    kinds: &'c FunctionKinds,
+    cache: &'c HashMap<i64, CachedClosure>,
+    added: Vec<(i64, CachedClosure)>,
+}
+
+impl CachedLowering<'_, '_> {
+    /// A value read from the node graph, made evaluator-native as
+    /// [`Lowering::lower_value`] makes it, lambdas through the cache.
+    fn lower_value(&mut self, value: &Value) -> Result<Value, LowerError> {
+        match value {
+            Value::Collection(items) => {
+                let mut out = Vec::with_capacity(items.len());
+                for item in items.iter() {
+                    out.push(self.lower_value(item)?);
+                }
+                Ok(Value::from_vec(out))
+            }
+            Value::Object(handle) => match self.kinds.of(self.model, handle) {
+                FunctionKind::Lambda { definition } => Ok(Value::Function(Box::new(
+                    FunctionValue::Lambda(self.closure(value, handle, definition)?),
+                ))),
+                _ => self.lowering.lower_value(value),
+            },
+            other => self.lowering.lower_value(other),
         }
-        Ok(LambdaClosure {
-            parameters: self.parameters.clone(),
-            body: self.body.clone(),
-            captures,
-        })
+    }
+
+    /// The closure for one lambda node: from the cache when its
+    /// definition is there, else lowered in full (and cached when the
+    /// engine names its definition).
+    fn closure(
+        &mut self,
+        value: &Value,
+        handle: &ObjectHandle,
+        definition: Option<i64>,
+    ) -> Result<LambdaClosure, LowerError> {
+        let cached = definition.and_then(|key| {
+            self.cache.get(&key).or_else(|| {
+                self.added
+                    .iter()
+                    .find(|(added, _)| *added == key)
+                    .map(|(_, cached)| cached)
+            })
+        });
+        if let Some(cached) = cached {
+            let parameters = cached.parameters.clone();
+            let body = cached.body.clone();
+            let open_variables = cached.open_variables.clone();
+            let node = Node::new(handle.clone());
+            let mut captures = HashMap::with_capacity(open_variables.len());
+            for name in open_variables {
+                let Some(values) = node.captured_values(&name) else {
+                    return Err(LowerError::Unsupported(format!(
+                        "lowering captured variables (`{name}` of a lambda without its context)"
+                    )));
+                };
+                let values: Vec<Value> = values.iter().cloned().collect();
+                let lowered = self.lower_value(&Value::from_vec(values))?;
+                captures.insert(name, lowered);
+            }
+            return Ok(LambdaClosure {
+                parameters,
+                body,
+                captures,
+            });
+        }
+        let closure = self.lowering.lower_root_lambda(value)?;
+        if let Some(key) = definition {
+            self.added.push((key, CachedClosure::of(&closure)));
+        }
+        Ok(closure)
     }
 }
 
@@ -326,7 +379,8 @@ impl JniContext {
 
     /// Phase A and B for one call: what the function node is (by its
     /// classifier's element id), its lowering and the lowering of every
-    /// argument, then the model's growth.
+    /// argument (lambdas through the closure cache), then the model's
+    /// growth and the cache's.
     fn lower_call(
         &mut self,
         function: &Value,
@@ -336,27 +390,26 @@ impl JniContext {
         let chunk = self
             .bridge_chunk
             .unwrap_or_else(|| u16::try_from(model.chunks.len()).expect("chunk ids are u16"));
-        let mut lowering = Lowering::new(model, chunk, model.chunk_len(chunk));
-        let mut to_cache = None;
-        let closures = &self.closures;
+        let mut lowering = CachedLowering {
+            lowering: Lowering::new(model, chunk, model.chunk_len(chunk)),
+            model,
+            kinds: &self.kinds,
+            cache: &self.closures,
+            added: Vec::new(),
+        };
         let lowered = (|| -> Result<(Callable, Vec<Value>), PureException> {
             let callable = match function {
                 Value::Element(_) => Callable::Value(function.clone()),
                 Value::Object(handle) => match self.kinds.of(model, handle) {
                     FunctionKind::Lambda { definition } => {
-                        let cached = definition.and_then(|key| closures.get(&key));
-                        let closure = match cached {
-                            Some(cached) => cached.instantiate(&mut lowering, handle)?,
-                            None => {
-                                let closure = lowering.lower_root_lambda(function)?;
-                                to_cache = definition.map(|key| (key, CachedClosure::of(&closure)));
-                                closure
-                            }
-                        };
-                        Callable::Value(Value::Function(Box::new(FunctionValue::Lambda(closure))))
+                        Callable::Value(Value::Function(Box::new(FunctionValue::Lambda(
+                            lowering.closure(function, handle, definition)?,
+                        ))))
                     }
                     FunctionKind::Native(key) => Callable::Native(key),
-                    FunctionKind::Defined => Callable::Value(lowering.lower_value(function)?),
+                    FunctionKind::Defined => {
+                        Callable::Value(lowering.lowering.lower_value(function)?)
+                    }
                     FunctionKind::Other(Some(path)) => {
                         return Err(PureException::from(PureRuntimeError::FunctionNotFound(
                             path,
@@ -385,13 +438,14 @@ impl JniContext {
             return Err(failure);
         }
         let lowered = lowered?;
+        let CachedLowering {
+            lowering, added, ..
+        } = lowering;
         let extension = lowering.into_extension();
         if !extension.is_empty() {
             self.grow_model(extension)?;
         }
-        if let Some((key, cached)) = to_cache {
-            self.closures.insert(key, cached);
-        }
+        self.closures.extend(added);
         Ok(lowered)
     }
 
