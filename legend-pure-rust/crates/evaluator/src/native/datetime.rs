@@ -483,6 +483,26 @@ fn has_precision_at_least(d: &PureDate, at: DatePrecision) -> bool {
     }
 }
 
+/// Pure `hasMonth(Date[1]): Boolean[1]`.
+#[derive(Debug)]
+pub struct HasMonth;
+
+impl NativeFunction for HasMonth {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("hasMonth", &values, 1)?;
+        let d = values[0].as_date()?;
+        Ok(Evaluated::new(Value::Boolean(has_precision_at_least(
+            &d,
+            DatePrecision::Month,
+        ))))
+    }
+}
+
 /// Pure `hasDay(Date[1]): Boolean[1]`.
 #[derive(Debug)]
 pub struct HasDay;
@@ -917,6 +937,7 @@ pub fn register(registry: &mut NativeRegistry) {
     );
     registry.register("adjust_Date_1__Integer_1__DurationUnit_1__Date_1_", Adjust);
 
+    registry.register("hasMonth_Date_1__Boolean_1_", HasMonth);
     registry.register("hasDay_Date_1__Boolean_1_", HasDay);
 
     registry.register("parseDate_String_1__Date_1_", ParseDate);

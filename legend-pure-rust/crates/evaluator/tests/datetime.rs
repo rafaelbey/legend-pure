@@ -37,6 +37,7 @@ const SECOND: &str = "second_Date_1__Integer_1_";
 const MONTH_NUMBER: &str = "monthNumber_Date_1__Integer_1_";
 const YEAR: &str = "year_Date_1__Integer_1_";
 const HAS_DAY: &str = "hasDay_Date_1__Boolean_1_";
+const HAS_MONTH: &str = "hasMonth_Date_1__Boolean_1_";
 
 /// `%y` — a year-only date.
 fn year_only(year: i16) -> ValueSpec {
@@ -429,4 +430,10 @@ fn year_reads_the_year_at_every_precision() {
 #[test]
 fn has_day_holds_from_day_precision() {
     assert_precision_predicate(HAS_DAY, 2);
+}
+
+/// testHasMonth: true from `%2015-04` down.
+#[test]
+fn has_month_holds_from_month_precision() {
+    assert_precision_predicate(HAS_MONTH, 1);
 }
