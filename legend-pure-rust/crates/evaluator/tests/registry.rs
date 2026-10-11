@@ -57,6 +57,8 @@ const FISHED: &[&str] = &[
     "indexOf_String_1__String_1__Integer_1_",
     "indexOf_String_1__String_1__Integer_1__Integer_1_",
     "startsWith_String_1__String_1__Boolean_1_",
+    "parseDecimal_String_1__Decimal_1_",
+    "parseDecimal_String_1__Integer_1__Integer_1__Decimal_1_",
     // testing
     "assert_Boolean_1__Function_1__Boolean_1_",
 ];
