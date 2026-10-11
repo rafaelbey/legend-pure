@@ -48,7 +48,7 @@
 
 use std::collections::HashMap;
 
-use im_rc::Vector as PVector;
+use crate::value::PVector;
 use legend_pure_metamodel::ids::ElementId;
 use legend_pure_metamodel::model::{Element, PureModel};
 use legend_pure_metamodel::source_info::SourceInfo;

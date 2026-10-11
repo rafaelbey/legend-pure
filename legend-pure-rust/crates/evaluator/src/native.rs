@@ -125,7 +125,7 @@ impl Evaluated {
 
     /// Flatten into a collection view. Scalar values become 1-element vectors.
     #[must_use]
-    pub fn to_collection(&self) -> im_rc::Vector<Value> {
+    pub fn to_collection(&self) -> crate::value::PVector<Value> {
         self.value.to_collection()
     }
 }
@@ -614,7 +614,7 @@ impl EvalContextTrait for MockCtx {
             ExprKind::StringLiteral(s) => Value::String(s.clone()),
             ExprKind::BooleanLiteral(b) => Value::Boolean(*b),
             ExprKind::Collection { elements } => {
-                let mut pv = im_rc::Vector::new();
+                let mut pv = crate::value::PVector::new();
                 for e in elements {
                     pv.push_back(self.evaluate(e)?.into_value());
                 }

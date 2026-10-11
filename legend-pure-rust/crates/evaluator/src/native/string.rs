@@ -1262,7 +1262,7 @@ mod tests {
                 .into_value()
                 .to_collection()
         };
-        let strings = |parts: &[&str]| -> im_rc::Vector<Value> {
+        let strings = |parts: &[&str]| -> crate::value::PVector<Value> {
             parts.iter().map(|p| Value::String((*p).into())).collect()
         };
         assert_eq!(split("Hello World", " "), strings(&["Hello", "World"]));
@@ -1555,7 +1555,7 @@ mod tests {
     /// never nests).
     #[test]
     fn pure_to_string_renders_a_wide_collection() {
-        let items: im_rc::Vector<Value> = (0..10_000).map(Value::Integer).collect();
+        let items: crate::value::PVector<Value> = (0..10_000).map(Value::Integer).collect();
         let v = Value::Collection(Box::new(items));
         let s = super::pure_to_string(&v, &mut MockCtx).expect("render must succeed");
         assert!(s.starts_with("[0, 1, 2,"));
@@ -1567,7 +1567,7 @@ mod tests {
     /// form (`[1, 2, 3]`, no quotes around integers).
     #[test]
     fn pure_to_string_shallow_collection_shape() {
-        let mut pv = im_rc::Vector::new();
+        let mut pv = crate::value::PVector::new();
         pv.push_back(Value::Integer(1));
         pv.push_back(Value::Integer(2));
         pv.push_back(Value::Integer(3));

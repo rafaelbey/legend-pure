@@ -19,7 +19,7 @@
 //! `removeDuplicates`, `sort`), `zip`, and the `Map` natives (`newMap`,
 //! `put`, `putAll`, `get`, `keys`, `values`).
 
-use im_rc::Vector as PVector;
+use crate::value::PVector;
 use legend_pure_metamodel::types::ValueSpec;
 use smol_str::SmolStr;
 

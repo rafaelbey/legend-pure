@@ -252,7 +252,7 @@ pub fn is_equality_key_stereotype(stereo: &StereotypeRef, equality_profile: Elem
 mod tests {
     use super::*;
     use crate::native::MockCtx;
-    use im_rc::Vector;
+    use crate::value::PVector as Vector;
 
     /// A flat collection of `len` integers ending in `last`: the widest
     /// shape Pure produces (collection literals flatten, so a collection
@@ -302,7 +302,7 @@ mod tests {
     /// branch, zero-end.
     #[test]
     fn empty_collection_equals_unit() {
-        let empty = Value::Collection(Box::new(Vector::new()));
+        let empty = Value::Collection(Box::default());
         let unit = Value::Unit;
         let ctx = MockCtx;
         assert!(values_equal(&ctx, &empty, &unit));

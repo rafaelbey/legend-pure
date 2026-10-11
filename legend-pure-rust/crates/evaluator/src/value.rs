@@ -20,7 +20,7 @@
 //! Date/time values use `jiff`-backed [`PureDate`] and
 //! [`StrictTime`] for native calendar arithmetic.
 //!
-//! Collections use persistent data structures (`im_rc::Vector`, `im_rc::HashMap`)
+//! Collections use a reference-counted vector ([`PVector`]) and maps `im_rc::HashMap`
 //! for structural sharing.
 //!
 //! Object references use `ObjectId` handles into the [`RuntimeHeap`](super::heap::RuntimeHeap),
@@ -31,7 +31,6 @@ use std::collections::HashMap;
 use std::fmt;
 use std::rc::Rc;
 
-use im_rc::Vector as PVector;
 use legend_pure_metamodel::ids::ElementId;
 use rust_decimal::Decimal;
 use smol_str::SmolStr;
@@ -52,6 +51,205 @@ pub struct MapState {
     /// because the key was absent. Surfaced to Pure code by the
     /// `getMapStats` native via a `MapStats` heap object.
     pub get_if_absent_counter: i64,
+}
+
+/// The sequence behind a collection value: a reference-counted vector,
+/// shared on clone and copied on the first write to a shared one. Pure
+/// collections are immutable and small, so building, iterating and
+/// indexing a plain vector beats a persistent structure several times
+/// over, and the one operation that loses, appending to a large shared
+/// collection, is a copy in Pure's own semantics.
+#[derive(Debug, PartialEq, Eq)]
+pub struct PVector<T>(Rc<Vec<T>>);
+
+impl<T> Clone for PVector<T> {
+    fn clone(&self) -> Self {
+        Self(Rc::clone(&self.0))
+    }
+}
+
+impl<T> Default for PVector<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<T> PVector<T> {
+    /// An empty sequence.
+    #[must_use]
+    pub fn new() -> Self {
+        Self(Rc::new(Vec::new()))
+    }
+
+    /// A sequence of one element.
+    #[must_use]
+    pub fn unit(item: T) -> Self {
+        Self(Rc::new(vec![item]))
+    }
+
+    /// Number of elements.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// Whether there are no elements.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// The elements in order.
+    pub fn iter(&self) -> std::slice::Iter<'_, T> {
+        self.0.iter()
+    }
+
+    /// The element at `index`, if any.
+    #[must_use]
+    pub fn get(&self, index: usize) -> Option<&T> {
+        self.0.get(index)
+    }
+
+    /// The first element, if any.
+    #[must_use]
+    pub fn front(&self) -> Option<&T> {
+        self.0.first()
+    }
+
+    /// The first element, if any.
+    #[must_use]
+    pub fn head(&self) -> Option<&T> {
+        self.0.first()
+    }
+
+    /// The last element, if any.
+    #[must_use]
+    pub fn back(&self) -> Option<&T> {
+        self.0.last()
+    }
+
+    /// The last element, if any.
+    #[must_use]
+    pub fn last(&self) -> Option<&T> {
+        self.0.last()
+    }
+
+    /// Whether two sequences share their storage.
+    #[must_use]
+    pub fn ptr_eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl<T: Clone> PVector<T> {
+    fn make_mut(&mut self) -> &mut Vec<T> {
+        Rc::make_mut(&mut self.0)
+    }
+
+    /// Append one element.
+    pub fn push_back(&mut self, item: T) {
+        self.make_mut().push(item);
+    }
+
+    /// Prepend one element.
+    pub fn push_front(&mut self, item: T) {
+        self.make_mut().insert(0, item);
+    }
+
+    /// Remove and return the first element.
+    pub fn pop_front(&mut self) -> Option<T> {
+        if self.0.is_empty() {
+            return None;
+        }
+        Some(self.make_mut().remove(0))
+    }
+
+    /// Remove and return the last element.
+    pub fn pop_back(&mut self) -> Option<T> {
+        if self.0.is_empty() {
+            return None;
+        }
+        self.make_mut().pop()
+    }
+
+    /// Insert `item` at `index`, shifting what follows.
+    ///
+    /// # Panics
+    /// `index` is past the end.
+    pub fn insert(&mut self, index: usize, item: T) {
+        self.make_mut().insert(index, item);
+    }
+
+    /// Append every element of `other`.
+    pub fn append(&mut self, other: Self) {
+        if self.0.is_empty() {
+            *self = other;
+            return;
+        }
+        match Rc::try_unwrap(other.0) {
+            Ok(items) => self.make_mut().extend(items),
+            Err(shared) => self.make_mut().extend(shared.iter().cloned()),
+        }
+    }
+
+    /// The first `count` elements, or all of them.
+    #[must_use]
+    pub fn take(&self, count: usize) -> Self {
+        self.0.iter().take(count).cloned().collect()
+    }
+
+    /// Everything after the first `count` elements.
+    #[must_use]
+    pub fn skip(&self, count: usize) -> Self {
+        self.0.iter().skip(count).cloned().collect()
+    }
+}
+
+impl<T: Clone> Extend<T> for PVector<T> {
+    fn extend<I: IntoIterator<Item = T>>(&mut self, items: I) {
+        self.make_mut().extend(items);
+    }
+}
+
+impl<T> std::ops::Index<usize> for PVector<T> {
+    type Output = T;
+
+    fn index(&self, index: usize) -> &T {
+        &self.0[index]
+    }
+}
+
+impl<T> FromIterator<T> for PVector<T> {
+    fn from_iter<I: IntoIterator<Item = T>>(items: I) -> Self {
+        Self(Rc::new(items.into_iter().collect()))
+    }
+}
+
+impl<T> From<Vec<T>> for PVector<T> {
+    fn from(items: Vec<T>) -> Self {
+        Self(Rc::new(items))
+    }
+}
+
+impl<'a, T> IntoIterator for &'a PVector<T> {
+    type Item = &'a T;
+    type IntoIter = std::slice::Iter<'a, T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter()
+    }
+}
+
+impl<T: Clone> IntoIterator for PVector<T> {
+    type Item = T;
+    type IntoIter = std::vec::IntoIter<T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        match Rc::try_unwrap(self.0) {
+            Ok(items) => items.into_iter(),
+            Err(shared) => shared.iter().cloned().collect::<Vec<T>>().into_iter(),
+        }
+    }
 }
 
 /// A runtime value produced by evaluating a Pure expression.
@@ -624,7 +822,7 @@ impl Value {
         match values.len() {
             0 => Value::Unit,
             1 => values.pop().unwrap_or(Value::Unit),
-            _ => Value::Collection(Box::new(PVector::from_iter(values))),
+            _ => Value::Collection(Box::new(PVector::from(values))),
         }
     }
 
@@ -782,14 +980,17 @@ mod tests {
     }
 
     #[test]
-    fn value_collection_persistent() {
+    fn a_shared_collection_is_copied_on_write_and_the_original_kept() {
         let v1 = PVector::<Value>::new();
-        let v2 = v1.clone() + PVector::unit(Value::Integer(1));
-        let v3 = v2.clone() + PVector::unit(Value::Integer(2));
+        let mut v2 = v1.clone();
+        v2.push_back(Value::Integer(1));
+        let mut v3 = v2.clone();
+        v3.push_back(Value::Integer(2));
 
         assert_eq!(v1.len(), 0);
         assert_eq!(v2.len(), 1);
         assert_eq!(v3.len(), 2);
+        assert!(!v2.ptr_eq(&v3));
     }
 
     #[test]
@@ -848,7 +1049,7 @@ mod tests {
 
     #[test]
     fn to_one_empty_collection_errors() {
-        let v = Value::Collection(Box::new(PVector::new()));
+        let v = Value::Collection(Box::default());
         assert!(v.to_one().is_err());
     }
 
@@ -879,7 +1080,7 @@ mod tests {
 
     #[test]
     fn to_zero_one_empty_collection_is_none() {
-        let v = Value::Collection(Box::new(PVector::new()));
+        let v = Value::Collection(Box::default());
         assert!(v.to_zero_one().unwrap().is_none());
     }
 
@@ -934,7 +1135,7 @@ mod tests {
 
     #[test]
     fn is_empty_empty_collection() {
-        assert!(Value::Collection(Box::new(PVector::new())).is_empty());
+        assert!(Value::Collection(Box::default()).is_empty());
     }
 
     #[test]
