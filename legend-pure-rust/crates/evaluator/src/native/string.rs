@@ -967,6 +967,25 @@ impl NativeFunction for ReverseString {
     }
 }
 
+/// Pure `toLower(String[1]): String[1]`
+#[derive(Debug)]
+pub struct ToLower;
+
+impl NativeFunction for ToLower {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("toLower", &values, 1)?;
+        let s = values[0].as_string()?;
+        Ok(Evaluated::new(Value::String(SmolStr::new(
+            s.to_lowercase(),
+        ))))
+    }
+}
+
 fn i64_arg(v: &Value, ctx: &str) -> Result<i64, PureException> {
     match v {
         Value::Integer(n) => Ok(*n),
@@ -1006,6 +1025,7 @@ pub fn register(registry: &mut NativeRegistry) {
     registry.register("substring_String_1__Integer_1__String_1_", Substring);
     registry.register("replace_String_1__String_1__String_1__String_1_", Replace);
     registry.register("reverseString_String_1__String_1_", ReverseString);
+    registry.register("toLower_String_1__String_1_", ToLower);
 }
 
 #[cfg(test)]
@@ -1284,6 +1304,17 @@ mod tests {
             Substring
                 .execute(&[lit_str("a"), lit_str("b"), lit_int(1)], &mut MockCtx)
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn string_to_lower() {
+        assert_eq!(
+            ToLower
+                .execute(&[lit_str("Hello")], &mut MockCtx)
+                .unwrap()
+                .into_value(),
+            Value::String("hello".into())
         );
     }
 
