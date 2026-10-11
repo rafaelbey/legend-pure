@@ -61,9 +61,8 @@ failure keeps its committed entry; an excluded test that now passes is dropped. 
 reproduces the files byte for byte. Review the diff, then `verify`.
 
 State: `Rust_JNI essential: 320 / 327`, `Rust_JNI grammar: 132 / 136` on the interpreted engine;
-`318 / 327` and `132 / 136` on the compiled engine, whose extra failures are the three `fold` tests:
-`copy` keeps the copy's source information in a slot the compiled conversion refuses as an undeclared
-property. The lambda is
+`321 / 327` and `132 / 136` on the compiled engine (one more than interpreted: `testBigFloatAbs`
+passes there, the compiled engine's `Float` being a `double` as Rust's is). The lambda is
 lowered through the bridge (`crates/evaluator/src/lower/`): its body, the functions it calls, the
 classes and enumerations it references, and the variables it captured (`RustNodeBridge.capturedValue`,
 read through the host from the interpreted engine's `LambdaWithContext` or the compiled lambda's open

@@ -36,9 +36,10 @@ from it, `platform/pure/grammar/m3.pure`, as its bootstrap.
   state `Rust_JNI essential: 320 / 327`, `Rust_JNI grammar: 132 / 136`. The module's manifests
   rank what is left by kind: `FunctionNotFound:` (nothing registered),
   `NotImplemented:` (registered under its key, body not fished), `Unsupported:`
-  (lowering or value-shape gap), then bare Pure error texts. Next: Step 2b (the
-  evaluator's own cost: clone, operands, variable slots, dispatch), then natives
-  round 2 on that residue, then Step 3 (PELT); Steps 3–7 are in the plan.
+  (lowering or value-shape gap), then bare Pure error texts. Step 2b (the
+  evaluator's own cost) and the bridge's cost are done: a PCT test through
+  `Rust_JNI` takes 1.15x the interpreted engine's own adapter. Next: Step 3 (PELT)
+  with the `Directory` trait of Step 4; Steps 3–7 are in the plan.
 - Build and test: `cargo build --workspace`, `cargo test --workspace` inside
   `legend-pure-rust/`; then `mvn -pl legend-pure-runtime/legend-pure-runtime-rust-evaluator
   clean verify` for the boundary tests and the PCT suites. CI: `.github/workflows/rust.yml`.
@@ -51,7 +52,7 @@ from it, `platform/pure/grammar/m3.pure`, as its bootstrap.
   `evalRust` and the `Rust_JNI` PCT adapter; the interpreted engine implements `evalRust`
   through the rust-evaluator module's extension, the compiled engine through its
   `EvalRustExecutor` hook, which the same module provides. Both engines run the corpus:
-  interpreted 320 / 327 and 132 / 136, compiled 318 / 327 and 132 / 136.
+  interpreted 320 / 327 and 132 / 136, compiled 321 / 327 and 132 / 136.
 - Root installs need `mvn clean install` (the PAR plugin trips on a stale descriptor
   otherwise); JDK 11 or 17.
 

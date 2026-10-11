@@ -2,18 +2,6 @@
   "adapter": "meta::pure::test::pct::testAdapterForRustExecution_Function_1__X_o_",
   "exclusions": [
     {
-      "test": "meta::pure::functions::collection::tests::fold::testFoldFiltering_Function_1__Boolean_1_",
-      "expectedError": "Execution error at ??, \"Unsupported: property `sourceInformation` of a Rust meta::pure::functions::collection::tests::fold::FO_Person object, which the class does not declare, crossing into the compiled engine\""
-    },
-    {
-      "test": "meta::pure::functions::collection::tests::fold::testFoldToMany_Function_1__Boolean_1_",
-      "expectedError": "Execution error at ??, \"Unsupported: property `sourceInformation` of a Rust meta::pure::functions::collection::tests::fold::FO_Person object, which the class does not declare, crossing into the compiled engine\""
-    },
-    {
-      "test": "meta::pure::functions::collection::tests::fold::testFold_Function_1__Boolean_1_",
-      "expectedError": "Execution error at ??, \"Unsupported: property `sourceInformation` of a Rust meta::pure::functions::collection::tests::fold::FO_Person object, which the class does not declare, crossing into the compiled engine\""
-    },
-    {
       "test": "meta::pure::functions::date::tests::testAdjustByDaysBigNumber_Function_1__Boolean_1_",
       "expectedError": "Execution error at (resource:/platform/pure/essential/date/operation/adjust.pure line:100 column:58), \"Date overflow: parameter 'days' is not in the required range of -7304484..=7304484\""
     },
