@@ -30,6 +30,7 @@ use rust_decimal::Decimal;
 const ROUND: &str = "round_Number_1__Integer_1_";
 const ROUND_DECIMAL: &str = "round_Decimal_1__Integer_1__Decimal_1_";
 const ROUND_FLOAT: &str = "round_Float_1__Integer_1__Float_1_";
+const TO_DECIMAL: &str = "toDecimal_Number_1__Decimal_1_";
 const LESS_THAN: &str = "lessThan_Number_1__Number_1__Boolean_1_";
 const REM: &str = "rem_Number_1__Number_1__Number_1_";
 const DIVIDE: &str = "divide_Number_1__Number_1__Float_1_";
@@ -174,5 +175,18 @@ fn divide_returns_float_and_the_scaled_overload_returns_decimal() {
             ]
         )),
         Value::Decimal(dec("-31.42"))
+    );
+}
+
+#[test]
+fn to_decimal_keeps_the_float_s_shortest_form() {
+    // testDoubleToDecimal: `toDecimal(3.8) == 3.8D`, not 3.7999999999999998…
+    assert_eq!(
+        run(&expr::call(TO_DECIMAL, vec![expr::float(3.8)])),
+        Value::Decimal(dec("3.8"))
+    );
+    assert_eq!(
+        run(&expr::call(TO_DECIMAL, vec![expr::int(8)])),
+        Value::Decimal(dec("8"))
     );
 }

@@ -25,7 +25,7 @@
 
 use legend_pure_metamodel::types::ValueSpec;
 use rust_decimal::Decimal;
-use rust_decimal::prelude::ToPrimitive;
+use rust_decimal::prelude::{FromPrimitive, ToPrimitive};
 
 use crate::error::{PureException, PureRuntimeError};
 use crate::native::{
@@ -199,6 +199,47 @@ fn scale_arg(v: &Value) -> Result<u32, PureException> {
     }
 }
 
+/// Pure `toDecimal(Number[1]):Decimal[1]` — numeric → Decimal coercion.
+///
+/// `Decimal` inputs pass through unchanged. `Integer` is exact via
+/// [`Decimal::from`]. `Float` routes through [`Decimal::from_f64`]
+/// (note: NOT `_retain`) — `_retain` preserves f64's full binary
+/// expansion (`3.8_f64 → 3.7999999999999998…`), but Java Pure's
+/// `BigDecimal.valueOf(double)` rounds to the round-trip canonical
+/// form (`3.8`). `from_f64` matches that contract — same shape as
+/// `Decimal::from_str(&f.to_string())` but without the string
+/// round-trip. NaN / infinity return `None` and surface as an
+/// `EvaluationError`.
+#[derive(Debug)]
+pub struct ToDecimal;
+
+impl NativeFunction for ToDecimal {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("toDecimal", &values, 1)?;
+        let v = match &values[0] {
+            Value::Decimal(d) => Ok(Value::Decimal(*d)),
+            Value::Integer(i) => Ok(Value::Decimal(Decimal::from(*i))),
+            Value::Float(f) => Decimal::from_f64(*f)
+                .map(Value::Decimal)
+                .ok_or_else(|| {
+                    PureRuntimeError::EvaluationError(format!(
+                        "toDecimal: cannot convert Float {f} to Decimal"
+                    ))
+                })
+                .map_err(PureException::from),
+            other => Err(PureException::from(PureRuntimeError::type_mismatch(
+                "Number", other,
+            ))),
+        }?;
+        Ok(Evaluated::new(v))
+    }
+}
+
 /// Register the fished mathematical natives under their mangled Pure FQNs.
 pub fn register(registry: &mut NativeRegistry) {
     // rounding
@@ -207,6 +248,9 @@ pub fn register(registry: &mut NativeRegistry) {
     registry.register("round_Number_1__Integer_1_", Round);
     registry.register("round_Decimal_1__Integer_1__Decimal_1_", Round);
     registry.register("round_Float_1__Integer_1__Float_1_", Round);
+
+    // numeric conversion
+    registry.register("toDecimal_Number_1__Decimal_1_", ToDecimal);
 }
 
 #[cfg(test)]
@@ -342,6 +386,37 @@ mod tests {
     #[test]
     fn round_type_mismatch() {
         assert!(Round.execute(&[lit_str("x")], &mut MockCtx).is_err());
+    }
+
+    #[test]
+    fn to_decimal_from_integer() {
+        let r = ToDecimal.execute(&[lit_int(5)], &mut MockCtx).unwrap();
+        assert_eq!(r.into_value(), Value::Decimal(Decimal::from(5)));
+    }
+
+    #[test]
+    fn to_decimal_from_float() {
+        let r = ToDecimal.execute(&[lit_float(1.5)], &mut MockCtx).unwrap();
+        match r.into_value() {
+            Value::Decimal(d) => assert_eq!(d, Decimal::from_str("1.5").unwrap()),
+            other => panic!("expected Decimal, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn to_decimal_nan_errors() {
+        let r = ToDecimal.execute(&[lit_float(f64::NAN)], &mut MockCtx);
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn to_decimal_wrong_arg_count() {
+        assert!(ToDecimal.execute(&[], &mut MockCtx).is_err());
+    }
+
+    #[test]
+    fn to_decimal_type_mismatch() {
+        assert!(ToDecimal.execute(&[lit_str("x")], &mut MockCtx).is_err());
     }
 
     #[test]
