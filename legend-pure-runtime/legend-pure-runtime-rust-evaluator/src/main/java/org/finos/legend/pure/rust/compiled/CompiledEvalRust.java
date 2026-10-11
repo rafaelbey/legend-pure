@@ -31,7 +31,9 @@ import java.util.Map;
 /**
  * The compiled engine's {@code evalRust}: the function value (a compiled
  * lambda, which is also its graph node) crosses the boundary as a
- * {@link CoreInstance} and the results come back as compiled values.
+ * {@link CoreInstance} and the results come back as compiled values: plain
+ * Java values for primitives and maps, generated-class instances for Rust
+ * objects ({@link CompiledObjects}).
  * One evaluator per {@link CompiledExecutionSupport}, created on first use.
  * Discovered through {@code META-INF/services}.
  */
@@ -61,12 +63,20 @@ public final class CompiledEvalRust implements EvalRustExecutor
             discard(executionSupport, evaluator);
             throw e;
         }
-        MutableList<Object> values = Lists.mutable.ofInitialCapacity(results.length);
-        for (CoreInstance result : results)
+        CompiledObjects objects = new CompiledObjects((CompiledExecutionSupport) executionSupport);
+        try
         {
-            values.add(CompiledValue.unwrap(result));
+            MutableList<Object> values = Lists.mutable.ofInitialCapacity(results.length);
+            for (CoreInstance result : results)
+            {
+                values.add(objects.toCompiled(result));
+            }
+            return values;
         }
-        return values;
+        finally
+        {
+            objects.release();
+        }
     }
 
     private synchronized PureRustEvaluator evaluator(ExecutionSupport executionSupport)

@@ -2,14 +2,6 @@
   "adapter": "meta::pure::test::pct::testAdapterForRustExecution_Function_1__X_o_",
   "exclusions": [
     {
-      "test": "meta::pure::functions::collection::tests::concatenate::testConcatenateTypeInference_Function_1__Boolean_1_",
-      "expectedError": "Execution error at ??, \"ERROR unhandled type for value: Anonymous_StripedId instance meta::pure::functions::collection::tests::model::CO_Address (instance of class org.finos.legend.pure.rust.RustCoreInstance)\""
-    },
-    {
-      "test": "meta::pure::functions::collection::tests::drop::testDropInList_Function_1__Boolean_1_",
-      "expectedError": "Execution error at (resource:/platform/pure/essential/collection/slice/drop.pure lines:69c71-72c1), \"Unexpected error executing function with params [testAdapterForRustExecution_Function_1__X_o_]\""
-    },
-    {
       "test": "meta::pure::functions::collection::tests::fold::testFoldFiltering_Function_1__Boolean_1_",
       "expectedError": "Execution error at (resource:/platform/pure/essential/collection/iteration/fold.pure lines:93c71-99c1), \"Unexpected error executing function with params [testAdapterForRustExecution_Function_1__X_o_]\""
     },
@@ -20,38 +12,6 @@
     {
       "test": "meta::pure::functions::collection::tests::fold::testFold_Function_1__Boolean_1_",
       "expectedError": "Execution error at (resource:/platform/pure/essential/collection/iteration/fold.pure lines:78c71-83c1), \"Unexpected error executing function with params [testAdapterForRustExecution_Function_1__X_o_]\""
-    },
-    {
-      "test": "meta::pure::functions::collection::tests::slice::testSliceInList_Function_1__Boolean_1_",
-      "expectedError": "Execution error at (resource:/platform/pure/essential/collection/slice/slice.pure lines:46c72-49c1), \"Unexpected error executing function with params [testAdapterForRustExecution_Function_1__X_o_]\""
-    },
-    {
-      "test": "meta::pure::functions::collection::tests::take::testTakeInList_Function_1__Boolean_1_",
-      "expectedError": "Execution error at (resource:/platform/pure/essential/collection/slice/take.pure lines:69c71-72c1), \"Unexpected error executing function with params [testAdapterForRustExecution_Function_1__X_o_]\""
-    },
-    {
-      "test": "meta::pure::functions::collection::tests::zip::testZipBothListsAreOfPairs_Function_1__Boolean_1_",
-      "expectedError": "Execution error at ??, \"ERROR unhandled type for value: Anonymous_StripedId instance meta::pure::functions::collection::Pair (instance of class org.finos.legend.pure.rust.RustCoreInstance)\""
-    },
-    {
-      "test": "meta::pure::functions::collection::tests::zip::testZipBothListsSameLength_Function_1__Boolean_1_",
-      "expectedError": "Execution error at ??, \"ERROR unhandled type for value: Anonymous_StripedId instance meta::pure::functions::collection::Pair (instance of class org.finos.legend.pure.rust.RustCoreInstance)\""
-    },
-    {
-      "test": "meta::pure::functions::collection::tests::zip::testZipFirstListLonger_Function_1__Boolean_1_",
-      "expectedError": "Execution error at ??, \"ERROR unhandled type for value: Anonymous_StripedId instance meta::pure::functions::collection::Pair (instance of class org.finos.legend.pure.rust.RustCoreInstance)\""
-    },
-    {
-      "test": "meta::pure::functions::collection::tests::zip::testZipFirstListsIsOfPairs_Function_1__Boolean_1_",
-      "expectedError": "Execution error at ??, \"ERROR unhandled type for value: Anonymous_StripedId instance meta::pure::functions::collection::Pair (instance of class org.finos.legend.pure.rust.RustCoreInstance)\""
-    },
-    {
-      "test": "meta::pure::functions::collection::tests::zip::testZipSecondListLonger_Function_1__Boolean_1_",
-      "expectedError": "Execution error at ??, \"ERROR unhandled type for value: Anonymous_StripedId instance meta::pure::functions::collection::Pair (instance of class org.finos.legend.pure.rust.RustCoreInstance)\""
-    },
-    {
-      "test": "meta::pure::functions::collection::tests::zip::testZipSecondListsIsOfPairs_Function_1__Boolean_1_",
-      "expectedError": "Execution error at ??, \"ERROR unhandled type for value: Anonymous_StripedId instance meta::pure::functions::collection::Pair (instance of class org.finos.legend.pure.rust.RustCoreInstance)\""
     },
     {
       "test": "meta::pure::functions::date::tests::testAdjustByDaysBigNumber_Function_1__Boolean_1_",
