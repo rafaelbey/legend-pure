@@ -99,9 +99,7 @@ impl Lowering<'_> {
             .name()
             .ok_or_else(|| Self::read_error(node, "missing name"))?;
         let is_native = self.is(node, self.ids.native_function);
-        let id = self
-            .ext
-            .reserve(node.key(), &path, mangled.clone(), node.span());
+        let id = self.ext.reserve(node, &path, mangled.clone(), node.span());
         let function_name = node
             .string("functionName")
             .unwrap_or_else(|| SmolStr::new(mangled.split('_').next().unwrap_or(mangled.as_str())));
@@ -190,7 +188,7 @@ impl Lowering<'_> {
         let name = node
             .name()
             .ok_or_else(|| Self::read_error(node, "missing name"))?;
-        let id = self.ext.reserve(node.key(), &path, name, node.span());
+        let id = self.ext.reserve(node, &path, name, node.span());
         let type_parameters = node
             .nodes("typeParameters")
             .iter()
@@ -310,7 +308,7 @@ impl Lowering<'_> {
         let name = node
             .name()
             .ok_or_else(|| Self::read_error(node, "missing name"))?;
-        let id = self.ext.reserve(node.key(), &path, name, node.span());
+        let id = self.ext.reserve(node, &path, name, node.span());
         let values = node
             .nodes("values")
             .iter()

@@ -129,6 +129,9 @@ pub struct Lowering<'m> {
     /// Specs already built for a node, so a node reached twice (a lambda
     /// that is both nested and captured) lowers once.
     specs: HashMap<NodeKey, ValueSpec>,
+    /// Keeps every node in `specs` alive, so its address stays its own
+    /// for as long as the key is used.
+    pinned: Vec<crate::heap::ObjectHandle>,
 }
 
 impl<'m> Lowering<'m> {
@@ -141,6 +144,7 @@ impl<'m> Lowering<'m> {
             ids: M3Ids::resolve(model),
             ext: ModelExtension::new(chunk_id, base_idx),
             specs: HashMap::new(),
+            pinned: Vec::new(),
         }
     }
 

@@ -76,6 +76,7 @@ impl Lowering<'_> {
             return Err(Self::unsupported(node, "as an expression"));
         };
         self.specs.insert(node.key(), spec.clone());
+        self.pinned.push(node.handle().clone());
         Ok(spec)
     }
 

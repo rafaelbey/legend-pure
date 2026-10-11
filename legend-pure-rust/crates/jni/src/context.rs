@@ -53,6 +53,9 @@ pub struct JniContext {
     pub shared: Rc<BridgeShared>,
     /// The chunk the lowering appends to, once the model first grew.
     bridge_chunk: Option<u16>,
+    /// Set once a panic unwound through an entry point: the evaluator's
+    /// state is unknown from then on and every call is refused.
+    pub poisoned: bool,
 }
 
 impl JniContext {
@@ -85,6 +88,7 @@ impl JniContext {
             evaluator: evaluator_ptr,
             shared,
             bridge_chunk: None,
+            poisoned: false,
         }
     }
 
@@ -159,10 +163,13 @@ impl JniContext {
                 // Every borrow of the model is gone: the lowering was
                 // consumed above and the evaluator is dropped here.
                 unsafe { drop(Box::from_raw(self.evaluator)) };
-                self.bridge_chunk = Some(extension.chunk_id());
-                extension.apply(unsafe { &mut *self.model });
+                self.evaluator = std::ptr::null_mut();
+                let chunk_id = extension.chunk_id();
+                let applied = extension.apply(unsafe { &mut *self.model });
                 let evaluator = Evaluator::new(unsafe { &*self.model }, unsafe { &*self.registry });
                 self.evaluator = Box::into_raw(Box::new(evaluator)).cast::<Evaluator<'static>>();
+                applied?;
+                self.bridge_chunk = Some(chunk_id);
             }
             closure
         };
@@ -289,7 +296,9 @@ fn java_function(handle: &ObjectHandle) -> Option<(SmolStr, SmolStr, SmolStr)> {
 impl Drop for JniContext {
     fn drop(&mut self) {
         unsafe {
-            drop(Box::from_raw(self.evaluator));
+            if !self.evaluator.is_null() {
+                drop(Box::from_raw(self.evaluator));
+            }
             drop(Box::from_raw(self.registry));
             drop(Box::from_raw(self.model));
         }

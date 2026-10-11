@@ -16,8 +16,14 @@
 //! produces (see `lower::node_builders::m3`) lowered into the evaluator's
 //! tree and model, then run. No JVM.
 
+use std::cell::RefCell;
+use std::rc::Rc;
+
+use im_rc::Vector as PVector;
 use legend_pure_evaluator::builders::ModelBuilder;
+use legend_pure_evaluator::error::PureRuntimeError;
 use legend_pure_evaluator::eval::Evaluator;
+use legend_pure_evaluator::heap::{HeapEntry, TypedObject};
 use legend_pure_evaluator::lower::node_builders::{TestNode, m3};
 use legend_pure_evaluator::lower::{LowerError, Lowering};
 use legend_pure_evaluator::native::NativeRegistry;
@@ -79,7 +85,7 @@ fn lower_and_run(model: &mut PureModel, root: &Value) -> Result<Value, LowerErro
     let chunk = u16::try_from(model.chunks.len()).unwrap();
     let mut lowering = Lowering::new(model, chunk, model.chunk_len(chunk));
     let closure = lowering.lower_root_lambda(root)?;
-    lowering.into_extension().apply(model);
+    lowering.into_extension().apply(model).expect("apply");
     Ok(run(model, closure))
 }
 
@@ -117,7 +123,7 @@ fn a_native_call_lowers_to_an_element_named_by_its_mangled_signature() {
 
     let extension = lowering.into_extension();
     assert_eq!(extension.len(), 1);
-    extension.apply(&mut model);
+    extension.apply(&mut model).expect("apply");
     assert_eq!(model.chunks.len(), before + 1);
     assert_eq!(
         model.get_node(function).name,
@@ -160,7 +166,7 @@ fn the_bridge_chunk_is_whatever_comes_after_the_model_s_chunks() {
     let closure = lowering.lower_root_lambda(&root(body)).unwrap();
     let extension = lowering.into_extension();
     assert_eq!(extension.len(), 1);
-    extension.apply(&mut model);
+    extension.apply(&mut model).expect("apply");
     assert_eq!(model.chunk_len(2), 2);
     assert_eq!(
         model.resolve_fqn_str(EQ),
@@ -219,7 +225,7 @@ fn nested_lambdas_lower_bare_so_if_takes_a_branch() {
     assert!(
         matches!(&*call.arguments[1].kind, ExprKind::Lambda { parameters, body } if parameters.is_empty() && body.len() == 1)
     );
-    lowering.into_extension().apply(&mut model);
+    lowering.into_extension().apply(&mut model).expect("apply");
     assert_eq!(run(&model, closure), Value::String("yes".into()));
 }
 
@@ -247,7 +253,7 @@ fn let_keeps_its_simple_name_for_the_free_variable_walk() {
         matches!(&*closure.body[0].kind, ExprKind::FunctionCall(c) if c.function_name == "letFunction")
     );
     assert!(matches!(&*closure.body[1].kind, ExprKind::Variable { name } if name == "x"));
-    lowering.into_extension().apply(&mut model);
+    lowering.into_extension().apply(&mut model).expect("apply");
     assert_eq!(run(&model, closure), Value::Integer(7));
 }
 
@@ -461,7 +467,7 @@ fn mutually_recursive_functions_lower_once_each() {
     let closure = lowering.lower_root_lambda(&lambda).unwrap();
     let extension = lowering.into_extension();
     assert_eq!(extension.len(), 5);
-    extension.apply(&mut model);
+    extension.apply(&mut model).expect("apply");
     assert_eq!(run(&model, closure), Value::Boolean(true));
 }
 
@@ -504,7 +510,7 @@ fn captured_variables_become_the_closure_s_captures() {
     let mut lowering = Lowering::new(&model, chunk, 0);
     let closure = lowering.lower_root_lambda(&lambda).unwrap();
     assert_eq!(closure.captures.get("k"), Some(&Value::Integer(41)));
-    lowering.into_extension().apply(&mut model);
+    lowering.into_extension().apply(&mut model).expect("apply");
     assert_eq!(run(&model, closure), Value::Integer(42));
 }
 
@@ -537,7 +543,7 @@ fn a_captured_lambda_is_lowered_into_a_closure() {
         assert_eq!(g.parameters[0].name, "x");
         (f.clone(), lowering.into_extension())
     };
-    extension.apply(&mut model);
+    extension.apply(&mut model).expect("apply");
     let registry = NativeRegistry::standard();
     let mut eval = Evaluator::new(&model, &registry);
     eval.context_mut().push_scope();
@@ -545,6 +551,98 @@ fn a_captured_lambda_is_lowered_into_a_closure() {
         .apply_callable(&Value::Function(f), &[Value::Integer(5)])
         .unwrap();
     assert_eq!(applied, Value::Integer(6));
+}
+
+/// A capture source that, like a Java-backed lambda, allocates fresh
+/// nodes on every read and keeps none of them.
+struct FreshCaptures {
+    inner: Value,
+    f_len: usize,
+    g_len: usize,
+}
+
+impl TypedObject for FreshCaptures {
+    fn classifier_path(&self) -> &str {
+        legend_pure_evaluator::m3_paths::LAMBDA_FUNCTION
+    }
+
+    fn get_property(&self, name: &str) -> Option<Value> {
+        self.get_property_values(name).head().cloned()
+    }
+
+    fn get_property_values(&self, name: &str) -> PVector<Value> {
+        match &self.inner {
+            Value::Object(h) => match &*h.borrow() {
+                HeapEntry::Typed(o) => o.get_property_values(name),
+                HeapEntry::Dynamic(_) => PVector::new(),
+            },
+            _ => PVector::new(),
+        }
+    }
+
+    fn set_property(&mut self, _name: &str, _value: Value) -> Result<(), PureRuntimeError> {
+        Err(PureRuntimeError::Unsupported("read-only".into()))
+    }
+
+    fn captured_values(&self, name: &str) -> Option<PVector<Value>> {
+        let lambda = if name == "f" {
+            let body = (0..self.f_len).map(|i| int(i64::try_from(i).unwrap()));
+            m3::lambda(Vec::new(), body.collect(), integer(), one()).build()
+        } else {
+            let churn: Vec<Value> = (0..self.g_len).map(|_| many()).collect();
+            drop(churn);
+            let body = (0..self.g_len).map(|_| str_lit("from-g"));
+            m3::lambda(Vec::new(), body.collect(), string_type(), one()).build()
+        };
+        Some(std::iter::once(lambda).collect())
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+}
+
+#[test]
+fn a_node_freed_mid_lowering_never_lends_its_cached_spec_to_its_successor() {
+    let model = PureModel::bootstrapped();
+    for f_len in 1..6 {
+        for g_len in 1..6 {
+            for _ in 0..40 {
+                let inner = m3::lambda(Vec::new(), vec![str_lit("unused")], string_type(), one())
+                    .captured("f", vec![])
+                    .captured("g", vec![])
+                    .build();
+                let root = Value::Object(Rc::new(RefCell::new(HeapEntry::Typed(Box::new(
+                    FreshCaptures {
+                        inner,
+                        f_len,
+                        g_len,
+                    },
+                )))));
+                let mut lowering = Lowering::new(&model, 1, 0);
+                let closure = lowering.lower_root_lambda(&root).unwrap();
+                let Some(Value::Function(g)) = closure.captures.get("g") else {
+                    panic!("g was not captured as a function");
+                };
+                let FunctionValue::Lambda(g) = &**g else {
+                    panic!("g is not a lambda");
+                };
+                assert_eq!(g.body.len(), g_len);
+                for spec in g.body.iter() {
+                    assert!(
+                        matches!(&*spec.kind, ExprKind::StringLiteral(s) if s == "from-g"),
+                        "g's body carries another node's spec: {:?} (f_len={f_len} g_len={g_len} f={:?})",
+                        spec.kind,
+                        closure.captures.get("f")
+                    );
+                }
+            }
+        }
+    }
 }
 
 const NEW_KE: &str = "meta::pure::functions::lang::new_Class_1__String_1__KeyExpression_MANY__T_1_";
@@ -680,7 +778,7 @@ fn a_class_construction_lowers_the_class_and_builds_through_the_platform_new() {
         matches!(&*new_call.arguments[2].kind, ExprKind::KeyExpression { key, add: false, .. } if key == "firstName")
     );
     let extension = lowering.into_extension();
-    extension.apply(&mut model);
+    extension.apply(&mut model).expect("apply");
     let person_id = model
         .resolve_fqn_str("my::model::Person")
         .expect("class lowered");
@@ -727,7 +825,7 @@ fn an_enum_value_lowers_its_enumeration_first() {
     };
     assert_eq!(value, "GREEN");
     let enum_id = *enum_element;
-    lowering.into_extension().apply(&mut model);
+    lowering.into_extension().apply(&mut model).expect("apply");
     assert_eq!(model.resolve_fqn_str("my::model::Colour"), Some(enum_id));
     assert!(matches!(model.get_element(enum_id), Element::Enumeration(e) if e.values.len() == 2));
     assert_eq!(
@@ -755,7 +853,7 @@ fn a_type_literal_lowers_to_a_type_reference() {
         &*closure.body[0].kind,
         ExprKind::TypeReference { .. }
     ));
-    lowering.into_extension().apply(&mut model);
+    lowering.into_extension().apply(&mut model).expect("apply");
     let person_id = model.resolve_fqn_str("my::model::Person").unwrap();
     assert_eq!(run(&model, closure), Value::Element(person_id));
 }
