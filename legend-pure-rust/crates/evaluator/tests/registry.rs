@@ -49,6 +49,7 @@ const FISHED: &[&str] = &[
     "equal_Any_MANY__Any_MANY__Boolean_1_",
     "lessThan_Number_1__Number_1__Boolean_1_",
     "lessThanEqual_Number_1__Number_1__Boolean_1_",
+    "compare_T_1__T_1__Integer_1_",
     // lang
     "letFunction_String_1__T_m__T_m_",
     "if_Boolean_1__Function_1__Function_1__T_m_",

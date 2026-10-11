@@ -32,6 +32,7 @@ const ROUND_DECIMAL: &str = "round_Decimal_1__Integer_1__Decimal_1_";
 const ROUND_FLOAT: &str = "round_Float_1__Integer_1__Float_1_";
 const TO_DECIMAL: &str = "toDecimal_Number_1__Decimal_1_";
 const LESS_THAN: &str = "lessThan_Number_1__Number_1__Boolean_1_";
+const COMPARE: &str = "compare_T_1__T_1__Integer_1_";
 const REM: &str = "rem_Number_1__Number_1__Number_1_";
 const DIVIDE: &str = "divide_Number_1__Number_1__Float_1_";
 const DIVIDE_SCALED: &str = "divide_Decimal_1__Decimal_1__Integer_1__Decimal_1_";
@@ -189,4 +190,32 @@ fn to_decimal_keeps_the_float_s_shortest_form() {
         run(&expr::call(TO_DECIMAL, vec![expr::int(8)])),
         Value::Decimal(dec("8"))
     );
+}
+
+#[test]
+fn compare_is_total_across_types_through_the_evaluator() {
+    let cmp = |a: ValueSpec, b: ValueSpec| run(&expr::call(COMPARE, vec![a, b]));
+    // testIntegerCompare / testStringCompare
+    assert_eq!(cmp(expr::int(171), expr::int(2)), Value::Integer(1));
+    assert_eq!(
+        cmp(expr::string("aa"), expr::string("aaa")),
+        Value::Integer(-1)
+    );
+    // testCompareDecimalAndLongTypes
+    assert_eq!(
+        cmp(
+            expr::decimal(dec("9999999999999992")),
+            expr::int(9_999_999_999_999_992)
+        ),
+        Value::Integer(0)
+    );
+    // testCompareMixedTypes: `compare(1, '1')` is non-zero, and the reverse
+    // call has the opposite sign.
+    let one_vs_text = cmp(expr::int(1), expr::string("1"));
+    let text_vs_one = cmp(expr::string("1"), expr::int(1));
+    assert_ne!(one_vs_text, Value::Integer(0));
+    match (one_vs_text, text_vs_one) {
+        (Value::Integer(a), Value::Integer(b)) => assert_eq!(a, -b),
+        other => panic!("expected two Integers, got {other:?}"),
+    }
 }

@@ -14,7 +14,7 @@
 
 //! Comparison natives: `eq` (identity), `equal` (structural, via
 //! [`crate::native::equality`]), the ordering natives `lessThan` and
-//! `lessThanEqual`, and the total comparator
+//! `lessThanEqual`, `compare`, and the total comparator
 //! [`compare_values`](crate::native::comparison::compare_values) that the ordering natives and the collection
 //! natives (`sort`, `removeDuplicates`) share. The platform's `greaterThan`
 //! and `greaterThanEqual` are Pure-bodied over `lessThan`/`lessThanEqual`,
@@ -242,6 +242,34 @@ fn type_ordinal(v: &Value) -> u8 {
     }
 }
 
+/// Pure `compare<T>(a:T[1], b:T[1]): Integer[1]` — total comparator.
+///
+/// Returns -1 / 0 / 1; the parametric `T` is honored only as a hint —
+/// the runtime treats the args as `Any` and dispatches via
+/// [`compare_values`]. This is the implementation of
+/// `meta::pure::functions::lang::compare` declared in
+/// `legend-pure-core/.../grammar/functions/lang/compare.pure:23`.
+///
+/// Backs both inequality dispatch (when no specialised
+/// `lessThan(Number, Number)` overload matches) and `sort`'s default
+/// comparator.
+#[derive(Debug)]
+pub struct Compare;
+
+impl NativeFunction for Compare {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("compare", &values, 2)?;
+        Ok(Evaluated::new(Value::Integer(compare_values(
+            &values[0], &values[1],
+        ))))
+    }
+}
+
 /// Register the fished comparison natives.
 pub fn register(registry: &mut NativeRegistry) {
     registry.register("eq_Any_1__Any_1__Boolean_1_", Eq);
@@ -251,6 +279,7 @@ pub fn register(registry: &mut NativeRegistry) {
         "lessThanEqual_Number_1__Number_1__Boolean_1_",
         LessThanEqual,
     );
+    registry.register("compare_T_1__T_1__Integer_1_", Compare);
 }
 
 #[cfg(test)]
@@ -344,6 +373,43 @@ mod tests {
                 .execute(&[lit_int(1), lit_str("foo")], &mut MockCtx)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn compare_integers() {
+        assert_eq!(compare_values(&Value::Integer(1), &Value::Integer(2)), -1);
+        assert_eq!(compare_values(&Value::Integer(2), &Value::Integer(2)), 0);
+        assert_eq!(compare_values(&Value::Integer(2), &Value::Integer(1)), 1);
+    }
+
+    #[test]
+    fn compare_floats() {
+        assert_eq!(compare_values(&Value::Float(1.3), &Value::Float(2.1)), -1);
+        assert_eq!(compare_values(&Value::Float(2.2), &Value::Float(2.2)), 0);
+        assert_eq!(compare_values(&Value::Float(2.1), &Value::Float(1.0)), 1);
+    }
+
+    #[test]
+    fn compare_mixed_numeric_int_and_float() {
+        // testNumberCompare from the platform: Integer ↔ Float promotes
+        assert_eq!(compare_values(&Value::Integer(1), &Value::Float(2.2)), -1);
+        assert_eq!(compare_values(&Value::Integer(2), &Value::Float(1.5)), 1);
+        assert_eq!(compare_values(&Value::Float(2.7), &Value::Integer(171)), -1);
+    }
+
+    #[test]
+    fn compare_native_returns_integer() {
+        let r = Compare
+            .execute(&[lit_int(1), lit_int(5)], &mut MockCtx)
+            .unwrap()
+            .into_value();
+        assert_eq!(r, Value::Integer(-1));
+    }
+
+    #[test]
+    fn compare_wrong_arg_count_errors() {
+        assert!(Compare.execute(&[lit_int(1)], &mut MockCtx).is_err());
+        assert!(Compare.execute(&[], &mut MockCtx).is_err());
     }
 
     #[test]
