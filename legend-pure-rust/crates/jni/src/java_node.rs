@@ -32,11 +32,11 @@ use jni::signature::ReturnType;
 use legend_pure_evaluator::date::{PureDate, StrictTime, TimePrecision};
 use legend_pure_evaluator::error::{PureException, PureRuntimeError};
 use legend_pure_evaluator::heap::{HeapEntry, ObjectHandle, RuntimeHeap, TypedObject};
-use legend_pure_evaluator::value::PVector;
 use legend_pure_evaluator::value::Value;
 use legend_pure_metamodel::source_info::SourceInfo;
 use smol_str::SmolStr;
 
+use crate::PVector;
 use crate::bridge::{BridgeShared, JniHandleTable};
 use crate::failure::{ffi_error, in_local_frame, jni_failure, unsupported};
 
@@ -383,9 +383,23 @@ impl JavaNode {
         self.cache.borrow_mut().clear();
     }
 
+    /// Keep a read failure, with its kind, for the end of the call: the
+    /// heap's object view has no error channel. A failure the boundary
+    /// raised itself is anchored at this node, the place it was read from.
+    fn note_failure(&self, mut failure: PureException) {
+        let at_boundary = failure
+            .source
+            .as_ref()
+            .is_none_or(|s| s.source == crate::failure::FFI_SOURCE);
+        if at_boundary && let Some(source) = &self.source {
+            failure.source = Some(source.clone());
+        }
+        self.shared.note_error(failure);
+    }
+
     fn fetch(&self, name: &str) -> Result<PVector<Value>, PureException> {
         self.call_descriptions(self.shared.methods.property_values, name)
-            .map(|values| values.unwrap_or_default())
+            .map(|values| values.unwrap_or_else(PVector::new))
     }
 
     /// Call a bridge method `(long id, String name) -> NodeDescription[]`
@@ -455,12 +469,12 @@ impl TypedObject for JavaNode {
     }
 
     fn get_property(&self, name: &str) -> Option<Value> {
-        self.get_property_values(name).head().cloned()
+        self.get_property_values(name).get(0).cloned()
     }
 
     fn get_property_values(&self, name: &str) -> PVector<Value> {
         if name.starts_with("__") {
-            return self.local.get(name).cloned().unwrap_or_default();
+            return self.local.get(name).cloned().unwrap_or_else(PVector::new);
         }
         if let Some(v) = self.cache.borrow().get(name) {
             return v.clone();
@@ -473,7 +487,7 @@ impl TypedObject for JavaNode {
                 values
             }
             Err(failure) => {
-                self.shared.note_error(failure.to_string());
+                self.note_failure(failure);
                 PVector::new()
             }
         }
@@ -504,7 +518,7 @@ impl TypedObject for JavaNode {
         match self.call_descriptions(self.shared.methods.captured_value, name) {
             Ok(values) => values,
             Err(failure) => {
-                self.shared.note_error(failure.to_string());
+                self.note_failure(failure);
                 None
             }
         }

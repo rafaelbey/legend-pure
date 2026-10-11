@@ -34,6 +34,10 @@ pub mod java_node;
 pub mod materialize;
 mod session;
 
+/// The persistent vector behind `Value::Collection` and every property
+/// read; one alias so the crate follows the evaluator's choice in one line.
+pub(crate) use legend_pure_evaluator::value::PVector;
+
 use jni::JNIEnv;
 use jni::objects::{JClass, JObject, JObjectArray, JString, JValue};
 use jni::signature::ReturnType;

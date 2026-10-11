@@ -32,9 +32,12 @@ use smol_str::SmolStr;
 
 use crate::bridge::BridgeShared;
 
+/// The source id of a failure raised by the boundary itself.
+pub(crate) const FFI_SOURCE: &str = "<ffi>";
+
 /// The anchor of a failure raised by the boundary itself.
 fn ffi_source() -> SourceInfo {
-    SourceInfo::new("<ffi>", 0, 0, 0, 0)
+    SourceInfo::new(FFI_SOURCE, 0, 0, 0, 0)
 }
 
 /// A failure of the boundary itself (an execution error anchored at `<ffi>`).

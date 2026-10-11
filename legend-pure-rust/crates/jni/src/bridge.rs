@@ -16,8 +16,9 @@
 //!
 //! One `BridgeShared` exists per `JniContext`. It owns the only JNI global
 //! reference the crate keeps (the Java `RustNodeBridge`), the cached method
-//! ids, the two identity tables, and the last error raised while a node
-//! was read under a `RefCell` borrow (where there is no error channel).
+//! ids, the two identity tables, and the first failure raised while a node
+//! was read through the heap's infallible object view (where there is no
+//! error channel), kept typed.
 //!
 //! **Rule:** never hold `handles.borrow()` or `java_nodes.borrow()` across
 //! a JNI call. The Java side only reads its own graph during those calls,
@@ -29,6 +30,7 @@ use std::rc::Weak;
 
 use jni::objects::{GlobalRef, JMethodID};
 use jni::{JNIEnv, JavaVM};
+use legend_pure_evaluator::error::PureException;
 use legend_pure_evaluator::heap::{HeapEntry, ObjectHandle};
 use legend_pure_metamodel::model::PureModel;
 use slotmap::{SlotMap, new_key_type};
@@ -215,9 +217,9 @@ pub struct BridgeShared {
     pub java_nodes: RefCell<HashMap<i64, Weak<RefCell<HeapEntry>>>>,
     /// Rust-to-Java identity: Rust objects exposed to Java.
     pub handles: RefCell<JniHandleTable>,
-    /// The last failure raised while reading a node under a borrow;
-    /// surfaced by the next native entry point.
-    pub last_error: RefCell<Option<String>>,
+    /// The first failure raised while reading a node through the heap's
+    /// infallible view, with its kind; surfaced when the call ends.
+    pub last_error: RefCell<Option<PureException>>,
     /// Property and capture reads made through JNI so far; the timings
     /// of a `start` report how many fell inside its run phase.
     pub jni_reads: std::cell::Cell<u64>,
@@ -270,16 +272,17 @@ impl BridgeShared {
         nodes.len() + self.handles.borrow().live_count()
     }
 
-    /// Record a failure that happened where no error can be returned.
-    pub fn note_error(&self, message: String) {
+    /// Record a failure that happened where no error can be returned;
+    /// the first one is kept, since what follows it is its consequence.
+    pub fn note_error(&self, failure: PureException) {
         let mut slot = self.last_error.borrow_mut();
         if slot.is_none() {
-            *slot = Some(message);
+            *slot = Some(failure);
         }
     }
 
     /// Take the recorded failure, if any.
-    pub fn take_error(&self) -> Option<String> {
+    pub fn take_error(&self) -> Option<PureException> {
         self.last_error.borrow_mut().take()
     }
 }

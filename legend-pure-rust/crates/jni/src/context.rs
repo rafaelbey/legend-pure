@@ -21,11 +21,11 @@ use legend_pure_evaluator::eval::Evaluator;
 use legend_pure_evaluator::heap::{HeapEntry, ObjectHandle};
 use legend_pure_evaluator::lower::{Lowering, ModelExtension};
 use legend_pure_evaluator::native::NativeRegistry;
-use legend_pure_evaluator::value::PVector;
 use legend_pure_evaluator::value::{FunctionValue, Value};
 use legend_pure_metamodel::model::PureModel;
 use smol_str::SmolStr;
 
+use crate::PVector;
 use crate::bridge::{BridgeShared, JniHandleTable};
 use crate::failure::ffi_error;
 use crate::java_node::JavaNode;
@@ -179,8 +179,8 @@ impl JniContext {
         };
         evaluator.context_mut().pop_scope();
         self.shared.end_execution();
-        if let Some(message) = self.shared.take_error() {
-            return Err(ffi_error(message));
+        if let Some(failure) = self.shared.take_error() {
+            return Err(failure);
         }
         result
     }
@@ -192,8 +192,8 @@ impl JniContext {
         // Whether the lowering or the run failed, the nodes this execution
         // touched hold caches (and cycles) that must go now.
         self.shared.end_execution();
-        if let Some(message) = self.shared.take_error() {
-            return Err(ffi_error(message));
+        if let Some(failure) = self.shared.take_error() {
+            return Err(failure);
         }
         result
     }
@@ -209,8 +209,8 @@ impl JniContext {
             let closure = lowering.lower_root_lambda(function);
             // A property that could not be read lowers to nothing; surface
             // the read failure before trusting the tree.
-            if let Some(message) = self.shared.take_error() {
-                return Err(ffi_error(message));
+            if let Some(failure) = self.shared.take_error() {
+                return Err(failure);
             }
             let closure = closure?;
             let extension = lowering.into_extension();
@@ -265,8 +265,8 @@ impl JniContext {
             .heap()
             .get_property_values(&handle, name)
             .map_err(PureException::from)?;
-        if let Some(message) = self.shared.take_error() {
-            return Err(ffi_error(message));
+        if let Some(failure) = self.shared.take_error() {
+            return Err(failure);
         }
         Ok(values)
     }
