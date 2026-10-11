@@ -481,6 +481,25 @@ impl NativeFunction for Atan {
     }
 }
 
+/// Pure `atan2(Number[1], Number[1]):Float[1]` — four-quadrant inverse
+/// tangent of `y / x`, returning the angle in radians.
+#[derive(Debug)]
+pub struct Atan2;
+
+impl NativeFunction for Atan2 {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("atan2", &values, 2)?;
+        let y = number_to_f64("atan2", &values[0])?;
+        let x = number_to_f64("atan2", &values[1])?;
+        Ok(Evaluated::new(Value::Float(y.atan2(x))))
+    }
+}
+
 /// Pure `toFloat(Number[1]):Float[1]` — numeric → Float coercion.
 #[derive(Debug)]
 pub struct ToFloat;
@@ -623,6 +642,7 @@ pub fn register(registry: &mut NativeRegistry) {
     registry.register("asin_Number_1__Float_1_", Asin);
     registry.register("acos_Number_1__Float_1_", Acos);
     registry.register("atan_Number_1__Float_1_", Atan);
+    registry.register("atan2_Number_1__Number_1__Float_1_", Atan2);
 
     // numeric conversion
     registry.register("toFloat_Number_1__Float_1_", ToFloat);
@@ -1219,6 +1239,44 @@ mod tests {
     #[test]
     fn atan_type_mismatch() {
         assert!(Atan.execute(&[lit_str("x")], &mut MockCtx).is_err());
+    }
+
+    #[test]
+    fn atan2_quadrants() {
+        // atan2(1, 1) = pi/4
+        let r = Atan2
+            .execute(&[lit_float(1.0), lit_float(1.0)], &mut MockCtx)
+            .unwrap();
+        match r.into_value() {
+            Value::Float(f) => assert!(approx_eq(f, std::f64::consts::FRAC_PI_4)),
+            other => panic!("expected Float, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn atan2_zero_zero_is_zero() {
+        // atan2(0, 0) is defined as 0 by IEEE-754.
+        let r = Atan2
+            .execute(&[lit_float(0.0), lit_float(0.0)], &mut MockCtx)
+            .unwrap();
+        match r.into_value() {
+            Value::Float(f) => assert!(approx_eq(f, 0.0)),
+            other => panic!("expected Float, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn atan2_wrong_arg_count() {
+        assert!(Atan2.execute(&[lit_float(1.0)], &mut MockCtx).is_err());
+    }
+
+    #[test]
+    fn atan2_type_mismatch() {
+        assert!(
+            Atan2
+                .execute(&[lit_float(1.0), lit_str("x")], &mut MockCtx)
+                .is_err()
+        );
     }
 
     #[test]
