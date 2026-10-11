@@ -1039,6 +1039,23 @@ impl NativeFunction for Rtrim {
     }
 }
 
+/// Pure `trim(String[1]): String[1]`
+#[derive(Debug)]
+pub struct Trim;
+
+impl NativeFunction for Trim {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("trim", &values, 1)?;
+        let s = values[0].as_string()?;
+        Ok(Evaluated::new(Value::String(SmolStr::new(s.trim()))))
+    }
+}
+
 fn i64_arg(v: &Value, ctx: &str) -> Result<i64, PureException> {
     match v {
         Value::Integer(n) => Ok(*n),
@@ -1082,6 +1099,7 @@ pub fn register(registry: &mut NativeRegistry) {
     registry.register("toUpper_String_1__String_1_", ToUpper);
     registry.register("ltrim_String_1__String_1_", Ltrim);
     registry.register("rtrim_String_1__String_1_", Rtrim);
+    registry.register("trim_String_1__String_1_", Trim);
 }
 
 #[cfg(test)]
@@ -1386,6 +1404,16 @@ mod tests {
         assert_eq!(upper("TesT"), Value::String("TEST".into()));
         assert_eq!(upper("TEST"), Value::String("TEST".into()));
         assert!(ToUpper.execute(&[lit_int(1)], &mut MockCtx).is_err());
+    }
+
+    #[test]
+    fn string_trim() {
+        assert_eq!(
+            Trim.execute(&[lit_str("  hi  ")], &mut MockCtx)
+                .unwrap()
+                .into_value(),
+            Value::String("hi".into())
+        );
     }
 
     // -- ltrim / rtrim --

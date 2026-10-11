@@ -71,6 +71,7 @@ const FISHED: &[&str] = &[
     "toUpper_String_1__String_1_",
     "ltrim_String_1__String_1_",
     "rtrim_String_1__String_1_",
+    "trim_String_1__String_1_",
     // testing
     "assert_Boolean_1__Function_1__Boolean_1_",
 ];
