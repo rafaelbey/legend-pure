@@ -46,6 +46,8 @@ const INDEX_OF: &str = "indexOf_T_MANY__T_1__Integer_1_";
 const TAIL: &str = "tail_T_MANY__T_MANY_";
 const TO_ONE: &str = "toOne_T_MANY__T_1_";
 const TO_ONE_WITH_MESSAGE: &str = "toOne_T_MANY__String_1__T_1_";
+const FILTER: &str = "filter_T_MANY__Function_1__T_MANY_";
+const NOT: &str = "not_Boolean_1__Boolean_1_";
 const TIMES: &str = "times_Number_MANY__Number_1_";
 const EQ: &str = "eq_Any_1__Any_1__Boolean_1_";
 const PLUS: &str = "plus_Number_MANY__Number_1_";
@@ -506,4 +508,22 @@ fn to_one_unwraps_a_singleton_and_rejects_other_sizes() {
             "{err:?}"
         );
     }
+}
+
+#[test]
+fn filter_keeps_the_elements_the_predicate_accepts() {
+    let filter = |items: &[i64], pred: ValueSpec| {
+        as_ints(&run(&expr::call(FILTER, vec![ints(items), pred])))
+    };
+    assert_eq!(filter(&[1, 2, 3, 2], is_lambda(2)), [2, 2]);
+    // {x | !($x == 2)}
+    let not_two = expr::lambda(
+        vec![param("x", named(INTEGER_ID), Multiplicity::PureOne)],
+        vec![expr::call(
+            NOT,
+            vec![expr::call(EQ, vec![expr::var("x"), expr::int(2)])],
+        )],
+    );
+    assert_eq!(filter(&[1, 2, 3, 2], not_two), [1, 3]);
+    assert_eq!(filter(&[], is_lambda(2)), Vec::<i64>::new());
 }

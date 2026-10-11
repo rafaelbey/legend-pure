@@ -702,6 +702,34 @@ impl NativeFunction for ToOne {
     }
 }
 
+/// Pure `filter(T[*], Function<{T[1]->Boolean[1]}>[1]): T[*]`
+///
+/// Filters a collection using a boolean predicate.
+#[derive(Debug)]
+pub struct Filter;
+
+impl NativeFunction for Filter {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        expect_args("filter", args, 2)?;
+        let source = ctx.evaluate(&args[0])?.into_value().to_collection();
+        let lambda_val = ctx.evaluate(&args[1])?.into_value();
+
+        let mut results = Vec::with_capacity(source.len());
+        for item in &source {
+            let pred = ctx.call_function(&lambda_val, std::slice::from_ref(item))?;
+            if pred.as_boolean()? {
+                results.push(item.clone());
+            }
+        }
+
+        Ok(Evaluated::new(Value::from_vec(results)))
+    }
+}
+
 /// Register the fished collection natives.
 pub fn register(registry: &mut NativeRegistry) {
     registry.register("fold_T_MANY__Function_1__V_m__V_m_", Fold);
@@ -730,6 +758,7 @@ pub fn register(registry: &mut NativeRegistry) {
     registry.register("tail_T_MANY__T_MANY_", Tail);
     registry.register("toOne_T_MANY__T_1_", ToOne);
     registry.register("toOne_T_MANY__String_1__T_1_", ToOne);
+    registry.register("filter_T_MANY__Function_1__T_MANY_", Filter);
 }
 
 #[cfg(test)]
