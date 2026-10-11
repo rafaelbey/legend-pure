@@ -2205,7 +2205,10 @@ public class CompiledSupport
         StringBuilder out = new StringBuilder("(");
         for (int i = 0; i < cols.size(); i++)
         {
-            if (i > 0) out.append(", ");
+            if (i > 0)
+            {
+                out.append(", ");
+            }
             org.finos.legend.pure.m3.coreinstance.meta.pure.metamodel.relation.Column<?, ?> col = cols.get(i);
             String name = col._name();
             org.finos.legend.pure.m3.coreinstance.meta.pure.metamodel.type.generics.GenericType ctype = org.finos.legend.pure.m3.navigation.relation._Column.getColumnType(col);
@@ -2221,7 +2224,10 @@ public class CompiledSupport
         StringBuilder out = new StringBuilder("(");
         for (int i = 0; i < names.length; i++)
         {
-            if (i > 0) out.append(", ");
+            if (i > 0)
+            {
+                out.append(", ");
+            }
             // Render the bare type name (last `::`-segment) to match the
             // source side which reads `column._rawType().getName()`.
             String t = typeFqns[i];

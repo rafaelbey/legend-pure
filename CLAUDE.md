@@ -47,9 +47,10 @@ from it, `platform/pure/grammar/m3.pure`, as its bootstrap.
 - No active feature work in this repository.
 - `legend-pure-runtime-rust-evaluator` is in the reactor (its tests skip when the Rust
   cdylib is absent); `…-bindings-ap` stays out. The platform declares the native
-  `evalRust` and the `Rust_JNI` PCT adapter; the compiled engine implements `evalRust`
-  as a stub that throws at run time, the interpreted engine through the rust-evaluator
-  module's extension.
+  `evalRust` and the `Rust_JNI` PCT adapter; the interpreted engine implements `evalRust`
+  through the rust-evaluator module's extension, the compiled engine through its
+  `EvalRustExecutor` hook, which the same module provides. Both engines run the corpus:
+  interpreted 303 / 327 and 126 / 136, compiled 300 / 327 and 125 / 136.
 - Root installs need `mvn clean install` (the PAR plugin trips on a stale descriptor
   otherwise); JDK 11 or 17.
 

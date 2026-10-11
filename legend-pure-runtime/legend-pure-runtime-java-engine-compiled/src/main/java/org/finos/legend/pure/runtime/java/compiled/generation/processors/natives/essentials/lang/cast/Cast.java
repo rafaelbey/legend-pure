@@ -122,7 +122,10 @@ public class Cast extends AbstractNative
 
     private static String escapeForJavaLiteral(String s)
     {
-        if (s == null) return "";
+        if (s == null)
+        {
+            return "";
+        }
         return s.replace("\\", "\\\\").replace("\"", "\\\"");
     }
 

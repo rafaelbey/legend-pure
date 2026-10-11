@@ -480,10 +480,12 @@ from here on, each later step is measured by how many turn green.
   for reports. The interpreted engine implements `evalRust` through `EvalRust`
   (registered by `RustJniInterpretedExtension` via `META-INF/services`; the
   evaluator is created on the first call, because an extension whose
-  constructor throws is dropped silently). The compiled engine registers a
-  stub that throws at run time, because it generates Java for the whole
-  platform at build time and refuses a call to an unknown native. Discovery,
-  assertion and reporting stay the Java engines' own.
+  constructor throws is dropped silently). The compiled engine generates Java
+  for the whole platform at build time, so its `evalRust` compiles to a call
+  into an `EvalRustExecutor` hook found through `META-INF/services` at run
+  time (`compiled.CompiledEvalRust` in the module, since 2026-10-11; before
+  that a stub that threw). Discovery, assertion and reporting stay the Java
+  engines' own.
 - **Suites, manifests, reports** in the Java module:
   `Test_RustJni_{Essential,Grammar}Functions_PCT` are the interpreted suites
   with the `Rust_JNI` adapter and the manifests
@@ -880,7 +882,10 @@ legend-engine, with no Rust compiler.
   (handcrafted `Root_..._Impl`, PELT-lazy, or interpreted), returns its
   classifier, keys and values in one call, primitives inline and other objects
   as handles. On the Rust side the same node interface as PELT, so the same
-  lowering applies. *(Done 2026-10-10 as `RustNodeBridge` / `JavaNode`.)*
+  lowering applies. *(Done 2026-10-10 as `RustNodeBridge` / `JavaNode`;
+  proven on compiled objects 2026-10-11: the compiled engine runs the same
+  corpus through `RustEngineHost` at 300 / 327 and 125 / 136, the difference
+  being Rust-built objects handed back to generated code.)*
 - The JNI `Directory` (Step 4): `node(path)` through `_Package.getByUserPath`,
   `instances(classifier)` and `overloads(name)` as one bulk call each into the
   engine's own indexes, `resolve(reference_id)` through the Java
