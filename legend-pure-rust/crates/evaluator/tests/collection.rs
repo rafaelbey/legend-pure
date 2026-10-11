@@ -30,6 +30,9 @@ const DROP: &str = "drop_T_MANY__Integer_1__T_MANY_";
 const TAKE: &str = "take_T_MANY__Integer_1__T_MANY_";
 const ZIP: &str = "zip_T_MANY__U_MANY__Pair_MANY_";
 const FIRST: &str = "first_T_MANY__T_$0_1$_";
+const REMOVE_DUPLICATES: &str = "removeDuplicates_T_MANY__Function_$0_1$__Function_$0_1$__T_MANY_";
+const TIMES: &str = "times_Number_MANY__Number_1_";
+const EQ: &str = "eq_Any_1__Any_1__Boolean_1_";
 const PLUS: &str = "plus_Number_MANY__Number_1_";
 const MINUS: &str = "minus_Number_MANY__Number_1_";
 
@@ -188,4 +191,40 @@ fn first_returns_the_head_or_nothing() {
         Value::Integer(7)
     );
     assert_eq!(run(&expr::call(FIRST, vec![ints(&[])])), Value::Unit);
+}
+
+/// `{x | $x * $x}` over integers.
+fn square_lambda() -> ValueSpec {
+    expr::lambda(
+        vec![param("x", named(INTEGER_ID), Multiplicity::PureOne)],
+        vec![expr::call(
+            TIMES,
+            vec![expr::collection(vec![expr::var("x"), expr::var("x")])],
+        )],
+    )
+}
+
+#[test]
+fn remove_duplicates_honours_the_key_and_the_equality_lambdas() {
+    let dedup = |col: ValueSpec, key: ValueSpec, eql: ValueSpec| {
+        as_ints(&run(&expr::call(REMOVE_DUPLICATES, vec![col, key, eql])))
+    };
+    let none = || expr::collection(Vec::new());
+    // Default equality, first occurrence wins.
+    assert_eq!(dedup(ints(&[1, 2, 1, 3, 2]), none(), none()), [1, 2, 3]);
+    // Key lambda: -1 and 1 share the key 1.
+    assert_eq!(
+        dedup(ints(&[1, -1, 2, -2, 3]), square_lambda(), none()),
+        [1, 2, 3]
+    );
+    // Equality lambda over the elements: {a, b | eq($a, $b)}.
+    let eql = expr::lambda(
+        vec![
+            param("a", named(INTEGER_ID), Multiplicity::PureOne),
+            param("b", named(INTEGER_ID), Multiplicity::PureOne),
+        ],
+        vec![expr::call(EQ, vec![expr::var("a"), expr::var("b")])],
+    );
+    assert_eq!(dedup(ints(&[3, 3, 4, 3]), none(), eql), [3, 4]);
+    assert_eq!(dedup(ints(&[]), none(), none()), Vec::<i64>::new());
 }
