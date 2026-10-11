@@ -29,6 +29,7 @@ use rust_decimal::Decimal;
 const ROUND: &str = "round_Number_1__Integer_1_";
 const ROUND_DECIMAL: &str = "round_Decimal_1__Integer_1__Decimal_1_";
 const ROUND_FLOAT: &str = "round_Float_1__Integer_1__Float_1_";
+const LESS_THAN: &str = "lessThan_Number_1__Number_1__Boolean_1_";
 
 /// Evaluate one call node against the bootstrap model with every fished native.
 fn run(call: &ValueSpec) -> Value {
@@ -80,5 +81,25 @@ fn round_rounds_half_to_even_through_the_evaluator() {
             vec![expr::float(-17.36), expr::int(1)]
         )),
         Value::Float(-17.4)
+    );
+}
+
+#[test]
+fn less_than_orders_numbers_and_strings_through_the_evaluator() {
+    // testLessThan_Number: `3 < 4`, `4 < 3`, `3 < 3`.
+    let lt = |a: ValueSpec, b: ValueSpec| run(&expr::call(LESS_THAN, vec![a, b]));
+    assert_eq!(lt(expr::int(1), expr::int(2)), Value::Boolean(true));
+    assert_eq!(lt(expr::int(4), expr::int(3)), Value::Boolean(false));
+    assert_eq!(lt(expr::int(3), expr::int(3)), Value::Boolean(false));
+    // Mixed Number subtypes promote: `1 < 2.2`, `0.5d < 2.5`.
+    assert_eq!(lt(expr::int(1), expr::float(2.2)), Value::Boolean(true));
+    assert_eq!(
+        lt(expr::decimal(dec("0.5")), expr::float(2.5)),
+        Value::Boolean(true)
+    );
+    // The platform's `lessThan(String, String)` reaches the same native.
+    assert_eq!(
+        lt(expr::string("a"), expr::string("b")),
+        Value::Boolean(true)
     );
 }

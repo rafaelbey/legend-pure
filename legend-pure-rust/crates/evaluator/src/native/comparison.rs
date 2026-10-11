@@ -13,9 +13,12 @@
 // limitations under the License.
 
 //! Comparison natives: `eq` (identity), `equal` (structural, via
-//! [`crate::native::equality`]), and the total comparator
+//! [`crate::native::equality`]), the ordering native `lessThan`, and the
+//! total comparator
 //! [`compare_values`](crate::native::comparison::compare_values) that the ordering natives and the collection
-//! natives (`sort`, `removeDuplicates`) share.
+//! natives (`sort`, `removeDuplicates`) share. The platform's `greaterThan`
+//! and `greaterThanEqual` are Pure-bodied over `lessThan`/`lessThanEqual`,
+//! so they have no native here.
 
 use std::cmp::Ordering;
 
@@ -23,11 +26,35 @@ use legend_pure_metamodel::types::ValueSpec;
 use rust_decimal::Decimal;
 use rust_decimal::prelude::FromPrimitive;
 
-use crate::error::PureException;
+use crate::error::{PureException, PureRuntimeError};
 use crate::native::{
     EvalContextTrait, Evaluated, NativeFunction, NativeRegistry, expect_args, force_all,
 };
 use crate::value::Value;
+
+/// Compare two values for the ordering natives (`lessThan`, `lessThanEqual`,
+/// `greaterThan`, `greaterThanEqual`).
+///
+/// Any two numeric values — including mixed `Number` subtypes
+/// (`Integer`/`Float`/`Decimal`) — promote toward the wider type and compare,
+/// matching Java Pure's `lessThan`/`compare` (e.g. `0.5d <= 2.5`). The numeric
+/// promotion is delegated to [`compare_values`] so these natives stay
+/// consistent with `compare` and the sort/iteration comparators by
+/// construction. `String`/`String` compares lexicographically. Genuinely
+/// non-comparable pairs (e.g. an `Object` vs a number) still error.
+fn numeric_cmp(a: &Value, b: &Value) -> Result<std::cmp::Ordering, PureRuntimeError> {
+    let is_numeric =
+        |v: &Value| matches!(v, Value::Integer(_) | Value::Float(_) | Value::Decimal(_));
+    match (a, b) {
+        _ if is_numeric(a) && is_numeric(b) => Ok(compare_values(a, b).cmp(&0)),
+        (Value::String(a), Value::String(b)) => Ok(a.cmp(b)),
+        _ => Err(PureRuntimeError::EvaluationError(format!(
+            "Cannot compare {} and {}",
+            a.type_name(),
+            b.type_name()
+        ))),
+    }
+}
 
 /// Pure `eq(Any[1], Any[1]): Boolean[1]` — identity / primitive equality.
 ///
@@ -70,6 +97,24 @@ impl NativeFunction for Equal {
         expect_args("equal", &values, 2)?;
         let result = crate::native::equality::values_equal(ctx, &values[0], &values[1]);
         Ok(Evaluated::new(Value::Boolean(result)))
+    }
+}
+
+/// Pure `lessThan(Number[1], Number[1]): Boolean[1]`
+#[derive(Debug)]
+pub struct LessThan;
+
+impl NativeFunction for LessThan {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("lessThan", &values, 2)?;
+        Ok(Evaluated::new(Value::Boolean(
+            numeric_cmp(&values[0], &values[1])?.is_lt(),
+        )))
     }
 }
 
@@ -183,12 +228,72 @@ fn type_ordinal(v: &Value) -> u8 {
 pub fn register(registry: &mut NativeRegistry) {
     registry.register("eq_Any_1__Any_1__Boolean_1_", Eq);
     registry.register("equal_Any_MANY__Any_MANY__Boolean_1_", Equal);
+    registry.register("lessThan_Number_1__Number_1__Boolean_1_", LessThan);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::native::{MockCtx, lit_int, lit_str};
+    use crate::native::{MockCtx, lit_float, lit_int, lit_str};
+
+    #[test]
+    fn less_than_integers() {
+        assert_eq!(
+            LessThan
+                .execute(&[lit_int(1), lit_int(2)], &mut MockCtx)
+                .unwrap()
+                .into_value(),
+            Value::Boolean(true)
+        );
+        assert_eq!(
+            LessThan
+                .execute(&[lit_int(2), lit_int(1)], &mut MockCtx)
+                .unwrap()
+                .into_value(),
+            Value::Boolean(false)
+        );
+    }
+
+    #[test]
+    fn less_than_mixed_numeric() {
+        assert_eq!(
+            LessThan
+                .execute(&[lit_int(1), lit_float(1.5)], &mut MockCtx)
+                .unwrap()
+                .into_value(),
+            Value::Boolean(true)
+        );
+    }
+
+    #[test]
+    fn string_comparison() {
+        assert_eq!(
+            LessThan
+                .execute(&[lit_str("a"), lit_str("b")], &mut MockCtx)
+                .unwrap()
+                .into_value(),
+            Value::Boolean(true)
+        );
+    }
+
+    #[test]
+    fn wrong_arg_count_errors() {
+        assert!(Equal.execute(&[lit_int(1)], &mut MockCtx).is_err());
+        assert!(LessThan.execute(&[], &mut MockCtx).is_err());
+    }
+
+    #[test]
+    fn invalid_type_comparisons() {
+        // numeric_cmp errors when the two values aren't comparable —
+        // e.g. mixing Integer with String. Force_all evaluates the
+        // literals via MockCtx; the type check happens inside the
+        // native, so no evaluator is required.
+        assert!(
+            LessThan
+                .execute(&[lit_int(1), lit_str("foo")], &mut MockCtx)
+                .is_err()
+        );
+    }
 
     #[test]
     fn compare_decimal_and_integer_exactly_at_the_i64_limit() {
