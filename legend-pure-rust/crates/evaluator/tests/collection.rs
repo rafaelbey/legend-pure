@@ -27,6 +27,7 @@ use legend_pure_metamodel::types::{Multiplicity, ValueSpec};
 
 const FOLD: &str = "fold_T_MANY__Function_1__V_m__V_m_";
 const DROP: &str = "drop_T_MANY__Integer_1__T_MANY_";
+const TAKE: &str = "take_T_MANY__Integer_1__T_MANY_";
 const PLUS: &str = "plus_Number_MANY__Number_1_";
 const MINUS: &str = "minus_Number_MANY__Number_1_";
 
@@ -121,4 +122,13 @@ fn drop_skips_the_first_n_and_clamps_the_count() {
     assert_eq!(as_ints(&drop(&[1, 2, 3], 5)), Vec::<i64>::new());
     assert_eq!(as_ints(&drop(&[1, 2, 3], -1)), [1, 2, 3]);
     assert_eq!(as_ints(&drop(&[], 1)), Vec::<i64>::new());
+}
+
+#[test]
+fn take_keeps_the_first_n_and_clamps_the_count() {
+    let take = |items: &[i64], n: i64| run(&expr::call(TAKE, vec![ints(items), expr::int(n)]));
+    assert_eq!(as_ints(&take(&[1, 2, 3], 2)), [1, 2]);
+    assert_eq!(as_ints(&take(&[1, 2, 3], 5)), [1, 2, 3]);
+    assert_eq!(as_ints(&take(&[1, 2, 3], -1)), Vec::<i64>::new());
+    assert_eq!(as_ints(&take(&[], 1)), Vec::<i64>::new());
 }

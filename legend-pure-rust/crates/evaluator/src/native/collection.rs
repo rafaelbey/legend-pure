@@ -55,6 +55,26 @@ impl NativeFunction for Fold {
     }
 }
 
+/// Pure `take(Any[*], Integer[1]): Any[*]` — first N elements.
+#[derive(Debug)]
+pub struct Take;
+
+impl NativeFunction for Take {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("take", &values, 2)?;
+        let coll = values[0].to_collection();
+        #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+        let n = values[1].as_integer()?.max(0) as usize;
+        let n = n.min(coll.len());
+        Ok(Evaluated::new(Value::Collection(Box::new(coll.take(n)))))
+    }
+}
+
 /// Pure `drop(Any[*], Integer[1]): Any[*]` — all elements after first N.
 #[derive(Debug)]
 pub struct Drop;
@@ -78,6 +98,7 @@ impl NativeFunction for Drop {
 /// Register the fished collection natives.
 pub fn register(registry: &mut NativeRegistry) {
     registry.register("fold_T_MANY__Function_1__V_m__V_m_", Fold);
+    registry.register("take_T_MANY__Integer_1__T_MANY_", Take);
     registry.register("drop_T_MANY__Integer_1__T_MANY_", Drop);
 }
 
@@ -101,6 +122,16 @@ mod tests {
             v.push_back(Value::Integer(i));
         }
         Value::Collection(Box::new(v))
+    }
+
+    #[test]
+    fn take_elements() {
+        assert_eq!(
+            Take.execute(&[int_spec(&[1, 2, 3, 4, 5]), lit_int(3)], &mut MockCtx)
+                .unwrap()
+                .into_value(),
+            int_collection(&[1, 2, 3])
+        );
     }
 
     #[test]
