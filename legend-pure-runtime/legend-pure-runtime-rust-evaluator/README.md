@@ -54,14 +54,18 @@ ERROR becomes an exclusion holding the first line of its message; a PASS reporte
 failure keeps its committed entry; an excluded test that now passes is dropped. A second run
 reproduces the files byte for byte. Review the diff, then `verify`.
 
-State: `Rust_JNI essential: 2 / 327`, `Rust_JNI grammar: 59 / 136`. The lambda is lowered
+State: `Rust_JNI essential: 303 / 327`, `Rust_JNI grammar: 126 / 136`. The lambda is lowered
 through the bridge (`crates/evaluator/src/lower/`): its body, the functions it calls, the classes
 and enumerations it references, and the variables it captured (`RustNodeBridge.capturedValue`,
-read from the `LambdaWithContext` the interpreted engine hands over). What remains red is, for
-the most part, a native the lambda calls that is not in the Rust registry, recorded as
-`FunctionNotFound: <mangled key>`; the 12 tests that assert on an error message record
-`Execution error message mismatch.` until the Rust message equals Java's. The compiled engine
-registers `evalRust` as a stub that throws at run time, so the platform compiles on both engines.
+read from the `LambdaWithContext` the interpreted engine hands over); the natives it calls are
+fished from the archive (160 keys). What remains red is ranked by its first line:
+`FunctionNotFound: <mangled key>` (nothing registered), `NotImplemented: <key>` (registered,
+body not fished), `Unsupported: …` (a lowering or value-shape gap, e.g. a `Map` crossing the
+boundary), then bare Pure texts for semantic differences. A Rust failure reaches the engine as a
+`PureExecutionException` cause whose info is Pure's bare text for the Pure-level kinds (what
+`assertError` compares) and the kind-prefixed message for the Rust-side diagnostics. The compiled
+engine registers `evalRust` as a stub that throws at run time, so the platform compiles on both
+engines.
 
 ## Build and test
 
