@@ -65,6 +65,8 @@ const REVERSE: &str = "reverse_T_m__T_m_";
 const GET: &str = "get_Map_1__U_1__V_$0_1$_";
 const KEYS: &str = "keys_Map_1__U_MANY_";
 const VALUES: &str = "values_Map_1__V_MANY_";
+const NEW_MAP: &str = "newMap_Pair_MANY__Map_1_";
+const NEW_MAP_WITH_KEYS: &str = "newMap_Pair_MANY__Property_MANY__Map_1_";
 const TIMES: &str = "times_Number_MANY__Number_1_";
 const EQ: &str = "eq_Any_1__Any_1__Boolean_1_";
 const PLUS: &str = "plus_Number_MANY__Number_1_";
@@ -838,5 +840,47 @@ fn values_lists_every_value() {
         eval.eval(&expr::call(VALUES, vec![expr::var("e")]))
             .unwrap(),
         Value::Unit
+    );
+}
+
+#[test]
+fn new_map_folds_pairs_and_feeds_the_other_map_natives() {
+    // newMap(['key1', 'key2']->zip([0, 1]))
+    let pairs = || expr::call(ZIP, vec![strings(&["key1", "key2"]), ints(&[0, 1])]);
+    let built = run(&expr::call(NEW_MAP, vec![pairs()]));
+    assert_eq!(
+        string_int_entries(&built),
+        [("key1".to_string(), 0), ("key2".to_string(), 1)]
+    );
+    // testPut_addsEntry's shape: newMap(pairs)->put('key3', 2)->get('key3').
+    let put = expr::call(
+        PUT,
+        vec![
+            expr::call(NEW_MAP, vec![pairs()]),
+            expr::string("key3"),
+            expr::int(2),
+        ],
+    );
+    assert_eq!(
+        run(&expr::call(GET, vec![put, expr::string("key3")])),
+        Value::Integer(2)
+    );
+    // No pairs: an empty map; a later pair overrides an earlier key.
+    assert_eq!(
+        string_int_entries(&run(&expr::call(NEW_MAP, vec![ints(&[])]))),
+        Vec::<(String, i64)>::new()
+    );
+    let repeated = expr::call(ZIP, vec![strings(&["k", "k"]), ints(&[1, 2])]);
+    assert_eq!(
+        string_int_entries(&run(&expr::call(NEW_MAP, vec![repeated]))),
+        [("k".to_string(), 2)]
+    );
+    // The Property-list overload takes the same path.
+    assert_eq!(
+        string_int_entries(&run(&expr::call(
+            NEW_MAP_WITH_KEYS,
+            vec![pairs(), expr::collection(Vec::new())]
+        ))),
+        [("key1".to_string(), 0), ("key2".to_string(), 1)]
     );
 }

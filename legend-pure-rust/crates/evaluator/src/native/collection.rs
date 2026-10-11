@@ -933,6 +933,62 @@ fn key_to_value(k: &ValueKey) -> Value {
     }
 }
 
+/// Pure `newMap<U,V>(pairs:Pair<U,V>[*]):Map<U,V>[1]`
+///
+/// Fold a collection of `Pair` heap objects (each with `first` / `second`
+/// properties) into an `im_rc::HashMap`-backed `Value::Map`. The second
+/// overload (`newMap(pairs, p:Property[*])`) takes a property-list used
+/// as an equality key by the Java runtime — we accept and ignore it for
+/// now because Rust's `ValueKey` already drives equality from the value.
+#[derive(Debug)]
+pub struct NewMap;
+
+impl NativeFunction for NewMap {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        // `args[0]` is the pair collection; `args[1]` (optional) is the
+        // custom-key property list, not yet honoured.
+        if values.is_empty() {
+            return Err(PureRuntimeError::EvaluationError(
+                "newMap: expected at least 1 argument (the pairs)".into(),
+            )
+            .into());
+        }
+        let pairs = values[0].to_collection();
+        let mut entries = im_rc::HashMap::new();
+        for pair in &pairs {
+            let Value::Object(obj_id) = pair else {
+                return Err(PureRuntimeError::EvaluationError(format!(
+                    "newMap: expected Pair<U,V>, got {}",
+                    pair.type_name()
+                ))
+                .into());
+            };
+            let first_vals = ctx.heap().get_property_values(&obj_id.clone(), "first")?;
+            let second_vals = ctx.heap().get_property_values(&obj_id.clone(), "second")?;
+            let Some(k) = first_vals.iter().next() else {
+                return Err(PureRuntimeError::EvaluationError(
+                    "newMap: Pair.first is empty".into(),
+                )
+                .into());
+            };
+            let Some(v) = second_vals.iter().next() else {
+                return Err(PureRuntimeError::EvaluationError(
+                    "newMap: Pair.second is empty".into(),
+                )
+                .into());
+            };
+            let key = value_to_key(k, ctx)?;
+            entries.insert(key, v.clone());
+        }
+        Ok(Evaluated::new(Value::Map(new_map_cell(entries, 0))))
+    }
+}
+
 /// Wrap a freshly-built [`MapState`] in the `Rc<RefCell<…>>` cell that
 /// `Value::Map` carries. Keeps the construction site for new map
 /// identities centralised — every `put` / `putAll` / `replaceAll` / etc.
@@ -1269,6 +1325,11 @@ pub fn register(registry: &mut NativeRegistry) {
     registry.register("get_Map_1__U_1__V_$0_1$_", Get);
     registry.register("keys_Map_1__U_MANY_", Keys);
     registry.register("values_Map_1__V_MANY_", Values);
+    registry.register("newMap_Pair_MANY__Map_1_", NewMap);
+    // 2-arg overload: `newMap(Pair<U,V>[*], Property<U,Any|1>[*])`.
+    // The Property arg is accepted for signature parity but not yet
+    // honoured (per the `NewMap::execute` doc comment) — same impl.
+    registry.register("newMap_Pair_MANY__Property_MANY__Map_1_", NewMap);
 }
 
 #[cfg(test)]
