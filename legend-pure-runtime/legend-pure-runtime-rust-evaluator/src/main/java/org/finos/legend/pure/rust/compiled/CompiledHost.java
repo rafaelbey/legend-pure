@@ -96,6 +96,17 @@ public final class CompiledHost implements RustEngineHost
         return Lists.immutable.with(ValCoreInstance.toCoreInstance(value));
     }
 
+    /**
+     * A compiled lambda value is a new object per evaluation, and its metadata
+     * lambda (the stable identity) is not exposed; no key, so nothing is
+     * cached for it.
+     */
+    @Override
+    public Object lambdaDefinition(CoreInstance lambda)
+    {
+        return null;
+    }
+
     @Override
     public CoreInstance newBoolean(boolean value)
     {

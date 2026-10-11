@@ -72,6 +72,18 @@ public final class InterpretedHost implements RustEngineHost
                 : Lists.immutable.with(value);
     }
 
+    /**
+     * The lambda node's repository synthetic id, unique to the node within
+     * the runtime's repository; a {@link LambdaWithContext} (a new wrapper per
+     * evaluation) reports the id of the lambda it wraps.
+     */
+    @Override
+    public Object lambdaDefinition(CoreInstance lambda)
+    {
+        int syntheticId = lambda.getSyntheticId();
+        return (syntheticId < 0) ? null : syntheticId;
+    }
+
     @Override
     public CoreInstance newBoolean(boolean value)
     {

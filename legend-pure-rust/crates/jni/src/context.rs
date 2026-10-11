@@ -14,17 +14,19 @@
 
 //! The evaluator session behind one Java `PureRustEvaluator`.
 
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use legend_pure_evaluator::error::{PureException, PureRuntimeError};
 use legend_pure_evaluator::eval::Evaluator;
 use legend_pure_evaluator::heap::{HeapEntry, ObjectHandle};
-use legend_pure_evaluator::lower::{Lowering, ModelExtension};
+use legend_pure_evaluator::lower::{LowerError, Lowering, ModelExtension, Node};
 use legend_pure_evaluator::m3_paths;
 use legend_pure_evaluator::native::NativeRegistry;
-use legend_pure_evaluator::value::{FunctionValue, Value};
+use legend_pure_evaluator::value::{FunctionValue, LambdaClosure, Value};
 use legend_pure_metamodel::ids::ElementId;
 use legend_pure_metamodel::model::PureModel;
+use legend_pure_metamodel::types::{Parameter, ValueSpec};
 use smol_str::SmolStr;
 
 use crate::PVector;
@@ -43,8 +45,9 @@ struct FunctionKinds {
 
 /// What a function node handed to `start` is.
 enum FunctionKind {
-    /// A lambda: lowered with its captures and applied.
-    Lambda,
+    /// A lambda: lowered with its captures and applied. `definition` keys
+    /// the closure cache when the engine names what the value stands for.
+    Lambda { definition: Option<i64> },
     /// A native function: called through the registry under its key.
     Native(SmolStr),
     /// A function with a body (`ConcreteFunctionDefinition`): lowered as
@@ -77,7 +80,9 @@ impl FunctionKinds {
         };
         let is = |id: Option<ElementId>| id == Some(classifier);
         if is(self.lambda) {
-            FunctionKind::Lambda
+            FunctionKind::Lambda {
+                definition: node.definition,
+            }
         } else if is(self.native)
             && let Some(key) = &node.name
         {
@@ -87,6 +92,54 @@ impl FunctionKinds {
         } else {
             FunctionKind::Other(path)
         }
+    }
+}
+
+/// A lambda as lowered once: its parameters and body, which depend on its
+/// definition only, and the names of the variables it captures, whose
+/// values are read again on every call.
+struct CachedClosure {
+    parameters: std::sync::Arc<[Parameter]>,
+    body: std::sync::Arc<[ValueSpec]>,
+    open_variables: Vec<SmolStr>,
+}
+
+impl CachedClosure {
+    fn of(closure: &LambdaClosure) -> Self {
+        Self {
+            parameters: closure.parameters.clone(),
+            body: closure.body.clone(),
+            open_variables: closure.captures.keys().cloned().collect(),
+        }
+    }
+
+    /// The closure for this evaluation: the cached body over the values
+    /// the node captured this time, lowered as the full lowering lowers
+    /// them.
+    fn instantiate(
+        &self,
+        lowering: &mut Lowering,
+        handle: &ObjectHandle,
+    ) -> Result<LambdaClosure, LowerError> {
+        let node = Node::new(handle.clone());
+        let mut captures = HashMap::with_capacity(self.open_variables.len());
+        for name in &self.open_variables {
+            let Some(values) = node.captured_values(name) else {
+                return Err(LowerError::Unsupported(format!(
+                    "lowering captured variables (`{name}` of a lambda without its context)"
+                )));
+            };
+            let values: Vec<Value> = values.iter().cloned().collect();
+            captures.insert(
+                name.clone(),
+                lowering.lower_value(&Value::from_vec(values))?,
+            );
+        }
+        Ok(LambdaClosure {
+            parameters: self.parameters.clone(),
+            body: self.body.clone(),
+            captures,
+        })
     }
 }
 
@@ -109,11 +162,14 @@ pub struct Timings {
     /// JNI property or capture reads made while the closure ran: zero
     /// means the run was the evaluator alone.
     pub run_jni_reads: u64,
+    /// JNI property or capture reads made by the lowering: zero means
+    /// everything came from the closure cache and the model.
+    pub lower_jni_reads: u64,
 }
 
 thread_local! {
     /// The timings of the last lowered `start` on this thread.
-    pub static LAST_TIMINGS: std::cell::Cell<Timings> = const { std::cell::Cell::new(Timings { lower_ns: 0, run_ns: 0, run_jni_reads: 0 }) };
+    pub static LAST_TIMINGS: std::cell::Cell<Timings> = const { std::cell::Cell::new(Timings { lower_ns: 0, run_ns: 0, run_jni_reads: 0, lower_jni_reads: 0 }) };
 }
 
 /// Model, registry and evaluator behind raw pointers (freed in `Drop`),
@@ -138,6 +194,10 @@ pub struct JniContext {
     pub poisoned: bool,
     /// The function classifiers, by id.
     kinds: FunctionKinds,
+    /// Lowered lambdas by definition (`RustEngineHost.lambdaDefinition`),
+    /// for the context's lifetime: the elements their bodies refer to live
+    /// in the model as long.
+    closures: HashMap<i64, CachedClosure>,
 }
 
 impl JniContext {
@@ -179,6 +239,7 @@ impl JniContext {
             bridge_chunk: None,
             poisoned: false,
             kinds,
+            closures: HashMap::new(),
         }
     }
 
@@ -240,6 +301,7 @@ impl JniContext {
 
     fn lower_and_run(&mut self, function: &Value, args: &[Value]) -> Result<Value, PureException> {
         let started = std::time::Instant::now();
+        let reads_at_start = self.shared.jni_reads.get();
         let (callable, args) = self.lower_call(function, args)?;
         let lowered = std::time::Instant::now();
         let reads_before = self.shared.jni_reads.get();
@@ -256,6 +318,7 @@ impl JniContext {
                 lower_ns: u64::try_from((lowered - started).as_nanos()).unwrap_or(u64::MAX),
                 run_ns: u64::try_from((ran - lowered).as_nanos()).unwrap_or(u64::MAX),
                 run_jni_reads: self.shared.jni_reads.get() - reads_before,
+                lower_jni_reads: reads_before - reads_at_start,
             });
         });
         result
@@ -274,13 +337,24 @@ impl JniContext {
             .bridge_chunk
             .unwrap_or_else(|| u16::try_from(model.chunks.len()).expect("chunk ids are u16"));
         let mut lowering = Lowering::new(model, chunk, model.chunk_len(chunk));
+        let mut to_cache = None;
+        let closures = &self.closures;
         let lowered = (|| -> Result<(Callable, Vec<Value>), PureException> {
             let callable = match function {
                 Value::Element(_) => Callable::Value(function.clone()),
                 Value::Object(handle) => match self.kinds.of(model, handle) {
-                    FunctionKind::Lambda => Callable::Value(Value::Function(Box::new(
-                        FunctionValue::Lambda(lowering.lower_root_lambda(function)?),
-                    ))),
+                    FunctionKind::Lambda { definition } => {
+                        let cached = definition.and_then(|key| closures.get(&key));
+                        let closure = match cached {
+                            Some(cached) => cached.instantiate(&mut lowering, handle)?,
+                            None => {
+                                let closure = lowering.lower_root_lambda(function)?;
+                                to_cache = definition.map(|key| (key, CachedClosure::of(&closure)));
+                                closure
+                            }
+                        };
+                        Callable::Value(Value::Function(Box::new(FunctionValue::Lambda(closure))))
+                    }
                     FunctionKind::Native(key) => Callable::Native(key),
                     FunctionKind::Defined => Callable::Value(lowering.lower_value(function)?),
                     FunctionKind::Other(Some(path)) => {
@@ -314,6 +388,9 @@ impl JniContext {
         let extension = lowering.into_extension();
         if !extension.is_empty() {
             self.grow_model(extension)?;
+        }
+        if let Some((key, cached)) = to_cache {
+            self.closures.insert(key, cached);
         }
         Ok(lowered)
     }

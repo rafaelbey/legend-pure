@@ -282,6 +282,22 @@ public class TestRustEvaluatorBoundary
     }
 
     /**
+     * A lambda is lowered once per definition: the second call takes its
+     * body from the closure cache and reads nothing from Java to lower it,
+     * with the same result.
+     */
+    @Test
+    public void aLambdaIsLoweredOnceAndRunsAgainFromTheClosureCache()
+    {
+        CoreInstance lambda = findLambda(pctTest(PlatformCodeRepositoryProvider.grammarFunctions, "testSimpleMinus"));
+        CoreInstance first = evaluator.start(lambda, Lists.immutable.empty());
+        Assert.assertTrue(PureRustEvaluator.lastTimings()[3] > 0L);
+        CoreInstance second = evaluator.start(lambda, Lists.immutable.empty());
+        Assert.assertEquals(0L, PureRustEvaluator.lastTimings()[3]);
+        Assert.assertEquals(values(first).get(0).getName(), values(second).get(0).getName());
+    }
+
+    /**
      * A node kind the lowering does not know yet is reported as such, with
      * its classifier, and nothing else is evaluated. A unit of a measure
      * is one.

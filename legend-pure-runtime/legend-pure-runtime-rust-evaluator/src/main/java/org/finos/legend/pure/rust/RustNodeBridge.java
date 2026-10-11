@@ -54,7 +54,9 @@ final class RustNodeBridge
     private final PureRustEvaluator owner;
     private final IdentityHashMap<CoreInstance, Long> ids = new IdentityHashMap<>();
     private final Map<Long, CoreInstance> nodes = new HashMap<>();
+    private final Map<Object, Long> definitions = new HashMap<>();
     private long nextId;
+    private CoreInstance lambdaClass;
     private final MutableMap<Long, RustCoreInstance> proxies = Maps.mutable.empty();
 
     RustNodeBridge(RustEngineHost host, PureRustEvaluator owner)
@@ -68,6 +70,7 @@ final class RustNodeBridge
     {
         this.ids.clear();
         this.nodes.clear();
+        this.definitions.clear();
         this.proxies.clear();
     }
 
@@ -121,6 +124,15 @@ final class RustNodeBridge
         return this.nodes.size();
     }
 
+    private CoreInstance lambdaClass()
+    {
+        if (this.lambdaClass == null)
+        {
+            this.lambdaClass = this.processorSupport.package_getByUserPath(M3Paths.LambdaFunction);
+        }
+        return this.lambdaClass;
+    }
+
     private static String userPath(CoreInstance element)
     {
         return PackageableElement.getUserPathForPackageableElement(element, "::");
@@ -168,6 +180,14 @@ final class RustNodeBridge
             d.kind = NodeDescription.NODE;
             d.id = idOf(ci);
             d.keys = this.host.propertyKeys(ci).toArray(new String[0]);
+            if (classifier == lambdaClass())
+            {
+                Object definition = this.host.lambdaDefinition(ci);
+                if (definition != null)
+                {
+                    d.definition = this.definitions.computeIfAbsent(definition, k -> this.nextId++);
+                }
+            }
         }
         return d;
     }

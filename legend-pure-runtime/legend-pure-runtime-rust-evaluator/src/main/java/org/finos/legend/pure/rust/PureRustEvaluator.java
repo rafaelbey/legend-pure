@@ -234,9 +234,10 @@ public final class PureRustEvaluator implements FunctionExecution, Closeable
      * measurement: the lowering (both phases, including every JNI read it
      * made) and the run of the lowered closure, in nanoseconds, then the
      * number of JNI reads made during the run (zero means the run was the
-     * Rust evaluator alone).
+     * Rust evaluator alone) and during the lowering (zero means the lowered
+     * lambda came from the closure cache).
      *
-     * @return {@code [loweringNanos, runNanos, jniReadsDuringRun]}
+     * @return {@code [loweringNanos, runNanos, jniReadsDuringRun, jniReadsDuringLowering]}
      */
     public static long[] lastTimings()
     {

@@ -105,6 +105,9 @@ pub struct Description {
     pub keys: Vec<SmolStr>,
     /// Source span of the node, when the Java graph knows one.
     pub source: Option<SourceInfo>,
+    /// Bridge id of the lambda definition a per-evaluation lambda value
+    /// stands for (`RustEngineHost.lambdaDefinition`); -1 when none.
+    pub definition: i64,
 }
 
 fn string_field(
@@ -132,6 +135,7 @@ pub fn read_description(env: &mut JNIEnv, obj: &JObject) -> jni::errors::Result<
     };
     let kind = int(env, "kind")?;
     let id = env.get_field(obj, "id", "J")?.j()?;
+    let definition = env.get_field(obj, "definition", "J")?.j()?;
     let classifier = string_field(env, obj, "classifier")?.map(SmolStr::new);
     let name = string_field(env, obj, "name")?.map(SmolStr::new);
     let user_path = string_field(env, obj, "userPath")?.map(SmolStr::new);
@@ -177,6 +181,7 @@ pub fn read_description(env: &mut JNIEnv, obj: &JObject) -> jni::errors::Result<
         subsecond,
         keys,
         source,
+        definition,
     })
 }
 
@@ -330,6 +335,7 @@ fn canonical_node(shared: &Rc<BridgeShared>, d: Description) -> ObjectHandle {
         user_path: d.user_path,
         keys: d.keys,
         source: d.source,
+        definition: (d.definition >= 0).then_some(d.definition),
         cache: RefCell::new(HashMap::new()),
         local: HashMap::new(),
         shared: Rc::clone(shared),
@@ -354,6 +360,9 @@ pub struct JavaNode {
     pub user_path: Option<SmolStr>,
     /// Property keys reported by Java.
     pub keys: Vec<SmolStr>,
+    /// The lambda definition this node is one evaluation of, when the
+    /// engine wraps a lambda per evaluation (see [`Description::definition`]).
+    pub definition: Option<i64>,
     /// Source span reported by Java.
     pub source: Option<SourceInfo>,
     /// Property values fetched so far.

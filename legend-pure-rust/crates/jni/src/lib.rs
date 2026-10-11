@@ -532,7 +532,8 @@ pub extern "system" fn Java_org_finos_legend_pure_rust_PureRustEvaluator_nativeC
 }
 
 /// Where the last lowered `start` on this thread spent its time:
-/// `[lowering ns, run ns, JNI reads during the run]`.
+/// `[lowering ns, run ns, JNI reads during the run, JNI reads during the
+/// lowering]`.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_org_finos_legend_pure_rust_PureRustEvaluator_nativeLastTimings<
     'local,
@@ -545,8 +546,9 @@ pub extern "system" fn Java_org_finos_legend_pure_rust_PureRustEvaluator_nativeL
         i64::try_from(t.lower_ns).unwrap_or(i64::MAX),
         i64::try_from(t.run_ns).unwrap_or(i64::MAX),
         i64::try_from(t.run_jni_reads).unwrap_or(i64::MAX),
+        i64::try_from(t.lower_jni_reads).unwrap_or(i64::MAX),
     ];
-    match env.new_long_array(3) {
+    match env.new_long_array(4) {
         Ok(array) => {
             if env.set_long_array_region(&array, 0, &values).is_err() {
                 let _ = failure::take_pending(&mut env);
