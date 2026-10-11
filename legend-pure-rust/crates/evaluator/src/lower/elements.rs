@@ -19,6 +19,8 @@ use std::sync::Arc;
 
 use legend_pure_metamodel::ids::ElementId;
 use legend_pure_metamodel::model::Element;
+use legend_pure_metamodel::nodes::class::{Class, Property, QualifiedProperty, TypeParameter};
+use legend_pure_metamodel::nodes::enumeration::{EnumValue, Enumeration};
 use legend_pure_metamodel::nodes::function::Function;
 use legend_pure_metamodel::types::{Multiplicity, Parameter, TypeExpr};
 use smol_str::SmolStr;
@@ -64,10 +66,19 @@ impl Lowering<'_> {
         {
             return self.lower_function(&node);
         }
-        if self.is(&node, self.ids.primitive_type) {
-            return Err(Self::unsupported(&node, "outside the bootstrap"));
+        if self.is(&node, self.ids.class) {
+            return self.lower_class(&node);
         }
-        Err(Self::unsupported(&node, "as an element"))
+        if self.is(&node, self.ids.enumeration) {
+            return self.lower_enumeration(&node);
+        }
+        if self.is(&node, self.ids.primitive_type) {
+            return Err(Self::unsupported(
+                &node,
+                &format!("`{path}` outside the bootstrap"),
+            ));
+        }
+        Err(Self::unsupported(&node, &format!("`{path}` as an element")))
     }
 
     /// A `NativeFunction` or `ConcreteFunctionDefinition` node into a
@@ -94,7 +105,7 @@ impl Lowering<'_> {
         let function_name = node
             .string("functionName")
             .unwrap_or_else(|| SmolStr::new(mangled.split('_').next().unwrap_or(mangled.as_str())));
-        let (parameters, return_type, return_multiplicity) = self.function_signature(node);
+        let (parameters, return_type, return_multiplicity) = self.function_signature(node)?;
         // The id is reserved, so a body that calls this function (directly
         // or through a sibling) resolves to it while it is being lowered.
         let mut body: Vec<legend_pure_metamodel::types::ValueSpec> = Vec::new();
@@ -127,14 +138,14 @@ impl Lowering<'_> {
     pub(crate) fn function_signature(
         &mut self,
         node: &Node,
-    ) -> (Vec<Parameter>, TypeExpr, Multiplicity) {
+    ) -> Result<(Vec<Parameter>, TypeExpr, Multiplicity), LowerError> {
         let function_type = self.function_type_node(node);
         let mut parameters = Vec::new();
         if let Some(ft) = &function_type {
             for p in ft.nodes("parameters") {
                 let name = p.string("name").unwrap_or_default();
-                let type_expr = self.parameter_type(&p);
-                let multiplicity = self.parameter_multiplicity(&p);
+                let type_expr = self.parameter_type(&p)?;
+                let multiplicity = self.parameter_multiplicity(&p)?;
                 parameters.push(Parameter {
                     name,
                     type_expr,
@@ -143,17 +154,190 @@ impl Lowering<'_> {
                 });
             }
         }
-        let return_type = function_type
-            .as_ref()
-            .and_then(|ft| ft.one("returnType"))
-            .and_then(|rt| self.lower_generic_type(&rt).ok())
-            .unwrap_or_else(|| TypeExpr::Generic(SmolStr::new("T")));
-        let return_multiplicity = function_type
+        let return_type = match function_type.as_ref().and_then(|ft| ft.one("returnType")) {
+            Some(rt) => {
+                let r = self.lower_generic_type(&rt);
+                self.advisory(r)?
+            }
+            None => None,
+        }
+        .unwrap_or_else(|| TypeExpr::Generic(SmolStr::new("T")));
+        let return_multiplicity = match function_type
             .as_ref()
             .and_then(|ft| ft.one("returnMultiplicity"))
-            .and_then(|m| self.lower_multiplicity(&m).ok())
-            .unwrap_or(Multiplicity::ZeroOrMany);
-        (parameters, return_type, return_multiplicity)
+        {
+            Some(m) => {
+                let r = self.lower_multiplicity(&m);
+                self.advisory(r)?
+            }
+            None => None,
+        }
+        .unwrap_or(Multiplicity::ZeroOrMany);
+        Ok((parameters, return_type, return_multiplicity))
+    }
+
+    /// A `Class` node into a [`Class`] element: type and multiplicity
+    /// parameters, supertypes, properties (with lowered default values),
+    /// qualified properties (bodies lowered; the leading `this` parameter
+    /// of the M3 function type is the receiver, bound by the evaluator).
+    /// Constraints are not lowered yet: a construction that should have
+    /// failed a constraint passes, which a PCT test then reports.
+    ///
+    /// # Errors
+    /// The node has no path, or a member cannot be lowered.
+    pub fn lower_class(&mut self, node: &Node) -> Result<ElementId, LowerError> {
+        if let Some(id) = self.ext.lookup_node(node.key()) {
+            return Ok(id);
+        }
+        let path = node
+            .user_path()
+            .ok_or_else(|| Self::read_error(node, "missing user path"))?;
+        let name = node
+            .name()
+            .ok_or_else(|| Self::read_error(node, "missing name"))?;
+        let id = self.ext.reserve(node.key(), &path, name, node.span());
+        let type_parameters = node
+            .nodes("typeParameters")
+            .iter()
+            .filter_map(|tp| tp.string("name"))
+            .map(TypeParameter::invariant)
+            .collect();
+        let multiplicity_parameters = node
+            .nodes("multiplicityParameters")
+            .iter()
+            .filter_map(|mp| Self::string_value(mp.prop("values").head()))
+            .collect();
+        let mut super_types = Vec::new();
+        for g in node.nodes("generalizations") {
+            let general = g
+                .one("general")
+                .ok_or_else(|| Self::read_error(&g, "missing general"))?;
+            super_types.push(self.lower_generic_type(&general)?);
+        }
+        let mut properties = Vec::new();
+        for p in node.nodes("properties") {
+            properties.push(self.lower_property(&p)?);
+        }
+        let mut qualified_properties = Vec::new();
+        for qp in node.nodes("qualifiedProperties") {
+            qualified_properties.push(self.lower_qualified_property(&qp)?);
+        }
+        self.ext.fill(
+            id,
+            Element::Class(Class {
+                type_parameters,
+                multiplicity_parameters,
+                type_variable_parameters: Vec::new(),
+                super_types,
+                properties,
+                qualified_properties,
+                constraints: Vec::new(),
+                stereotypes: Vec::new(),
+                tagged_values: Vec::new(),
+                original_milestoned_properties: Vec::new(),
+            }),
+        );
+        Ok(id)
+    }
+
+    fn lower_property(&mut self, p: &Node) -> Result<Property, LowerError> {
+        let name = p
+            .string("name")
+            .ok_or_else(|| Self::read_error(p, "missing property name"))?;
+        let type_expr = match p.one("genericType") {
+            Some(gt) => self.lower_generic_type(&gt)?,
+            None => TypeExpr::Generic(name.clone()),
+        };
+        let multiplicity = match p.one("multiplicity") {
+            Some(m) => self.lower_multiplicity(&m)?,
+            None => Multiplicity::ZeroOrMany,
+        };
+        // `defaultValue` is a `DefaultValue` node holding a zero-argument
+        // function definition whose body is the value.
+        let default_value = match p.node("defaultValue") {
+            Some(dv) => {
+                let body = dv
+                    .node("functionDefinition")
+                    .map(|f| f.nodes("expressionSequence"))
+                    .unwrap_or_default();
+                match body.first() {
+                    Some(e) => Some(self.lower_expr(e)?),
+                    None => return Err(Self::unsupported(&dv, "without a function definition")),
+                }
+            }
+            None => None,
+        };
+        Ok(Property {
+            name,
+            source_info: p.span(),
+            type_expr,
+            multiplicity,
+            aggregation: None,
+            default_value,
+            stereotypes: Vec::new(),
+            tagged_values: Vec::new(),
+        })
+    }
+
+    fn lower_qualified_property(&mut self, qp: &Node) -> Result<QualifiedProperty, LowerError> {
+        let name = qp
+            .string("name")
+            .ok_or_else(|| Self::read_error(qp, "missing qualified property name"))?;
+        let (mut parameters, return_type, return_multiplicity) = self.function_signature(qp)?;
+        if parameters.first().is_some_and(|p| p.name == "this") {
+            parameters.remove(0);
+        }
+        let mut body = Vec::new();
+        for e in qp.nodes("expressionSequence") {
+            body.push(self.lower_expr(&e)?);
+        }
+        Ok(QualifiedProperty {
+            name,
+            source_info: qp.span(),
+            parameters: parameters.into(),
+            return_type,
+            return_multiplicity,
+            body: body.into(),
+            stereotypes: Vec::new(),
+            tagged_values: Vec::new(),
+        })
+    }
+
+    /// An `Enumeration` node into an [`Enumeration`] element.
+    ///
+    /// # Errors
+    /// The node has no path.
+    pub fn lower_enumeration(&mut self, node: &Node) -> Result<ElementId, LowerError> {
+        if let Some(id) = self.ext.lookup_node(node.key()) {
+            return Ok(id);
+        }
+        let path = node
+            .user_path()
+            .ok_or_else(|| Self::read_error(node, "missing user path"))?;
+        let name = node
+            .name()
+            .ok_or_else(|| Self::read_error(node, "missing name"))?;
+        let id = self.ext.reserve(node.key(), &path, name, node.span());
+        let values = node
+            .nodes("values")
+            .iter()
+            .filter_map(|v| v.name().or_else(|| v.string("name")).map(|n| (n, v.span())))
+            .map(|(name, source_info)| EnumValue {
+                name,
+                source_info,
+                stereotypes: Vec::new(),
+                tagged_values: Vec::new(),
+            })
+            .collect();
+        self.ext.fill(
+            id,
+            Element::Enumeration(Enumeration {
+                values,
+                stereotypes: Vec::new(),
+                tagged_values: Vec::new(),
+            }),
+        );
+        Ok(id)
     }
 
     pub(crate) fn function_type_node(&self, node: &Node) -> Option<Node> {

@@ -127,6 +127,7 @@ impl JniContext {
             ))),
         };
         evaluator.context_mut().pop_scope();
+        self.shared.end_execution();
         if let Some(message) = self.shared.take_error() {
             return Err(ffi_error(message));
         }
@@ -169,6 +170,7 @@ impl JniContext {
         let callable = Value::Function(Box::new(FunctionValue::Lambda(closure)));
         let result = evaluator.apply_callable(&callable, &[]);
         evaluator.context_mut().pop_scope();
+        self.shared.end_execution();
         if let Some(message) = self.shared.take_error() {
             return Err(ffi_error(message));
         }

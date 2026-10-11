@@ -37,8 +37,8 @@ impl Lowering<'_> {
                 let name = p
                     .string("name")
                     .ok_or_else(|| Self::read_error(&p, "missing parameter name"))?;
-                let type_expr = self.parameter_type(&p);
-                let multiplicity = self.parameter_multiplicity(&p);
+                let type_expr = self.parameter_type(&p)?;
+                let multiplicity = self.parameter_multiplicity(&p)?;
                 parameters.push(Parameter {
                     name,
                     type_expr,
@@ -70,7 +70,7 @@ impl Lowering<'_> {
             let name = node
                 .string("name")
                 .ok_or_else(|| Self::read_error(node, "missing variable name"))?;
-            let type_info = self.resolved_type(node);
+            let type_info = self.resolved_type(node)?;
             self.spec(ExprKind::Variable { name }, node.span(), type_info)
         } else {
             return Err(Self::unsupported(node, "as an expression"));
@@ -82,7 +82,8 @@ impl Lowering<'_> {
     fn lower_instance_value(&mut self, node: &Node) -> Result<ValueSpec, LowerError> {
         let values = node.prop("values");
         let span = node.span();
-        let type_info = self.resolved_type(node);
+        // The type first: an enum value's enumeration is reached through it.
+        let type_info = self.resolved_type(node)?;
         let kind = match values.len() {
             0 => return self.lower_type_literal(node, type_info),
             1 => {
@@ -175,6 +176,13 @@ impl Lowering<'_> {
                     || self.is(&node, self.ids.variable_expression)
                 {
                     return self.lower_expr(&node);
+                } else if let Some(enum_id) = self.enumeration_of(&node) {
+                    ExprKind::EnumValue {
+                        enum_element: enum_id,
+                        value: node
+                            .name()
+                            .ok_or_else(|| Self::read_error(&node, "missing enum value name"))?,
+                    }
                 } else if node.user_path().is_some() {
                     ExprKind::PackageableElementRef {
                         element: self.element_for(value)?,
@@ -222,6 +230,19 @@ impl Lowering<'_> {
         let func = node
             .one("func")
             .ok_or_else(|| Self::read_error(node, "missing func"))?;
+        if let Value::Object(h) = &func {
+            let f = Node::new(h.clone());
+            let qualified = if self.is(&f, self.ids.property) {
+                Some(false)
+            } else if self.is(&f, self.ids.qualified_property) {
+                Some(true)
+            } else {
+                None
+            };
+            if let Some(qualified) = qualified {
+                return self.lower_property_call(node, &f, qualified);
+            }
+        }
         let function = self.element_for(&func)?;
         let function_name = match node.string("functionName") {
             Some(name) => name,
@@ -237,7 +258,7 @@ impl Lowering<'_> {
         for arg in node.nodes("parametersValues") {
             arguments.push(self.lower_expr(&arg)?);
         }
-        let type_info = self.resolved_type(node);
+        let type_info = self.resolved_type(node)?;
         Ok(self.spec(
             ExprKind::FunctionCall(FunctionCallData {
                 function: Some(function),
@@ -247,5 +268,45 @@ impl Lowering<'_> {
             node.span(),
             type_info,
         ))
+    }
+
+    /// `$x.prop` / `$x.qp(args)`: the receiver is the first argument. The
+    /// owning class is reached through the receiver's type, so its
+    /// (qualified) properties are in the model when the call runs.
+    fn lower_property_call(
+        &mut self,
+        node: &Node,
+        property: &Node,
+        qualified: bool,
+    ) -> Result<ValueSpec, LowerError> {
+        let function_name = property
+            .string("name")
+            .ok_or_else(|| Self::read_error(property, "missing property name"))?;
+        let mut arguments = Vec::new();
+        for arg in node.nodes("parametersValues") {
+            arguments.push(self.lower_expr(&arg)?);
+        }
+        let type_info = self.resolved_type(node)?;
+        let data = FunctionCallData {
+            function: None,
+            function_name,
+            arguments,
+        };
+        let kind = if qualified {
+            ExprKind::QualifiedPropertyCall(data)
+        } else {
+            ExprKind::PropertyCall(data)
+        };
+        Ok(self.spec(kind, node.span(), type_info))
+    }
+
+    /// The enumeration a node is a value of, when its classifier is an
+    /// enumeration the model or this lowering knows.
+    pub(crate) fn enumeration_of(
+        &self,
+        node: &Node,
+    ) -> Option<legend_pure_metamodel::ids::ElementId> {
+        let id = self.classifier_id(node)?;
+        self.is_enumeration(id).then_some(id)
     }
 }

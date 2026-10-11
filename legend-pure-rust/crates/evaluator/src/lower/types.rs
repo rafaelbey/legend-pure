@@ -76,8 +76,8 @@ impl Lowering<'_> {
     pub fn lower_function_type(&mut self, node: &Node) -> Result<TypeExpr, LowerError> {
         let mut parameters = Vec::new();
         for p in node.nodes("parameters") {
-            let type_expr = self.parameter_type(&p);
-            let multiplicity = self.parameter_multiplicity(&p);
+            let type_expr = self.parameter_type(&p)?;
+            let multiplicity = self.parameter_multiplicity(&p)?;
             parameters.push((type_expr, multiplicity));
         }
         let return_type = match node.one("returnType") {
@@ -98,26 +98,37 @@ impl Lowering<'_> {
     /// The declared type of a parameter (`VariableExpression`) node; a
     /// type that cannot be lowered becomes the parameter's own name as a
     /// type variable, never an error: parameter types are advisory.
-    pub(crate) fn parameter_type(&mut self, parameter: &Node) -> TypeExpr {
-        parameter
-            .one("genericType")
-            .and_then(|gt| self.lower_generic_type(&gt).ok())
-            .unwrap_or_else(|| {
-                TypeExpr::Generic(
-                    parameter
-                        .string("name")
-                        .unwrap_or_else(|| SmolStr::new("T")),
-                )
-            })
+    pub(crate) fn parameter_type(&mut self, parameter: &Node) -> Result<TypeExpr, LowerError> {
+        let lowered = match parameter.one("genericType") {
+            Some(gt) => {
+                let r = self.lower_generic_type(&gt);
+                self.advisory(r)?
+            }
+            None => None,
+        };
+        Ok(lowered.unwrap_or_else(|| {
+            TypeExpr::Generic(
+                parameter
+                    .string("name")
+                    .unwrap_or_else(|| SmolStr::new("T")),
+            )
+        }))
     }
 
     /// The declared multiplicity of a parameter node; `[*]` when absent
     /// or unreadable.
-    pub(crate) fn parameter_multiplicity(&mut self, parameter: &Node) -> Multiplicity {
-        parameter
-            .one("multiplicity")
-            .and_then(|m| self.lower_multiplicity(&m).ok())
-            .unwrap_or(Multiplicity::ZeroOrMany)
+    pub(crate) fn parameter_multiplicity(
+        &mut self,
+        parameter: &Node,
+    ) -> Result<Multiplicity, LowerError> {
+        let lowered = match parameter.one("multiplicity") {
+            Some(m) => {
+                let r = self.lower_multiplicity(&m);
+                self.advisory(r)?
+            }
+            None => None,
+        };
+        Ok(lowered.unwrap_or(Multiplicity::ZeroOrMany))
     }
 
     /// A `Multiplicity` node, or a `PackageableMultiplicity` element, into
@@ -172,13 +183,25 @@ impl Lowering<'_> {
     /// The static type of an expression node from its `genericType` and
     /// `multiplicity`, when both lower; `None` otherwise (types are
     /// advisory for the evaluator).
-    pub(crate) fn resolved_type(&mut self, node: &Node) -> Option<Box<ResolvedType>> {
-        let type_expr = self.lower_generic_type(&node.one("genericType")?).ok()?;
-        let multiplicity = self.lower_multiplicity(&node.one("multiplicity")?).ok()?;
-        Some(Box::new(ResolvedType {
+    pub(crate) fn resolved_type(
+        &mut self,
+        node: &Node,
+    ) -> Result<Option<Box<ResolvedType>>, LowerError> {
+        let (Some(gt), Some(m)) = (node.one("genericType"), node.one("multiplicity")) else {
+            return Ok(None);
+        };
+        let type_expr = self.lower_generic_type(&gt);
+        let Some(type_expr) = self.advisory(type_expr)? else {
+            return Ok(None);
+        };
+        let multiplicity = self.lower_multiplicity(&m);
+        let Some(multiplicity) = self.advisory(multiplicity)? else {
+            return Ok(None);
+        };
+        Ok(Some(Box::new(ResolvedType {
             type_expr,
             multiplicity,
-        }))
+        })))
     }
 
     fn lower_type_arguments(&mut self, node: &Node) -> Result<Vec<TypeExpr>, LowerError> {

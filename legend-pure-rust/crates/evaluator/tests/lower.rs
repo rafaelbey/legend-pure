@@ -563,3 +563,253 @@ fn a_captured_lambda_is_lowered_into_a_closure() {
         .unwrap();
     assert_eq!(applied, Value::Integer(6));
 }
+
+const NEW_KE: &str = "meta::pure::functions::lang::new_Class_1__String_1__KeyExpression_MANY__T_1_";
+
+fn class_meta(model: &PureModel) -> Value {
+    Value::Element(
+        model
+            .resolve_fqn_str(legend_pure_evaluator::m3_paths::CLASS)
+            .unwrap(),
+    )
+}
+
+/// `^Person(firstName='John')`, as the Java compiler emits it: the class
+/// as an empty `InstanceValue` typed `Class<Person>`, the id, the key
+/// expressions.
+fn new_person(model: &PureModel, person: &Value, first_name: &str) -> Value {
+    let new_fn = m3::native_function(
+        NEW_KE,
+        "new",
+        m3::function_type(Vec::new(), m3::type_parameter("T"), one()),
+    );
+    m3::sfe(
+        new_fn,
+        "new",
+        vec![
+            m3::iv(
+                Vec::new(),
+                Some(m3::generic(
+                    Some(class_meta(model)),
+                    vec![m3::generic(Some(person.clone()), Vec::new())],
+                )),
+                Some(one()),
+            ),
+            str_lit(""),
+            m3::iv(
+                vec![m3::key_expression("firstName", str_lit(first_name), false)],
+                None,
+                Some(many()),
+            ),
+        ],
+    )
+}
+
+/// `Class Person { firstName: String[1]; greeting(prefix: String[1]) { $prefix + $this.firstName } }`.
+/// The qualified property's `this` parameter is typed by the class itself,
+/// so the node graph is a cycle, as the Java graph is.
+fn person_class() -> Value {
+    let shell = TestNode::new(legend_pure_evaluator::m3_paths::CLASS)
+        .path("my::model::Person")
+        .build();
+    let greeting = m3::qualified_property(
+        "greeting",
+        m3::generic(Some(shell.clone()), Vec::new()),
+        vec![m3::param("prefix", string_type(), one())],
+        string_type(),
+        one(),
+        vec![m3::sfe(
+            m3::native_function(
+                "meta::pure::functions::string::plus_String_MANY__String_1_",
+                "plus",
+                m3::function_type(
+                    vec![m3::param("values", string_type(), many())],
+                    string_type(),
+                    one(),
+                ),
+            ),
+            "plus",
+            vec![m3::iv(
+                vec![
+                    m3::var("prefix"),
+                    m3::sfe(
+                        m3::property("firstName", string_type(), one()),
+                        "firstName",
+                        vec![m3::var("this")],
+                    ),
+                ],
+                Some(string_type()),
+                Some(many()),
+            )],
+        )],
+    );
+    let Value::Object(h) = &shell else {
+        unreachable!()
+    };
+    h.borrow_mut()
+        .mutate_set(
+            "properties",
+            &[m3::property("firstName", string_type(), one())],
+        )
+        .unwrap();
+    h.borrow_mut()
+        .mutate_set("qualifiedProperties", &[greeting])
+        .unwrap();
+    shell
+}
+
+#[test]
+fn a_class_construction_lowers_the_class_and_builds_through_the_platform_new() {
+    let mut model = PureModel::bootstrapped();
+    let person = person_class();
+    let property = m3::property("firstName", string_type(), one());
+    // `let p = ^Person(firstName='John'); $p.firstName`
+    let let_fn = m3::native_function(
+        LET,
+        "letFunction",
+        m3::function_type(Vec::new(), m3::type_parameter("T"), many()),
+    );
+    let body = vec![
+        m3::sfe(
+            let_fn,
+            "letFunction",
+            vec![str_lit("p"), new_person(&model, &person, "John")],
+        ),
+        m3::sfe(property, "firstName", vec![m3::var("p")]),
+    ];
+    let lambda = root(body);
+    let chunk = u16::try_from(model.chunks.len()).unwrap();
+    let mut lowering = Lowering::new(&model, chunk, 0);
+    let closure = lowering.lower_root_lambda(&lambda).unwrap();
+    assert!(
+        matches!(&*closure.body[1].kind, ExprKind::PropertyCall(c) if c.function_name == "firstName" && c.arguments.len() == 1)
+    );
+    let ExprKind::FunctionCall(let_call) = &*closure.body[0].kind else {
+        panic!()
+    };
+    let ExprKind::FunctionCall(new_call) = &*let_call.arguments[1].kind else {
+        panic!()
+    };
+    assert!(matches!(
+        &*new_call.arguments[0].kind,
+        ExprKind::TypeReference { .. }
+    ));
+    // One key expression lowers bare (one value), as the platform `new`
+    // accepts a singleton as well as a collection.
+    assert!(
+        matches!(&*new_call.arguments[2].kind, ExprKind::KeyExpression { key, add: false, .. } if key == "firstName")
+    );
+    let extension = lowering.into_extension();
+    extension.apply(&mut model);
+    let person_id = model
+        .resolve_fqn_str("my::model::Person")
+        .expect("class lowered");
+    let Element::Class(class) = model.get_element(person_id) else {
+        panic!()
+    };
+    assert_eq!(class.properties.len(), 1);
+    assert_eq!(class.qualified_properties.len(), 1);
+    assert_eq!(
+        class.qualified_properties[0].parameters.len(),
+        1,
+        "the `this` parameter is the receiver, not a parameter"
+    );
+    assert_eq!(run(&model, closure), Value::String("John".into()));
+}
+
+#[test]
+fn an_enum_value_lowers_its_enumeration_first() {
+    let mut model = PureModel::bootstrapped();
+    let colour = m3::enumeration("my::model::Colour", &["RED", "GREEN"]);
+    let Value::Object(h) = &colour else {
+        unreachable!()
+    };
+    let green = h
+        .borrow()
+        .get_property_values("values")
+        .get(1)
+        .cloned()
+        .unwrap();
+    let lambda = root(vec![m3::iv(
+        vec![green],
+        Some(m3::generic(Some(colour.clone()), Vec::new())),
+        Some(one()),
+    )]);
+    let chunk = u16::try_from(model.chunks.len()).unwrap();
+    let mut lowering = Lowering::new(&model, chunk, 0);
+    let closure = lowering.lower_root_lambda(&lambda).unwrap();
+    let ExprKind::EnumValue {
+        enum_element,
+        value,
+    } = &*closure.body[0].kind
+    else {
+        panic!("expected an enum value, got {:?}", closure.body[0].kind);
+    };
+    assert_eq!(value, "GREEN");
+    let enum_id = *enum_element;
+    lowering.into_extension().apply(&mut model);
+    assert_eq!(model.resolve_fqn_str("my::model::Colour"), Some(enum_id));
+    assert!(matches!(model.get_element(enum_id), Element::Enumeration(e) if e.values.len() == 2));
+    assert_eq!(
+        run(&model, closure),
+        Value::EnumValue {
+            enum_id,
+            member: "GREEN".into()
+        }
+    );
+}
+
+#[test]
+fn a_type_literal_lowers_to_a_type_reference() {
+    let mut model = PureModel::bootstrapped();
+    let person = person_class();
+    let lambda = root(vec![m3::iv(
+        Vec::new(),
+        Some(m3::generic(Some(person), Vec::new())),
+        Some(one()),
+    )]);
+    let chunk = u16::try_from(model.chunks.len()).unwrap();
+    let mut lowering = Lowering::new(&model, chunk, 0);
+    let closure = lowering.lower_root_lambda(&lambda).unwrap();
+    assert!(matches!(
+        &*closure.body[0].kind,
+        ExprKind::TypeReference { .. }
+    ));
+    lowering.into_extension().apply(&mut model);
+    let person_id = model.resolve_fqn_str("my::model::Person").unwrap();
+    assert_eq!(run(&model, closure), Value::Element(person_id));
+}
+
+#[test]
+fn a_type_that_cannot_lower_is_dropped_unless_an_element_is_half_built() {
+    let model = PureModel::bootstrapped();
+    // An expression typed by an unknown kind of node: the type is advisory,
+    // the literal still lowers.
+    let odd_type = m3::generic(Some(TestNode::new("meta::x::Y").build()), Vec::new());
+    let lambda = root(vec![m3::iv(
+        vec![Value::Integer(1)],
+        Some(odd_type.clone()),
+        Some(one()),
+    )]);
+    let mut lowering = Lowering::new(&model, 1, 0);
+    let closure = lowering.lower_root_lambda(&lambda).unwrap();
+    assert!(closure.body[0].type_info.is_none());
+    // The same type on a class property is an error: the class would be
+    // half-built otherwise.
+    let bad_class = m3::class(
+        "my::model::Bad",
+        vec![m3::property("p", odd_type, one())],
+        Vec::new(),
+    );
+    let lambda = root(vec![m3::iv(
+        Vec::new(),
+        Some(m3::generic(Some(bad_class), Vec::new())),
+        Some(one()),
+    )]);
+    let mut lowering = Lowering::new(&model, 1, 0);
+    let err = lowering.lower_root_lambda(&lambda).unwrap_err();
+    assert!(
+        matches!(&err, LowerError::Unsupported(m) if m.contains("meta::x::Y")),
+        "{err:?}"
+    );
+}

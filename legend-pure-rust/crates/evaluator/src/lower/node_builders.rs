@@ -332,6 +332,66 @@ pub mod m3 {
             .build()
     }
 
+    /// A `Property` node of a class.
+    #[must_use]
+    pub fn property(name: &str, generic_type: Value, multiplicity: Value) -> Value {
+        TestNode::new(m3_paths::PROPERTY)
+            .name(name)
+            .one("name", Value::String(name.into()))
+            .one("genericType", generic_type)
+            .one("multiplicity", multiplicity)
+            .build()
+    }
+
+    /// A `QualifiedProperty` node: its function type's first parameter is
+    /// `this`, as the Java compiler writes it.
+    #[must_use]
+    pub fn qualified_property(
+        name: &str,
+        this_type: Value,
+        parameters: Vec<Value>,
+        return_type: Value,
+        return_multiplicity: Value,
+        body: Vec<Value>,
+    ) -> Value {
+        let one = mult(1, Some(1));
+        let mut params = vec![param("this", this_type, one)];
+        params.extend(parameters);
+        TestNode::new(m3_paths::QUALIFIED_PROPERTY)
+            .name(name)
+            .one("name", Value::String(name.into()))
+            .one(
+                "classifierGenericType",
+                classifier_generic_type(function_type(params, return_type, return_multiplicity)),
+            )
+            .prop("expressionSequence", body)
+            .build()
+    }
+
+    /// A `Class` element at `path` with properties and qualified properties.
+    #[must_use]
+    pub fn class(path: &str, properties: Vec<Value>, qualified_properties: Vec<Value>) -> Value {
+        TestNode::new(m3_paths::CLASS)
+            .path(path)
+            .prop("properties", properties)
+            .prop("qualifiedProperties", qualified_properties)
+            .build()
+    }
+
+    /// An `Enumeration` element at `path` with the given values; each value
+    /// node is classified by the enumeration's path, as in the Java graph.
+    #[must_use]
+    pub fn enumeration(path: &str, values: &[&str]) -> Value {
+        let nodes = values
+            .iter()
+            .map(|v| TestNode::new(path).name(v).build())
+            .collect();
+        TestNode::new(m3_paths::ENUMERATION)
+            .path(path)
+            .prop("values", nodes)
+            .build()
+    }
+
     /// `KeyExpression` of `^Class(key = expression)`.
     #[must_use]
     pub fn key_expression(key: &str, expression: Value, add: bool) -> Value {

@@ -7,11 +7,11 @@
     },
     {
       "test": "meta::pure::functions::boolean::tests::equality::eq::testEqEnum_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering meta::pure::metamodel::type::Enumeration as an element"
+      "expectedError": "FunctionNotFound: extractEnumValue_Enumeration_1__String_1__T_1_"
     },
     {
       "test": "meta::pure::functions::boolean::tests::equality::eq::testEqPrimitiveExtension_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering meta::pure::metamodel::type::PrimitiveType outside the bootstrap"
+      "expectedError": "Unsupported: lowering meta::pure::metamodel::type::PrimitiveType `meta::pure::functions::boolean::tests::equalitymodel::ExtendedInteger` outside the bootstrap"
     },
     {
       "test": "meta::pure::functions::boolean::tests::equality::eq::testEqString_Function_1__Boolean_1_",
@@ -19,7 +19,7 @@
     },
     {
       "test": "meta::pure::functions::boolean::tests::equality::equal::testEqualEnum_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering meta::pure::metamodel::type::Enumeration as an element"
+      "expectedError": "FunctionNotFound: extractEnumValue_Enumeration_1__String_1__T_1_"
     },
     {
       "test": "meta::pure::functions::boolean::tests::equality::equal::testEqualNonPrimitive_Function_1__Boolean_1_",
@@ -27,7 +27,7 @@
     },
     {
       "test": "meta::pure::functions::boolean::tests::equality::equal::testEqualPrimitiveExtension_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering meta::pure::metamodel::type::PrimitiveType outside the bootstrap"
+      "expectedError": "Unsupported: lowering meta::pure::metamodel::type::PrimitiveType `meta::pure::functions::boolean::tests::equalitymodel::ExtendedInteger` outside the bootstrap"
     },
     {
       "test": "meta::pure::functions::boolean::tests::equality::equal::testEqualString_Function_1__Boolean_1_",
@@ -83,7 +83,7 @@
     },
     {
       "test": "meta::pure::functions::collection::tests::filter::testFilterInstance_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering meta::pure::metamodel::function::property::Property as an element (no user path)"
+      "expectedError": "FunctionNotFound: filter_T_MANY__Function_1__T_MANY_"
     },
     {
       "test": "meta::pure::functions::collection::tests::filter::testFilterLiteralFromVar_Function_1__Boolean_1_",
@@ -143,19 +143,19 @@
     },
     {
       "test": "meta::pure::functions::collection::tests::map::testMapInstance_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering meta::pure::metamodel::function::property::Property as an element (no user path)"
+      "expectedError": "FunctionNotFound: map_T_m__Function_1__V_m_"
     },
     {
       "test": "meta::pure::functions::collection::tests::map::testMapRelationshipFromManyToMany_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering meta::pure::metamodel::function::property::Property as an element (no user path)"
+      "expectedError": "FunctionNotFound: map_T_MANY__Function_1__V_MANY_"
     },
     {
       "test": "meta::pure::functions::collection::tests::map::testMapRelationshipFromManyToOne_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering meta::pure::metamodel::function::property::Property as an element (no user path)"
+      "expectedError": "FunctionNotFound: map_T_MANY__Function_1__V_MANY_"
     },
     {
       "test": "meta::pure::functions::collection::tests::map::testMapRelationshipFromOneToOne_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering meta::pure::metamodel::function::property::Property as an element (no user path)"
+      "expectedError": "FunctionNotFound: toOne_T_MANY__T_1_"
     },
     {
       "test": "meta::pure::functions::collection::tests::range::testRangeStepError_Function_1__Boolean_1_",
@@ -195,7 +195,7 @@
     },
     {
       "test": "meta::pure::functions::collection::tests::size::testSizeOnGraphObject_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering meta::pure::metamodel::type::Class as an element"
+      "expectedError": "FunctionNotFound: size_Any_MANY__Integer_1_"
     },
     {
       "test": "meta::pure::functions::collection::tests::size::testSize_Function_1__Boolean_1_",
@@ -234,12 +234,8 @@
       "expectedError": "FunctionNotFound: lessThan_Number_1__Number_1__Boolean_1_"
     },
     {
-      "test": "meta::pure::functions::lang::tests::letFn::testAssignNewInstance_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering meta::pure::metamodel::type::Class as an element"
-    },
-    {
       "test": "meta::pure::functions::lang::tests::letFn::testLetChainedWithAnotherFunction_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering meta::pure::metamodel::type::Class as an element"
+      "expectedError": "FunctionNotFound: removeDuplicates_T_MANY__Function_$0_1$__Function_$0_1$__T_MANY_"
     },
     {
       "test": "meta::pure::functions::lang::tests::letFn::testLetWithParam_Function_1__Boolean_1_",
@@ -275,19 +271,19 @@
     },
     {
       "test": "meta::pure::functions::math::tests::minus::testSingleMinusType_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering meta::pure::metamodel::function::property::Property as an element (no user path)"
+      "expectedError": "FunctionNotFound: toOne_T_MANY__T_1_"
     },
     {
       "test": "meta::pure::functions::math::tests::plus::testLargePlus_Function_1__Boolean_1_",
-      "expectedError": ""
+      "expectedError": "expected: 9223372036854775826"
     },
     {
       "test": "meta::pure::functions::math::tests::plus::testSinglePlusType_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering meta::pure::metamodel::function::property::Property as an element (no user path)"
+      "expectedError": "FunctionNotFound: toOne_T_MANY__T_1_"
     },
     {
       "test": "meta::pure::functions::math::tests::times::testLargeTimes_Function_1__Boolean_1_",
-      "expectedError": ""
+      "expectedError": "expected: 18446744073709551614"
     },
     {
       "test": "meta::pure::functions::string::tests::plus::testMultiPlusWithFunctionExpressions_Function_1__Boolean_1_",
@@ -295,7 +291,7 @@
     },
     {
       "test": "meta::pure::functions::string::tests::plus::testMultiPlusWithPropertyExpressions_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering meta::pure::metamodel::function::property::Property as an element (no user path)"
+      "expectedError": "FunctionNotFound: joinStrings_String_MANY__String_1__String_1__String_1__String_1_"
     },
     {
       "test": "meta::pure::functions::string::tests::plus::testMultiPlus_Function_1__Boolean_1_",
@@ -303,11 +299,11 @@
     },
     {
       "test": "meta::pure::functions::string::tests::plus::testPlusInCollect_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering meta::pure::metamodel::function::property::Property as an element (no user path)"
+      "expectedError": "FunctionNotFound: map_T_m__Function_1__V_m_"
     },
     {
       "test": "meta::pure::functions::string::tests::plus::testPlusInIterate_Function_1__Boolean_1_",
-      "expectedError": "Unsupported: lowering meta::pure::metamodel::function::property::Property as an element (no user path)"
+      "expectedError": "FunctionNotFound: fold_T_MANY__Function_1__V_m__V_m_"
     },
     {
       "test": "meta::pure::functions::string::tests::plus::testPlus_Function_1__Boolean_1_",

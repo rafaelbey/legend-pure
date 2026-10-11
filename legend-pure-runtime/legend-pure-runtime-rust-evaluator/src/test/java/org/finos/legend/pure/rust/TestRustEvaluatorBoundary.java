@@ -208,17 +208,48 @@ public class TestRustEvaluatorBoundary
 
     /**
      * A node kind the lowering does not know yet is reported as such, with
-     * its classifier, and nothing else is evaluated.
+     * its classifier, and nothing else is evaluated. A primitive type
+     * declared outside the bootstrap is one.
      */
     @Test
     public void anUnlowerableNodeIsUnsupportedByClassifier()
     {
-        CoreInstance lambda = findLambda(pctTest(PlatformCodeRepositoryProvider.grammarFunctions, "testAssignNewInstance"));
+        CoreInstance lambda = findLambda(pctTest(PlatformCodeRepositoryProvider.grammarFunctions, "testEqPrimitiveExtension"));
         PureRustEvaluationException e = Assert.assertThrows(PureRustEvaluationException.class,
                 () -> evaluator.start(lambda, Lists.immutable.empty()));
         Assert.assertEquals(PureRustEvaluationException.Kind.UNSUPPORTED, e.getKind());
-        Assert.assertTrue(e.getMessage(), e.getMessage().startsWith("Unsupported: lowering meta::pure::metamodel::type::Class"));
+        Assert.assertTrue(e.getMessage(), e.getMessage().startsWith("Unsupported: lowering meta::pure::metamodel::type::PrimitiveType"));
         Assert.assertEquals(e.getMessage().substring("Unsupported: ".length()), e.getInfo());
+    }
+
+    /**
+     * A class the lambda constructs is lowered with it; the instance comes
+     * back as a Rust object whose properties Java reads through the proxy.
+     */
+    @Test
+    public void aClassConstructionLowersTheClassAndBuildsAnInstance()
+    {
+        CoreInstance lambda = findLambda(pctTest(PlatformCodeRepositoryProvider.grammarFunctions, "testAssignNewInstance"));
+        CoreInstance result = evaluator.start(lambda, Lists.immutable.empty());
+        CoreInstance person = values(result).get(0);
+        Assert.assertEquals("LA_Person", person.getClassifier().getName());
+        Assert.assertEquals("John", person.getValueForMetaPropertyToOne("firstName").getName());
+        Assert.assertEquals("Doe", person.getValueForMetaPropertyToOne("lastName").getName());
+        ((RustCoreInstance) person).close();
+    }
+
+    /**
+     * An enum value in a lambda lowers its enumeration; what remains red
+     * is the native the lambda calls, reported under its exact key.
+     */
+    @Test
+    public void anEnumValueLowersItsEnumeration()
+    {
+        CoreInstance lambda = findLambda(pctTest(PlatformCodeRepositoryProvider.essentialFunctions, "testAdjustByYears"));
+        PureRustEvaluationException e = Assert.assertThrows(PureRustEvaluationException.class,
+                () -> evaluator.start(lambda, Lists.immutable.empty()));
+        Assert.assertEquals(e.getMessage(), PureRustEvaluationException.Kind.FUNCTION_NOT_FOUND, e.getKind());
+        Assert.assertEquals("FunctionNotFound: adjust_Date_1__Integer_1__DurationUnit_1__Date_1_", e.getMessage());
     }
 
     /**

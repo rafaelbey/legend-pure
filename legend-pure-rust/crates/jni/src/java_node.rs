@@ -391,6 +391,15 @@ impl std::fmt::Debug for JavaNode {
 }
 
 impl JavaNode {
+    /// Forget the property values fetched so far. The Java graph has
+    /// cycles (a class and its qualified properties, two functions that
+    /// call each other), and the cache holds strong handles, so the
+    /// caches of the nodes touched by one execution must be dropped when
+    /// it ends or those nodes would never be freed.
+    pub fn clear_cache(&self) {
+        self.cache.borrow_mut().clear();
+    }
+
     fn fetch(&self, name: &str) -> Result<PVector<Value>, String> {
         self.call_descriptions(self.shared.methods.property_values, name)
             .map(|values| values.unwrap_or_default())

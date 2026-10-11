@@ -126,6 +126,18 @@ impl ModelExtension {
         self.by_node.get(&key).copied()
     }
 
+    /// The payload of a pending element, once filled.
+    #[must_use]
+    pub fn pending_element(&self, id: ElementId) -> Option<&Element> {
+        self.slot(id).and_then(|i| self.pending[i].element.as_ref())
+    }
+
+    /// Reserved elements whose payload has not arrived yet.
+    #[must_use]
+    pub fn unfilled(&self) -> usize {
+        self.pending.iter().filter(|p| p.element.is_none()).count()
+    }
+
     fn slot(&self, id: ElementId) -> Option<usize> {
         match id {
             ElementId::InstanceId {

@@ -91,8 +91,11 @@ pub(crate) struct M3Ids {
     pub variable_expression: Option<ElementId>,
     pub native_function: Option<ElementId>,
     pub concrete_function_definition: Option<ElementId>,
+    pub enumeration: Option<ElementId>,
     pub primitive_type: Option<ElementId>,
     pub function_type: Option<ElementId>,
+    pub property: Option<ElementId>,
+    pub qualified_property: Option<ElementId>,
 }
 
 impl M3Ids {
@@ -108,8 +111,11 @@ impl M3Ids {
             variable_expression: r(m3_paths::VARIABLE_EXPRESSION),
             native_function: r(m3_paths::NATIVE_FUNCTION),
             concrete_function_definition: r(m3_paths::CONCRETE_FUNCTION_DEFINITION),
+            enumeration: r(m3_paths::ENUMERATION),
             primitive_type: r(m3_paths::PRIMITIVE_TYPE),
             function_type: r(m3_paths::FUNCTION_TYPE),
+            property: r(m3_paths::PROPERTY),
+            qualified_property: r(m3_paths::QUALIFIED_PROPERTY),
         }
     }
 }
@@ -228,6 +234,12 @@ impl<'m> Lowering<'m> {
                         crate::value::FunctionValue::Lambda(closure),
                     )));
                 }
+                if let Some(enum_id) = self.enumeration_of(&node) {
+                    let member = node.name().ok_or_else(|| {
+                        LowerError::Read("an enum value node without a name".into())
+                    })?;
+                    return Ok(Value::EnumValue { enum_id, member });
+                }
                 if node.user_path().is_some() {
                     return Ok(Value::Element(self.element_for(value)?));
                 }
@@ -248,6 +260,42 @@ impl<'m> Lowering<'m> {
 
     pub(crate) fn is(&self, node: &Node, id: Option<ElementId>) -> bool {
         id.is_some() && self.classifier_id(node) == id
+    }
+
+    /// Whether an element (pending in this lowering, or in the model) is an
+    /// enumeration.
+    pub(crate) fn is_enumeration(&self, id: ElementId) -> bool {
+        use legend_pure_metamodel::model::Element;
+        if let Some(element) = self.ext.pending_element(id) {
+            return matches!(element, Element::Enumeration(_));
+        }
+        match id {
+            ElementId::InstanceId {
+                chunk_id,
+                local_idx,
+            } if local_idx < self.model.chunk_len(chunk_id) => {
+                matches!(self.model.get_element(id), Element::Enumeration(_))
+            }
+            _ => false,
+        }
+    }
+
+    /// Types are advisory: a type that cannot be lowered is dropped, not
+    /// an error — unless the failure happened while an element was being
+    /// lowered (a reservation is unfilled), in which case the extension
+    /// cannot be applied and the error must propagate.
+    pub(crate) fn advisory<T>(
+        &self,
+        result: Result<T, LowerError>,
+    ) -> Result<Option<T>, LowerError> {
+        match result {
+            Ok(t) => Ok(Some(t)),
+            Err(e) if self.ext.unfilled() == 0 => {
+                let _ = e;
+                Ok(None)
+            }
+            Err(e) => Err(e),
+        }
     }
 
     pub(crate) fn spec(

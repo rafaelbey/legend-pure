@@ -222,6 +222,29 @@ impl BridgeShared {
         unsafe { &*self.model }
     }
 
+    /// End of one execution: drop every Java-backed node's property cache
+    /// (see [`JavaNode::clear_cache`](crate::java_node::JavaNode::clear_cache))
+    /// and forget the nodes that nothing holds any more.
+    pub fn end_execution(&self) {
+        let nodes: Vec<ObjectHandle> = self
+            .java_nodes
+            .borrow()
+            .values()
+            .filter_map(std::rc::Weak::upgrade)
+            .collect();
+        for handle in &nodes {
+            if let HeapEntry::Typed(obj) = &*handle.borrow()
+                && let Some(node) = obj.as_any().downcast_ref::<crate::java_node::JavaNode>()
+            {
+                node.clear_cache();
+            }
+        }
+        drop(nodes);
+        self.java_nodes
+            .borrow_mut()
+            .retain(|_, weak| weak.strong_count() > 0);
+    }
+
     /// Live Java-backed nodes plus Rust objects held for Java.
     #[must_use]
     pub fn live_count(&self) -> usize {
