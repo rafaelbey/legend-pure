@@ -28,6 +28,7 @@ import org.finos.legend.pure.m3.navigation._package._Package;
 import org.finos.legend.pure.m3.navigation.enumeration.Enumeration;
 import org.finos.legend.pure.m4.ModelRepository;
 import org.finos.legend.pure.m4.coreinstance.CoreInstance;
+import org.finos.legend.pure.m4.coreinstance.SourceInformation;
 import org.finos.legend.pure.m4.coreinstance.primitive.BooleanCoreInstance;
 import org.finos.legend.pure.m4.coreinstance.primitive.ByteCoreInstance;
 import org.finos.legend.pure.m4.coreinstance.primitive.DateCoreInstance;
@@ -114,6 +115,15 @@ final class RustNodeBridge
         CoreInstance classifier = ci.getClassifier();
         d.classifier = (classifier == null) ? null : userPath(classifier);
         d.name = ci.getName();
+        SourceInformation source = ci.getSourceInformation();
+        if (source != null)
+        {
+            d.sourceId = source.getSourceId();
+            d.line = source.getLine();
+            d.column = source.getColumn();
+            d.endLine = source.getEndLine();
+            d.endColumn = source.getEndColumn();
+        }
         if (ci instanceof BooleanCoreInstance)
         {
             d.kind = NodeDescription.BOOLEAN;

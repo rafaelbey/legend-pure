@@ -346,20 +346,39 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
                     crate::native::meta::build_multiplicity_wrapper(&mut self.heap, multiplicity)?;
                 Ok(Value::Object(handle))
             }
+            // The M3 `KeyExpression` node of a `^Class(k = v)` construction:
+            // a heap object whose `expression` slot holds the evaluated
+            // value(s), the shape `new` / `copy` decode (identity by the
+            // `KEY_EXPRESSION` element, see `decode_key_expressions`).
+            ExprKind::KeyExpression {
+                key,
+                expression,
+                add,
+            } => {
+                let values: Vec<Value> =
+                    self.eval(expression)?.to_collection().into_iter().collect();
+                let handle = self.heap.alloc_dynamic(crate::m3_paths::KEY_EXPRESSION);
+                self.heap
+                    .mutate_set(&handle, "key", &[Value::String(key.clone())])?;
+                self.heap.mutate_set(&handle, "expression", &values)?;
+                self.heap
+                    .mutate_set(&handle, "add", &[Value::Boolean(*add)])?;
+                Ok(Value::Object(handle))
+            }
             // Relation and path literals need the relation / path runtime,
             // which stays on the archive until a PCT row asks for it
             // (plan, Appendix A table 3).
             ExprKind::RelationLiteral { .. } => Err(PureException::from(
-                PureRuntimeError::Unsupported("relation literal `@(cols)`"),
+                PureRuntimeError::Unsupported("relation literal `@(cols)`".into()),
             )),
             ExprKind::ColSpecArrayLiteral { .. } => Err(PureException::from(
-                PureRuntimeError::Unsupported("column spec array literal `~[cols]`"),
+                PureRuntimeError::Unsupported("column spec array literal `~[cols]`".into()),
             )),
             ExprKind::ColSpecLiteral { .. } => Err(PureException::from(
-                PureRuntimeError::Unsupported("column spec literal `~name`"),
+                PureRuntimeError::Unsupported("column spec literal `~name`".into()),
             )),
             ExprKind::PathLiteral { .. } => Err(PureException::from(
-                PureRuntimeError::Unsupported("path literal `#/Type/prop#`"),
+                PureRuntimeError::Unsupported("path literal `#/Type/prop#`".into()),
             )),
 
             // Produce a first-class Element handle so meta-model natives
@@ -1754,7 +1773,7 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
                 // return an empty collection from `eval_body([])`.
                 if is_generated_milestoning_qp(self.model, qp) {
                     return Err(PureException::from(PureRuntimeError::Unsupported(
-                        "milestoning-synthesised qualified property",
+                        "milestoning-synthesised qualified property".into(),
                     )));
                 }
                 self.context.push_scope();
@@ -2656,6 +2675,9 @@ fn walk_free_variables(
             for arg in &data.arguments {
                 walk_free_variables(arg, binders, free);
             }
+        }
+        ExprKind::KeyExpression { expression, .. } => {
+            walk_free_variables(expression, binders, free);
         }
         ExprKind::Collection { elements } => {
             for e in elements {

@@ -111,7 +111,7 @@ impl JniContext {
                 }
                 Some((classifier, _, _)) if classifier == LAMBDA_FUNCTION => {
                     Err(PureException::from(PureRuntimeError::Unsupported(
-                        "evaluating a Java LambdaFunction through the bridge",
+                        "evaluating a Java LambdaFunction through the bridge".into(),
                     )))
                 }
                 Some((_, _, user_path)) => Err(PureException::from(
