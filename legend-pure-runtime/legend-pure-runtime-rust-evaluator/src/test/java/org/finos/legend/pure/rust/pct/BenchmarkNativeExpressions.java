@@ -14,9 +14,9 @@
 
 package org.finos.legend.pure.rust.pct;
 
+import org.eclipse.collections.api.factory.Maps;
 import org.eclipse.collections.api.list.ListIterable;
-import org.eclipse.collections.api.tuple.Pair;
-import org.eclipse.collections.impl.tuple.Tuples;
+import org.eclipse.collections.api.map.MapIterable;
 import org.finos.legend.pure.m3.execution.FunctionExecution;
 import org.finos.legend.pure.m3.navigation.Instance;
 import org.finos.legend.pure.m3.navigation.M3Paths;
@@ -87,16 +87,18 @@ public class BenchmarkNativeExpressions extends AbstractPureTestWithCoreCompiled
     @Test
     public void benchmark() throws IOException
     {
-        Pair<String, String> source = Tuples.pair("expressions.pure", read("/bench/expressions.pure"));
+        MapIterable<String, String> source = Maps.immutable.with("expressions.pure", read("/bench/expressions.pure"));
         StringBuilder csv = new StringBuilder("expression,engine,median_ns,p90_ns,min_ns\n");
         StringBuilder table = new StringBuilder(String.format(Locale.ROOT, "%-24s %14s %14s %16s%n", "expression", "interpreted ns", "compiled ns", "compiled-direct"));
         long[][] medians = new long[EXPRESSIONS.length][3];
 
-        setUpRuntime(new FunctionExecutionInterpreted(), source);
+        setUpRuntime(new FunctionExecutionInterpreted());
+        runtime.createInMemoryAndCompile(source);
         measure("interpreted", csv, medians, 0);
         tearDownRuntime();
 
-        setUpRuntime(new FunctionExecutionCompiledBuilder().build(), JavaModelFactoryRegistryLoader.loader(), source);
+        setUpRuntime(new FunctionExecutionCompiledBuilder().build(), JavaModelFactoryRegistryLoader.loader());
+        runtime.createInMemoryAndCompile(source);
         measure("compiled", csv, medians, 1);
         measureDirect(csv, medians, 2);
         tearDownRuntime();
