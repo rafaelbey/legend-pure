@@ -54,11 +54,14 @@ from it, `platform/pure/grammar/m3.pure`, as its bootstrap.
   `EvalRustExecutor` hook, which the same module provides. Both engines run the corpus:
   interpreted 320 / 327 and 132 / 136, compiled 321 / 327 and 132 / 136.
 - Root installs need `mvn clean install` (the PAR plugin trips on a stale descriptor
-  otherwise); JDK 11 or 17.
+  otherwise); JDK 11 or 17. The rust-evaluator module compiles with release 17 and
+  joins the reactor only on JDK 17+ (profile `rust-evaluator-jdk17` in
+  `legend-pure-runtime/pom.xml`); a JDK 11 build leaves it out.
 
 ## Java Stack — Build & Test
 
-Requires **JDK 11 or 17** (the Maven enforcer rejects all others) and **Maven 3.6+**.
+Requires **JDK 11 or 17** (the Maven enforcer rejects all others) and **Maven 3.6+**;
+`legend-pure-runtime-rust-evaluator` needs **JDK 17** (release 17, absent from a JDK 11 reactor).
 
 ```bash
 mvn -T 4 install -DskipTests                    # fast first build (15–30 min)
