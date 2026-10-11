@@ -881,6 +881,49 @@ impl NativeFunction for Split {
     }
 }
 
+/// Pure `substring(String[1], Integer[1], Integer[1]): String[1]`
+///
+/// Pure uses 0-based start index, and the end index is exclusive.
+#[derive(Debug)]
+pub struct Substring;
+
+impl NativeFunction for Substring {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        let s = values[0].as_string()?;
+        let (start_i, end_i) = match values.len() {
+            2 => {
+                // 2-arg form: start through end of string. Java Pure
+                // mirrors String.substring(int) with no terminator.
+                let start = values[1].as_integer()?.max(0);
+                #[allow(clippy::cast_possible_wrap)]
+                let end = s.len() as i64;
+                (start, end)
+            }
+            3 => (
+                values[1].as_integer()?.max(0),
+                values[2].as_integer()?.max(0),
+            ),
+            n => {
+                return Err(PureRuntimeError::EvaluationError(format!(
+                    "substring: expected 2 or 3 argument(s), got {n}"
+                ))
+                .into());
+            }
+        };
+        #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+        let start = (start_i as usize).min(s.len());
+        #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+        let end = (end_i as usize).min(s.len());
+        let start = start.min(end);
+        Ok(Evaluated::new(Value::String(SmolStr::new(&s[start..end]))))
+    }
+}
+
 fn i64_arg(v: &Value, ctx: &str) -> Result<i64, PureException> {
     match v {
         Value::Integer(n) => Ok(*n),
@@ -913,6 +956,11 @@ pub fn register(registry: &mut NativeRegistry) {
     registry.register("endsWith_String_1__String_1__Boolean_1_", EndsWith);
     registry.register("length_String_1__Integer_1_", Length);
     registry.register("split_String_1__String_1__String_MANY_", Split);
+    registry.register(
+        "substring_String_1__Integer_1__Integer_1__String_1_",
+        Substring,
+    );
+    registry.register("substring_String_1__Integer_1__String_1_", Substring);
 }
 
 #[cfg(test)]
@@ -1162,6 +1210,36 @@ mod tests {
         assert_eq!(split("Hello World", " "), strings(&["Hello", "World"]));
         assert_eq!(split("Hello World", ";"), strings(&["Hello World"]));
         assert!(Split.execute(&[lit_str("a")], &mut MockCtx).is_err());
+    }
+
+    #[test]
+    fn string_substring() {
+        let r = Substring
+            .execute(
+                &[lit_str("hello world"), lit_int(6), lit_int(11)],
+                &mut MockCtx,
+            )
+            .unwrap();
+        assert_eq!(r.into_value(), Value::String("world".into()));
+    }
+
+    /// `testStart`: the 2-arg form runs to the end of the string.
+    #[test]
+    fn string_substring_from_start() {
+        let r = Substring
+            .execute(&[lit_str("the quick"), lit_int(4)], &mut MockCtx)
+            .unwrap();
+        assert_eq!(r.into_value(), Value::String("quick".into()));
+    }
+
+    #[test]
+    fn substring_wrong_arg_count_and_type_mismatch_error() {
+        assert!(Substring.execute(&[lit_str("a")], &mut MockCtx).is_err());
+        assert!(
+            Substring
+                .execute(&[lit_str("a"), lit_str("b"), lit_int(1)], &mut MockCtx)
+                .is_err()
+        );
     }
 
     // -- joinStrings --
