@@ -239,23 +239,22 @@ public class TestRustEvaluatorBoundary
     }
 
     /**
-     * An enum value in a lambda lowers its enumeration; what remains red
-     * is the native the lambda calls, reported under its exact key.
+     * An enum value in a lambda lowers its enumeration, and the native
+     * that takes it (`adjust` with a `DurationUnit`) reads the member.
      */
     @Test
     public void anEnumValueLowersItsEnumeration()
     {
         CoreInstance lambda = findLambda(pctTest(PlatformCodeRepositoryProvider.essentialFunctions, "testAdjustByYears"));
-        PureRustEvaluationException e = Assert.assertThrows(PureRustEvaluationException.class,
-                () -> evaluator.start(lambda, Lists.immutable.empty()));
-        Assert.assertEquals(e.getMessage(), PureRustEvaluationException.Kind.FUNCTION_NOT_FOUND, e.getKind());
-        Assert.assertEquals("FunctionNotFound: adjust_Date_1__Integer_1__DurationUnit_1__Date_1_", e.getMessage());
+        CoreInstance result = evaluator.start(lambda, Lists.immutable.empty());
+        Assert.assertEquals("2016", values(result).get(0).getName());
     }
 
     /**
      * A failure raised inside a lowered lambda is anchored at the Java
      * source span of the call that raised it, and that anchor is what the
-     * Pure cause reports.
+     * Pure cause reports; the cause's info is the bare Pure text, which is
+     * what {@code assertError} compares.
      */
     @Test
     public void failuresInsideALoweredLambdaCarryTheJavaSpan()
@@ -263,9 +262,11 @@ public class TestRustEvaluatorBoundary
         CoreInstance lambda = findLambda(pctTest(PlatformCodeRepositoryProvider.essentialFunctions, "testAtError"));
         PureRustEvaluationException e = Assert.assertThrows(PureRustEvaluationException.class,
                 () -> evaluator.start(lambda, Lists.immutable.empty()));
-        Assert.assertEquals(PureRustEvaluationException.Kind.FUNCTION_NOT_FOUND, e.getKind());
+        Assert.assertEquals(PureRustEvaluationException.Kind.EXECUTION_ERROR, e.getKind());
+        Assert.assertEquals("ExecutionError: The system is trying to get an element at offset 2 where the collection is of size 2", e.getMessage());
         PureException cause = PureException.findPureException(e);
         Assert.assertNotNull(cause);
+        Assert.assertEquals("The system is trying to get an element at offset 2 where the collection is of size 2", cause.getInfo());
         Assert.assertNotNull(cause.getSourceInformation());
         Assert.assertEquals("/platform/pure/essential/collection/index/at.pure", cause.getSourceInformation().getSourceId());
         Assert.assertEquals(lambda.getSourceInformation().getLine(), cause.getSourceInformation().getLine());
