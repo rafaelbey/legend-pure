@@ -19,6 +19,7 @@
 use legend_pure_evaluator::builders::{
     ModelBuilder, class, expr, named, property, qualified_property,
 };
+use legend_pure_evaluator::error::{PureExceptionKind, PureRuntimeError};
 use legend_pure_evaluator::eval::Evaluator;
 use legend_pure_evaluator::native::NativeRegistry;
 use legend_pure_evaluator::value::Value;
@@ -29,6 +30,7 @@ use legend_pure_metamodel::types::{DateValue, Multiplicity, ValueSpec};
 
 const NEW: &str = "new_Class_1__String_1__Any_MANY__T_1_";
 const TO_STRING: &str = "toString_Any_1__String_1_";
+const FORMAT: &str = "format_String_1__Any_MANY__String_1_";
 
 /// The elements `toString` is exercised against.
 struct Fixture {
@@ -99,17 +101,33 @@ fn to_string(arg: ValueSpec) -> ValueSpec {
     expr::call(TO_STRING, vec![arg])
 }
 
-/// Evaluate `toString(arg)` and unwrap the string.
-fn render(model: &PureModel, arg: ValueSpec) -> String {
+/// Evaluate `spec` over `model` with the standard registry and unwrap
+/// the string it must produce.
+fn string(model: &PureModel, spec: &ValueSpec) -> String {
     let registry = NativeRegistry::standard();
     let mut eval = Evaluator::new(model, &registry);
-    match &eval.eval(&to_string(arg)).unwrap() {
+    match &eval.eval(spec).unwrap() {
         Value::String(s) => s.to_string(),
-        other => panic!("toString returned a non-string: {other:?}"),
+        other => panic!("expected a string, got {other:?}"),
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+/// Evaluate `toString(arg)` and unwrap the string.
+fn render(model: &PureModel, arg: ValueSpec) -> String {
+    string(model, &to_string(arg))
+}
+
+/// The message of the `EvaluationError` evaluating `spec` must raise.
+fn evaluation_error(model: &PureModel, spec: &ValueSpec) -> String {
+    let registry = NativeRegistry::standard();
+    let mut eval = Evaluator::new(model, &registry);
+    let err = eval.eval(spec).expect_err("evaluation must fail");
+    match &err.kind {
+        PureExceptionKind::ExecutionError(PureRuntimeError::EvaluationError(m)) => m.clone(),
+        other => panic!("expected an evaluation error, got {other:?}"),
+    }
+}
+
 fn date_time(
     (year, month, day): (i16, i8, i8),
     (hour, minute, second): (i8, i8, i8),
@@ -247,4 +265,167 @@ fn to_string_renders_instances_inside_a_collection() {
         new_named(f.child, "Bob"),
     ]);
     assert_eq!(render(&f.model, coll), "[Ann, 7, Bob]");
+}
+
+/// `format(template, args)`.
+fn format(template: &str, args: Vec<ValueSpec>) -> ValueSpec {
+    expr::call(FORMAT, vec![expr::string(template), expr::collection(args)])
+}
+
+const FOX: &str = "the quick brown %s jumps over the lazy";
+
+/// `format('the quick brown %s jumps over the lazy <spec>', ['fox', arg])`.
+fn fox(spec: &str, arg: ValueSpec) -> ValueSpec {
+    format(&format!("{FOX} {spec}"), vec![expr::string("fox"), arg])
+}
+
+/// The expected rendering of [`fox`].
+fn fox_says(tail: &str) -> String {
+    format!("{} {tail}", FOX.replace("%s", "fox"))
+}
+
+/// `testFormatString`, `testFormatBoolean`, `testFormatInteger*`.
+#[test]
+fn format_substitutes_strings_booleans_and_integers() {
+    let model = ModelBuilder::new().finish();
+    assert_eq!(
+        string(&model, &fox("%s", expr::string("dog"))),
+        fox_says("dog")
+    );
+    assert_eq!(
+        string(&model, &fox("%s", expr::boolean(false))),
+        fox_says("false")
+    );
+    assert_eq!(string(&model, &fox("%d", expr::int(-3))), fox_says("-3"));
+    assert_eq!(
+        string(&model, &fox("%05d", expr::int(3))),
+        fox_says("00003")
+    );
+    assert_eq!(
+        string(&model, &fox("%05d", expr::int(-3))),
+        fox_says("-00003")
+    );
+}
+
+/// `testFormatFloat*`: `%f` plain, zero-padded precision, truncation and
+/// rounding.
+#[test]
+fn format_renders_floats_with_and_without_precision() {
+    let model = ModelBuilder::new().finish();
+    let cases = [
+        ("%f", 1.5, "1.5"),
+        ("%f", -1.5, "-1.5"),
+        ("%.4f", 1.5, "1.5000"),
+        ("%.1f", -1.11, "-1.1"),
+        ("%.2f", 1.338, "1.34"),
+        ("%.2f", 9.999, "10.00"),
+        ("%.2f", -9.999, "-10.00"),
+        ("%.2f", 0.0553, "0.06"),
+        ("%.2f", -0.000_553, "-0.00"),
+    ];
+    for (spec, value, expected) in cases {
+        assert_eq!(
+            string(&model, &fox(spec, expr::float(value))),
+            fox_says(expected),
+            "{spec} of {value}"
+        );
+    }
+}
+
+/// `testSimpleFormatDate`, `testFormatRepr`: `%s` and `%t` render a date
+/// as its Pure text, `%r` adds the `%`; `%r` quotes and escapes a string.
+#[test]
+fn format_renders_dates_and_representations() {
+    let model = ModelBuilder::new().finish();
+    let midnight = || date_time((2014, 1, 1), (0, 0, 0), 0, 3, None);
+    assert_eq!(
+        string(&model, &fox("%s", midnight())),
+        fox_says("2014-01-01T00:00:00.000+0000")
+    );
+    assert_eq!(
+        string(&model, &fox("%t", midnight())),
+        fox_says("2014-01-01T00:00:00.000+0000")
+    );
+    assert_eq!(
+        string(&model, &fox("%r", midnight())),
+        fox_says("%2014-01-01T00:00:00.000+0000")
+    );
+    assert_eq!(
+        string(&model, &fox("%r", expr::string("dog \\ 'dog'"))),
+        fox_says("'dog \\\\ \\'dog\\''")
+    );
+}
+
+/// `testFormatDate`: `%t{pattern}` with the SimpleDateFormat subset and a
+/// `[zone]` prefix; a single date is accepted where `Any[*]` is declared.
+#[test]
+fn format_renders_date_patterns() {
+    let model = ModelBuilder::new().finish();
+    let on = |pattern: &str, date: ValueSpec| {
+        expr::call(
+            FORMAT,
+            vec![expr::string(&format!("on %t{{{pattern}}}")), date],
+        )
+    };
+    let strict = expr::date(DateValue::StrictDate {
+        year: 2014,
+        month: Some(3),
+        day: Some(10),
+    });
+    let afternoon = || date_time((2014, 3, 10), (13, 7, 44), 1_000_000, 3, None);
+    assert_eq!(string(&model, &on("yyyy-MM-dd", strict)), "on 2014-03-10");
+    let cases = [
+        ("yyyy-MM-dd h:mm:ssa", "on 2014-03-10 1:07:44PM"),
+        ("yyyy-MM-dd hh:mm:ssa", "on 2014-03-10 01:07:44PM"),
+        (
+            "yyyy-MM-dd\"T\"HH:mm:ss.SSSZ",
+            "on 2014-03-10T13:07:44.001+0000",
+        ),
+        ("yyyy-MM-dd HH:mm:ss.SSSX", "on 2014-03-10 13:07:44.001Z"),
+        (
+            "[EST]yyyy-MM-dd HH:mm:ss.SSSZ",
+            "on 2014-03-10 08:07:44.001-0500",
+        ),
+        (
+            "[CET]yyyy-MM-dd HH:mm:ss.SSSZ",
+            "on 2014-03-10 14:07:44.001+0100",
+        ),
+    ];
+    for (pattern, expected) in cases {
+        assert_eq!(string(&model, &on(pattern, afternoon())), expected);
+    }
+}
+
+/// `%s` on an instance goes through its class's `toString()`.
+#[test]
+fn format_s_on_an_instance_uses_its_to_string() {
+    let f = fixture();
+    let spec = format(
+        "hello %s and %s",
+        vec![new_named(f.named_class, "Ann"), new_named(f.child, "Bob")],
+    );
+    assert_eq!(string(&f.model, &spec), "hello Ann and Bob");
+}
+
+/// `testFormatTooFewInputs`, `testFormatTooManyInputs`: Java's texts.
+#[test]
+fn format_rejects_too_few_and_too_many_arguments() {
+    let model = ModelBuilder::new().finish();
+    let few = format("Hello %s %s", vec![expr::string("Catherine")]);
+    assert_eq!(
+        evaluation_error(&model, &few),
+        "Too few arguments passed to format function. Format expression \"Hello %s %s\", number of arguments [1]"
+    );
+    let many = format(
+        "Hello %s %s",
+        vec![
+            expr::string("Catherine"),
+            expr::string("Joe"),
+            expr::string("Katie"),
+        ],
+    );
+    assert_eq!(
+        evaluation_error(&model, &many),
+        "Unused format args. [3] arguments provided to expression \"Hello %s %s\""
+    );
 }

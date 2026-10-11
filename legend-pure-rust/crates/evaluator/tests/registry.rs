@@ -51,6 +51,7 @@ const FISHED: &[&str] = &[
     "copy_T_1__String_1__KeyExpression_MANY__T_1_",
     // string
     "toString_Any_1__String_1_",
+    "format_String_1__Any_MANY__String_1_",
     // testing
     "assert_Boolean_1__Function_1__Boolean_1_",
 ];

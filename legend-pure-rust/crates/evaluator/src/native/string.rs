@@ -244,15 +244,380 @@ fn pure_to_string_leaf(value: &Value, ctx: &dyn EvalContextTrait) -> String {
     }
 }
 
+/// Produce a repr string for `%r` / `toRepresentation`: strings are
+/// quoted with backslash + single-quote escaped (Pure source form);
+/// dates carry the leading `%`; other values fall back to Display.
+fn repr_value(v: &Value) -> String {
+    match v {
+        Value::String(s) => {
+            // Match Java Pure's escape: \ → \\, ' → \', otherwise as-is.
+            let escaped = s.replace('\\', "\\\\").replace('\'', "\\'");
+            format!("'{escaped}'")
+        }
+        Value::Date(d) => format!("%{d}"),
+        Value::StrictTime(t) => format!("%{t}"),
+        other => other.to_string(),
+    }
+}
+
+/// Pure `format(String[1], Any[*]): String[1]`
+///
+/// Replaces format specifiers in the template with successive values from
+/// `args[1]`. Specifier syntax (mirrors Java Pure's `format`):
+/// - `%s` → toString shape (unquoted strings, dates without `%`, lists
+///   `[a, b]`, pairs `<a, b>`)
+/// - `%r` → repr (quoted strings with escapes, dates with leading `%`)
+/// - `%d` → integer; supports `%05d` zero-padded width
+/// - `%f` → float; supports `%.4f` precision (truncating fractional digits
+///   to N, padding with zeros if value has fewer)
+/// - `%t` → date toString (same shape as `%s` for dates)
+/// - `%t{pattern}` → date with explicit format pattern
+///   (e.g. `%t{yyyy-MM-dd HH:mm:ss}`)
+///
+/// `args[1]` is the `Any[*]` collection of substitution values; if it is
+/// a `Value::Collection`, its elements are iterated; otherwise it is
+/// treated as a single-element list.
+#[derive(Debug)]
+pub struct Format;
+
+impl NativeFunction for Format {
+    #[allow(clippy::many_single_char_names, clippy::too_many_lines)]
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("format", &values, 2)?;
+        let template = values[0].as_string()?.to_string();
+
+        let subs: Vec<Value> = match &values[1] {
+            Value::Collection(v) => v.iter().cloned().collect(),
+            single => vec![single.clone()],
+        };
+
+        let bytes = template.as_bytes();
+        let mut result = String::with_capacity(template.len());
+        let mut i = 0usize;
+        let mut sub_idx = 0usize;
+
+        while i < bytes.len() {
+            let c = bytes[i];
+            if c != b'%' {
+                result.push(c as char);
+                i += 1;
+                continue;
+            }
+            // Parse `%[0][width][.precision]<spec>` or `%t{template}`.
+            let mut j = i + 1;
+            let mut zero_pad = false;
+            if j < bytes.len()
+                && bytes[j] == b'0'
+                && j + 1 < bytes.len()
+                && bytes[j + 1].is_ascii_digit()
+            {
+                zero_pad = true;
+                j += 1;
+            }
+            // Width digits.
+            let width_start = j;
+            while j < bytes.len() && bytes[j].is_ascii_digit() {
+                j += 1;
+            }
+            let width: Option<usize> = if j > width_start {
+                Some(template[width_start..j].parse().unwrap_or(0))
+            } else {
+                None
+            };
+            // Optional `.precision`.
+            let precision: Option<usize> = if j < bytes.len() && bytes[j] == b'.' {
+                let p_start = j + 1;
+                let mut p_end = p_start;
+                while p_end < bytes.len() && bytes[p_end].is_ascii_digit() {
+                    p_end += 1;
+                }
+                if p_end > p_start {
+                    j = p_end;
+                    Some(template[p_start..p_end].parse().unwrap_or(0))
+                } else {
+                    j = p_start;
+                    None
+                }
+            } else {
+                None
+            };
+            if j >= bytes.len() {
+                result.push('%');
+                i += 1;
+                continue;
+            }
+            let spec = bytes[j];
+            // `%t{pattern}` — date format with explicit pattern.
+            let date_pattern: Option<String> =
+                if spec == b't' && j + 1 < bytes.len() && bytes[j + 1] == b'{' {
+                    let pat_start = j + 2;
+                    if let Some(end) = template[pat_start..].find('}') {
+                        let pat = template[pat_start..pat_start + end].to_string();
+                        j = pat_start + end + 1; // past `}`
+                        Some(pat)
+                    } else {
+                        None
+                    }
+                } else {
+                    j += 1;
+                    None
+                };
+            if !matches!(spec, b's' | b'r' | b'd' | b'f' | b't') {
+                result.push('%');
+                i += 1;
+                continue;
+            }
+            let v = subs.get(sub_idx).cloned().ok_or_else(|| {
+                // Java-parity error text — pinned by platform test
+                // `testFormatTooFewInputs` in
+                // legend-pure-core/.../grammar/functions/string/format.pure.
+                PureRuntimeError::EvaluationError(format!(
+                    "Too few arguments passed to format function. Format expression \"{template}\", number of arguments [{}]",
+                    subs.len()
+                ))
+            })?;
+            sub_idx += 1;
+            match spec {
+                b'r' => result.push_str(&repr_value(&v)),
+                b's' => result.push_str(&pure_to_string(&v, ctx)?),
+                b'd' => {
+                    // Java parity (`Format.java:105-108`): `%d` requires an
+                    // Integer. Pre-T-20260511-05 we silently coerced via
+                    // `.unwrap_or(0)`; Java throws and Pure semantics
+                    // demand the same.
+                    let Value::Integer(n) = v else {
+                        let got = pure_to_string(&v, ctx)?;
+                        return Err(PureRuntimeError::EvaluationError(format!(
+                            "Expected Integer, got: {got}"
+                        ))
+                        .into());
+                    };
+                    let body = if let Some(w) = width {
+                        if zero_pad {
+                            // Zero-pad to width respecting sign.
+                            if n < 0 {
+                                format!("-{:0>1$}", -n, w)
+                            } else {
+                                format!("{n:0>w$}")
+                            }
+                        } else {
+                            format!("{n:>w$}")
+                        }
+                    } else {
+                        n.to_string()
+                    };
+                    result.push_str(&body);
+                }
+                b'f' => {
+                    // Java parity (`Format.java:155-159`, `:175-179`): `%f`
+                    // requires a Float — strictly, not "anything coercible".
+                    // Pre-T-20260511-05 we accepted Integer / Decimal and
+                    // silently widened to f64 (with a non-Number falling
+                    // through to NaN); Java throws.
+                    let Value::Float(f) = v else {
+                        let got = pure_to_string(&v, ctx)?;
+                        return Err(PureRuntimeError::EvaluationError(format!(
+                            "Expected Float, got: {got}"
+                        ))
+                        .into());
+                    };
+                    let body = if let Some(p) = precision {
+                        // Java's `%.Nf` rounds half-to-even (banker's),
+                        // matching Decimal::round_dp's default.
+                        format!("{f:.p$}")
+                    } else {
+                        f.to_string()
+                    };
+                    result.push_str(&body);
+                }
+                b't' => {
+                    // Java parity (`Format.java:114-118`): `%t` requires a
+                    // Date. Pre-T-20260511-05 we silently fell through to
+                    // `pure_to_string` for any non-Date value.
+                    let Value::Date(d) = &v else {
+                        let got = pure_to_string(&v, ctx)?;
+                        return Err(PureRuntimeError::EvaluationError(format!(
+                            "Expected Date, got: {got}"
+                        ))
+                        .into());
+                    };
+                    if let Some(pat) = &date_pattern {
+                        result.push_str(&format_date_pattern(d, pat));
+                    } else {
+                        // No `{pattern}` — Java falls back to the Date's
+                        // default toString (`builder.append(date)` at
+                        // `Format.java:123`). The Pure user-facing string
+                        // form matches.
+                        result.push_str(&pure_to_string(&v, ctx)?);
+                    }
+                }
+                _ => unreachable!(),
+            }
+            i = j;
+        }
+
+        // Reject extra args — Java Pure raises this when the user passes more
+        // values than the template consumed. Pinned by platform test
+        // `testFormatTooManyInputs`.
+        if sub_idx < subs.len() {
+            return Err(PureRuntimeError::EvaluationError(format!(
+                "Unused format args. [{}] arguments provided to expression \"{template}\"",
+                subs.len()
+            ))
+            .into());
+        }
+
+        Ok(Evaluated::new(Value::String(SmolStr::new(result))))
+    }
+}
+
+/// Format a [`PureDate`](crate::date::PureDate) with a
+/// Java-SimpleDateFormat-like pattern.
+///
+/// Currently supports the subset the platform tests exercise:
+/// - `yyyy` (4-digit year), `MM` (2-digit month), `dd` (2-digit day)
+/// - `HH` (24-hour), `hh` (12-hour), `h` (1- or 2-digit 12-hour)
+/// - `mm` (minute), `ss` (second), `SSS` (millis)
+/// - `a` (AM/PM), `Z` (`+0000`-style offset), `X` (`Z`-style offset)
+/// - `"literal"` segments (Java-style quoted text)
+/// - `[Region/City]` prefix for timezone-shifted output
+///
+/// Unsupported patterns pass through verbatim. Anything beyond the test
+/// surface is best-effort; revisit when more tests need it.
+#[allow(clippy::many_single_char_names, clippy::too_many_lines)]
+fn format_date_pattern(d: &crate::date::PureDate, pat: &str) -> String {
+    use crate::date::PureDate;
+    use std::fmt::Write as _;
+    // [TZ] prefix — shift the date by the named offset for output.
+    let (tz_offset_minutes, body) = if let Some(rest) = pat.strip_prefix('[') {
+        if let Some(end) = rest.find(']') {
+            let zone = &rest[..end];
+            let offset = match zone {
+                "EST" => Some(-5 * 60),
+                "EDT" => Some(-4 * 60),
+                "CET" => Some(60),
+                "GMT" | "UTC" => Some(0),
+                _ => None,
+            };
+            (offset, &rest[end + 1..])
+        } else {
+            (None, pat)
+        }
+    } else {
+        (None, pat)
+    };
+    let shifted: PureDate = if let Some(off) = tz_offset_minutes {
+        d.add_minutes(i64::from(off)).unwrap_or(*d)
+    } else {
+        *d
+    };
+    let inner = shifted.inner_datetime();
+    let mut out = String::with_capacity(body.len());
+    let bytes = body.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        let c = bytes[i];
+        // Quoted literal segment: "..."
+        if c == b'"' {
+            i += 1;
+            while i < bytes.len() && bytes[i] != b'"' {
+                out.push(bytes[i] as char);
+                i += 1;
+            }
+            if i < bytes.len() {
+                i += 1; // skip closing quote
+            }
+            continue;
+        }
+        // Run of identical pattern letters.
+        let mut j = i + 1;
+        while j < bytes.len() && bytes[j] == c {
+            j += 1;
+        }
+        let count = j - i;
+        let token: String = std::iter::repeat_n(c as char, count).collect();
+        let _ = token;
+        match (c, count) {
+            (b'y', 4) => {
+                let _ = write!(out, "{:04}", inner.year());
+            }
+            (b'M', 2) => {
+                let _ = write!(out, "{:02}", inner.month());
+            }
+            (b'd', 2) => {
+                let _ = write!(out, "{:02}", inner.day());
+            }
+            (b'H', 2) => {
+                let _ = write!(out, "{:02}", inner.hour());
+            }
+            (b'h', n) => {
+                let h12 = match inner.hour() {
+                    0 => 12,
+                    h if h > 12 => h - 12,
+                    h => h,
+                };
+                if n == 2 {
+                    let _ = write!(out, "{h12:02}");
+                } else {
+                    let _ = write!(out, "{h12}");
+                }
+            }
+            (b'm', 2) => {
+                let _ = write!(out, "{:02}", inner.minute());
+            }
+            (b's', 2) => {
+                let _ = write!(out, "{:02}", inner.second());
+            }
+            (b'S', n) => {
+                let nanos = inner.subsec_nanosecond();
+                let s = format!("{nanos:09}");
+                out.push_str(&s[..n.min(9)]);
+            }
+            (b'a', 1) => out.push_str(if inner.hour() < 12 { "AM" } else { "PM" }),
+            (b'Z', 1) => {
+                let m: i32 = tz_offset_minutes.unwrap_or(0);
+                let sign = if m >= 0 { '+' } else { '-' };
+                let abs = m.abs();
+                let _ = write!(out, "{sign}{:02}{:02}", abs / 60, abs % 60);
+            }
+            (b'X', 1) => {
+                let m: i32 = tz_offset_minutes.unwrap_or(0);
+                if m == 0 {
+                    out.push('Z');
+                } else {
+                    let sign = if m > 0 { '+' } else { '-' };
+                    let abs = m.abs();
+                    let _ = write!(out, "{sign}{:02}", abs / 60);
+                }
+            }
+            // Pass-through for unrecognised tokens (whitespace,
+            // separators, unknown letters).
+            _ => {
+                for _ in 0..count {
+                    out.push(c as char);
+                }
+            }
+        }
+        i = j;
+    }
+    out
+}
+
 /// Register the fished string natives.
 pub fn register(registry: &mut NativeRegistry) {
     registry.register("toString_Any_1__String_1_", ToString);
+    registry.register("format_String_1__Any_MANY__String_1_", Format);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::native::{MockCtx, lit_int};
+    use crate::native::{MockCtx, lit_collection, lit_float, lit_int, lit_str};
 
     #[test]
     fn to_string_integer() {
@@ -268,6 +633,123 @@ mod tests {
     #[test]
     fn to_string_wrong_arg_count_errors() {
         assert!(ToString.execute(&[], &mut MockCtx).is_err());
+    }
+
+    #[test]
+    fn format_s_specifier() {
+        let coll = lit_collection(vec![lit_str("world")]);
+        let r = Format
+            .execute(&[lit_str("hello %s"), coll], &mut MockCtx)
+            .unwrap();
+        assert_eq!(r.into_value(), Value::String("hello world".into()));
+    }
+
+    #[test]
+    fn format_r_specifier_quotes_string() {
+        let coll = lit_collection(vec![lit_str("foo")]);
+        let r = Format
+            .execute(&[lit_str("%r"), coll], &mut MockCtx)
+            .unwrap();
+        assert_eq!(r.into_value(), Value::String("'foo'".into()));
+    }
+
+    #[test]
+    fn format_two_args() {
+        let coll = lit_collection(vec![lit_int(1), lit_int(2)]);
+        let r = Format
+            .execute(&[lit_str("%s + %s"), coll], &mut MockCtx)
+            .unwrap();
+        assert_eq!(r.into_value(), Value::String("1 + 2".into()));
+    }
+
+    // T-20260511-05: Java parity for type mismatches at runtime.
+    // Pre-fix, %d on a String silently coerced to 0, %f to NaN, %t
+    // fell through to toString. Java throws `"Expected <T>, got: <v>"`
+    // (Format.java:107/117/158).
+
+    #[test]
+    fn format_d_on_string_errors() {
+        let coll = lit_collection(vec![lit_str("not an int")]);
+        let err = Format
+            .execute(&[lit_str("%d"), coll], &mut MockCtx)
+            .expect_err("%d on String must error");
+        assert!(
+            err.to_string()
+                .contains("Expected Integer, got: not an int"),
+            "Java-parity message text not found: {err}"
+        );
+    }
+
+    #[test]
+    fn format_d_on_float_errors() {
+        let coll = lit_collection(vec![lit_float(3.25)]);
+        let err = Format
+            .execute(&[lit_str("%d"), coll], &mut MockCtx)
+            .expect_err("%d on Float must error (Java rejects non-Integer)");
+        assert!(
+            err.to_string().contains("Expected Integer, got:"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn format_f_on_string_errors() {
+        let coll = lit_collection(vec![lit_str("not a float")]);
+        let err = Format
+            .execute(&[lit_str("%f"), coll], &mut MockCtx)
+            .expect_err("%f on String must error");
+        assert!(
+            err.to_string().contains("Expected Float, got: not a float"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn format_f_on_integer_errors() {
+        // Java's Format.java:156 requires `Instance.instanceOf(arg,
+        // M3Paths.Float, ...)` — strictly Float. Integer doesn't satisfy
+        // it, and Pre-fix Rust silently widened i64 → f64. Tightened.
+        let coll = lit_collection(vec![lit_int(42)]);
+        let err = Format
+            .execute(&[lit_str("%f"), coll], &mut MockCtx)
+            .expect_err("%f on Integer must error (Java rejects Integer for %f)");
+        assert!(
+            err.to_string().contains("Expected Float, got:"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn format_t_on_string_errors() {
+        let coll = lit_collection(vec![lit_str("not a date")]);
+        let err = Format
+            .execute(&[lit_str("%t"), coll], &mut MockCtx)
+            .expect_err("%t on String must error");
+        assert!(
+            err.to_string().contains("Expected Date, got: not a date"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn format_d_on_integer_compiles() {
+        // Positive control: the Java-parity tightening must not
+        // regress the well-formed case.
+        let coll = lit_collection(vec![lit_int(42)]);
+        let r = Format
+            .execute(&[lit_str("got %d"), coll], &mut MockCtx)
+            .unwrap();
+        assert_eq!(r.into_value(), Value::String("got 42".into()));
+    }
+
+    #[test]
+    fn format_f_on_float_compiles() {
+        let coll = lit_collection(vec![lit_float(3.25)]);
+        let r = Format
+            .execute(&[lit_str("%f"), coll], &mut MockCtx)
+            .unwrap();
+        // f64::to_string formatting — exact form pinned for regression.
+        assert_eq!(r.into_value(), Value::String("3.25".into()));
     }
 
     /// Build `Collection(Collection(... Integer(0) ...))` `depth`
