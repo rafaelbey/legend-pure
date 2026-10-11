@@ -12,13 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Arithmetic natives fished so far: `plus`, `minus`, `times`, `divide`
-//! and `rem`.
+//! Arithmetic natives fished so far: `plus`, `minus`, `times`, `divide`,
+//! `abs` and `rem`.
 //!
 //! All are **eager** — the native forces every argument up front via
 //! `ctx.evaluate`. Helpers return `PureRuntimeError`; `?` on each call
 //! promotes that into the `PureException` the trait requires.
-//! `abs` and `mod` stay on the archive until a test asks.
+//! `mod` stays on the archive until a test asks.
 
 use legend_pure_metamodel::types::ValueSpec;
 use rust_decimal::Decimal;
@@ -339,6 +339,28 @@ impl NativeFunction for Divide {
     }
 }
 
+/// Pure `abs(Number[1]): Number[1]` — absolute value.
+#[derive(Debug)]
+pub struct Abs;
+
+impl NativeFunction for Abs {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("abs", &values, 1)?;
+        let v = match &values[0] {
+            Value::Integer(i) => Value::Integer(i.wrapping_abs()),
+            Value::Float(f) => Value::Float(f.abs()),
+            Value::Decimal(d) => Value::Decimal(d.abs()),
+            other => return Err(PureRuntimeError::type_mismatch("Number", other).into()),
+        };
+        Ok(Evaluated::new(v))
+    }
+}
+
 /// Pure `rem(Number[1], Number[1]): Number[1]` — remainder (preserves sign of dividend).
 ///
 /// Promotes via `promote_pair` so mixed-type calls like `rem(7.5, 2)`
@@ -418,6 +440,11 @@ pub fn register(registry: &mut NativeRegistry) {
     registry.register("divide_Number_1__Number_1__Float_1_", Divide);
     registry.register("divide_Decimal_1__Decimal_1__Integer_1__Decimal_1_", Divide);
 
+    registry.register("abs_Integer_1__Integer_1_", Abs);
+    registry.register("abs_Float_1__Float_1_", Abs);
+    registry.register("abs_Decimal_1__Decimal_1_", Abs);
+    registry.register("abs_Number_1__Number_1_", Abs);
+
     registry.register("rem_Number_1__Number_1__Number_1_", Rem);
 }
 
@@ -428,7 +455,7 @@ mod tests {
     use rust_decimal::Decimal;
 
     use super::*;
-    use crate::native::{MockCtx, lit_collection, lit_float, lit_int};
+    use crate::native::{MockCtx, lit_bool, lit_collection, lit_float, lit_int, lit_str};
 
     /// Decimal-literal shim — `MockCtx` supports only bare `DecimalLiteral`
     /// specs, so tests that need a Decimal value go through this helper
@@ -615,6 +642,53 @@ mod tests {
     fn divide_by_zero_errors() {
         let r = Divide.execute(&[lit_int(1), lit_int(0)], &mut MockCtx);
         assert!(r.is_err());
+    }
+
+    #[test]
+    fn abs_negative() {
+        assert_eq!(
+            Abs.execute(&[lit_int(-5)], &mut MockCtx)
+                .unwrap()
+                .into_value(),
+            Value::Integer(5)
+        );
+    }
+
+    #[test]
+    fn wrong_arg_count_errors() {
+        // `plus` takes exactly one `Number[*]` argument. A lone Integer
+        // literal is normalised to a singleton collection and returns
+        // unchanged. An empty collection returns the identity `Integer(0)`.
+        // Zero arguments at the native-call level is an arity violation.
+        assert_eq!(
+            Plus.execute(&[lit_int(1)], &mut MockCtx)
+                .unwrap()
+                .into_value(),
+            Value::Integer(1)
+        );
+        assert_eq!(
+            Plus.execute(&[crate::native::lit_collection(Vec::new())], &mut MockCtx)
+                .unwrap()
+                .into_value(),
+            Value::Integer(0)
+        );
+        assert!(Plus.execute(&[], &mut MockCtx).is_err());
+        assert!(Abs.execute(&[], &mut MockCtx).is_err());
+    }
+
+    #[test]
+    fn type_mismatch_errors() {
+        // String instead of Number
+        assert!(
+            Plus.execute(&[lit_str("1"), lit_int(1)], &mut MockCtx)
+                .is_err()
+        );
+        assert!(Abs.execute(&[lit_bool(true)], &mut MockCtx).is_err());
+        // One float, one string
+        assert!(
+            Plus.execute(&[lit_float(1.0), lit_str("2")], &mut MockCtx)
+                .is_err()
+        );
     }
 
     #[test]
