@@ -640,6 +640,39 @@ impl NativeFunction for IndexOf {
     }
 }
 
+/// Pure `tail<T>(set:T[*]):T[*]`
+///
+/// Returns everything but the first element. Mirror of `Init` (which
+/// drops the last). Empty for `[]` or single-element collections.
+#[derive(Debug)]
+pub struct Tail;
+
+impl NativeFunction for Tail {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("tail", &values, 1)?;
+        let result = match &values[0] {
+            Value::Collection(v) => {
+                if v.is_empty() {
+                    Value::Unit
+                } else {
+                    let mut trimmed = (**v).clone();
+                    trimmed.pop_front();
+                    let as_vec: Vec<Value> = trimmed.iter().cloned().collect();
+                    Value::from_vec(as_vec)
+                }
+            }
+            // Single scalar / Unit: nothing-after-the-first → empty.
+            _ => Value::Unit,
+        };
+        Ok(Evaluated::new(result))
+    }
+}
+
 /// Register the fished collection natives.
 pub fn register(registry: &mut NativeRegistry) {
     registry.register("fold_T_MANY__Function_1__V_m__V_m_", Fold);
@@ -665,6 +698,7 @@ pub fn register(registry: &mut NativeRegistry) {
     registry.register("at_T_MANY__Integer_1__T_1_", At);
     registry.register("exists_T_MANY__Function_1__Boolean_1_", Exists);
     registry.register("indexOf_T_MANY__T_1__Integer_1_", IndexOf);
+    registry.register("tail_T_MANY__T_MANY_", Tail);
 }
 
 #[cfg(test)]

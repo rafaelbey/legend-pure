@@ -43,6 +43,7 @@ const FIND: &str = "find_T_MANY__Function_1__T_$0_1$_";
 const AT: &str = "at_T_MANY__Integer_1__T_1_";
 const EXISTS: &str = "exists_T_MANY__Function_1__Boolean_1_";
 const INDEX_OF: &str = "indexOf_T_MANY__T_1__Integer_1_";
+const TAIL: &str = "tail_T_MANY__T_MANY_";
 const TIMES: &str = "times_Number_MANY__Number_1_";
 const EQ: &str = "eq_Any_1__Any_1__Boolean_1_";
 const PLUS: &str = "plus_Number_MANY__Number_1_";
@@ -455,4 +456,13 @@ fn index_of_finds_the_first_equal_element() {
         .unwrap(),
         Value::Integer(1)
     );
+}
+
+#[test]
+fn tail_drops_the_first_element() {
+    let tail = |v: ValueSpec| as_ints(&run(&expr::call(TAIL, vec![v])));
+    assert_eq!(tail(ints(&[1, 2, 3])), [2, 3]);
+    assert_eq!(tail(ints(&[1, 2])), [2]);
+    assert_eq!(tail(expr::int(1)), Vec::<i64>::new());
+    assert_eq!(tail(ints(&[])), Vec::<i64>::new());
 }
