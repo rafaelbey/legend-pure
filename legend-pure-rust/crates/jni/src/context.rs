@@ -166,6 +166,7 @@ impl JniContext {
             handles: std::cell::RefCell::new(JniHandleTable::new()),
             last_error: std::cell::RefCell::new(None),
             jni_reads: std::cell::Cell::new(0),
+            released: std::cell::RefCell::new(Vec::new()),
         });
         // SAFETY: the model box was allocated just above and lives until
         // `Drop`; nothing borrows it mutably yet.

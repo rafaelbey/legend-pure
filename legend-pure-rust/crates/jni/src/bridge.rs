@@ -28,7 +28,8 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Weak;
 
-use jni::objects::{GlobalRef, JMethodID};
+use jni::objects::{GlobalRef, JMethodID, JValue};
+use jni::signature::{Primitive, ReturnType};
 use jni::{JNIEnv, JavaVM};
 use legend_pure_evaluator::error::PureException;
 use legend_pure_evaluator::heap::{HeapEntry, ObjectHandle};
@@ -129,6 +130,7 @@ pub struct BridgeMethods {
     pub rust_object: JMethodID,
     pub new_map: JMethodID,
     pub failure_of: JMethodID,
+    pub forget: JMethodID,
 }
 
 /// Java class names the crate talks to.
@@ -196,6 +198,7 @@ impl BridgeMethods {
                 format!("(JLjava/lang/String;){ci}"),
             )?,
             new_map: env.get_method_id(&cls, "newMap", format!("([{ci}[{ci}){ci}"))?,
+            forget: env.get_method_id(&cls, "forget", "([J)V")?,
             failure_of: env.get_method_id(
                 &cls,
                 "failureOf",
@@ -225,6 +228,9 @@ pub struct BridgeShared {
     /// Property and capture reads made through JNI so far; the timings
     /// of a `start` report how many fell inside its run phase.
     pub jni_reads: std::cell::Cell<u64>,
+    /// Bridge ids of Java-backed nodes that died since Java was last told
+    /// (`RustNodeBridge.forget`), so its id tables shrink with Rust's.
+    pub released: RefCell<Vec<i64>>,
 }
 
 impl BridgeShared {
@@ -261,17 +267,58 @@ impl BridgeShared {
             }
         }
         drop(nodes);
-        self.java_nodes
-            .borrow_mut()
-            .retain(|_, weak| weak.strong_count() > 0);
+        self.forget_dead_nodes();
+    }
+
+    /// Drop the identity entries of nodes nothing holds any more and keep
+    /// their ids for Java to forget: a dead node's id is never used again
+    /// (describing the same Java object later assigns a fresh one).
+    fn forget_dead_nodes(&self) {
+        let mut released = self.released.borrow_mut();
+        self.java_nodes.borrow_mut().retain(|id, weak| {
+            let alive = weak.strong_count() > 0;
+            if !alive {
+                released.push(*id);
+            }
+            alive
+        });
     }
 
     /// Live Java-backed nodes plus Rust objects held for Java.
     #[must_use]
     pub fn live_count(&self) -> usize {
-        let mut nodes = self.java_nodes.borrow_mut();
-        nodes.retain(|_, weak| weak.strong_count() > 0);
-        nodes.len() + self.handles.borrow().live_count()
+        self.forget_dead_nodes();
+        self.java_nodes.borrow().len() + self.handles.borrow().live_count()
+    }
+
+    /// Tell Java which node ids died (`RustNodeBridge.forget`), so the
+    /// bridge's id tables do not grow for the JVM's lifetime.
+    pub fn forget_released(&self, env: &mut JNIEnv) {
+        let released = std::mem::take(&mut *self.released.borrow_mut());
+        if released.is_empty() {
+            return;
+        }
+        let told = env.with_local_frame(4, |env| -> jni::errors::Result<()> {
+            let ids = env.new_long_array(i32::try_from(released.len()).unwrap_or(i32::MAX))?;
+            env.set_long_array_region(&ids, 0, &released)?;
+            // SAFETY: `forget` was resolved on the bridge's class with
+            // the signature `([J)V`; the bridge global reference is an
+            // instance of that class and the one argument is a `long[]`.
+            unsafe {
+                env.call_method_unchecked(
+                    self.bridge.as_obj(),
+                    self.methods.forget,
+                    ReturnType::Primitive(Primitive::Void),
+                    &[JValue::Object(&ids).as_jni()],
+                )
+            }?;
+            Ok(())
+        });
+        if told.is_err() {
+            // The ids stay known on the Java side: a leak, not an error
+            // of the call that just ended.
+            let _ = crate::failure::take_pending(env);
+        }
     }
 
     /// Record a failure that happened where no error can be returned;

@@ -254,6 +254,15 @@ public final class PureRustEvaluator implements FunctionExecution, Closeable
         return this.closed ? 0 : nativeLiveHandleCount(this.contextPointer);
     }
 
+    /**
+     * Java graph nodes the bridge keeps an id for because the Rust side may
+     * still read them; nodes Rust has let go of are forgotten when a call ends.
+     */
+    synchronized int knownNodeCount()
+    {
+        return this.closed ? 0 : this.bridge.knownNodeCount();
+    }
+
     synchronized String crossingKind(CoreInstance node)
     {
         checkOpen();

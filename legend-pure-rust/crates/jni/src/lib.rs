@@ -304,8 +304,9 @@ pub extern "system" fn Java_org_finos_legend_pure_rust_PureRustEvaluator_nativeS
                 values.push(value);
             }
         }
-        let value = ctx.start(&function, &values)?;
-        cross_out(&mut env, &ctx, &value)
+        let value = ctx.start(&function, &values);
+        ctx.shared.forget_released(&mut env);
+        cross_out(&mut env, &ctx, &value?)
     }));
     match result {
         Ok(Ok(arr)) => arr,

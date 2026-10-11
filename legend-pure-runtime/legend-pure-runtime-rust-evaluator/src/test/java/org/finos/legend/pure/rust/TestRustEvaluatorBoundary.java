@@ -471,6 +471,8 @@ public class TestRustEvaluatorBoundary
     public void handlesAreReleasedAcrossTenThousandRoundTrips()
     {
         CoreInstance expression = anExpressionNode();
+        Assert.assertSame(expression, roundTrip(expression));
+        int knownBefore = evaluator.knownNodeCount();
         for (int i = 0; i < 10_000; i++)
         {
             CoreInstance created = evaluator.create(CLASS, new String[]{"name"}, new CoreInstance[][]{{repository.newStringCoreInstance("X" + i)}});
@@ -479,6 +481,7 @@ public class TestRustEvaluatorBoundary
             Assert.assertSame(expression, roundTrip(expression));
         }
         Assert.assertEquals(0L, evaluator.liveHandleCount());
+        Assert.assertEquals(knownBefore, evaluator.knownNodeCount());
     }
 
     /**
@@ -493,6 +496,29 @@ public class TestRustEvaluatorBoundary
         Assert.assertEquals(PureRustEvaluationException.Kind.EXECUTION_ERROR, e.getKind());
         Assert.assertTrue(e.getMessage(), e.getMessage().startsWith("ExecutionError: describe: java.lang.NullPointerException"));
         Assert.assertEquals("42", roundTrip(repository.newIntegerCoreInstance(42L)).getName());
+    }
+
+    /**
+     * The bridge keeps an id only for the Java nodes the Rust side still
+     * holds: hundreds of distinct nodes crossing one call at a time leave
+     * its tables as they were.
+     */
+    @Test
+    public void theBridgeForgetsTheNodesRustLetGoOf()
+    {
+        ReportScope scope = PlatformCodeRepositoryProvider.essentialFunctions;
+        MutableList<CoreInstance> expressions = Lists.mutable.empty();
+        for (CoreInstance test : TestCollection.buildPCTTestCollection(scope._package, scope.filePath, ps).getAllTestFunctions())
+        {
+            test.getValueForMetaPropertyToMany(M3Properties.expressionSequence).forEach(expressions::add);
+        }
+        Assert.assertTrue(expressions.size() > 300);
+        int knownBefore = evaluator.knownNodeCount();
+        for (CoreInstance expression : expressions)
+        {
+            Assert.assertSame(expression, roundTrip(expression));
+        }
+        Assert.assertEquals(knownBefore, evaluator.knownNodeCount());
     }
 
     @Test
