@@ -216,6 +216,25 @@ impl NativeFunction for Exp {
     }
 }
 
+/// Pure `log(Number[1]):Float[1]` — natural logarithm (base `e`).
+///
+/// `log(0)` yields `-inf`; `log(negative)` yields `NaN` per IEEE-754.
+#[derive(Debug)]
+pub struct Log;
+
+impl NativeFunction for Log {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("log", &values, 1)?;
+        let x = number_to_f64("log", &values[0])?;
+        Ok(Evaluated::new(Value::Float(x.ln())))
+    }
+}
+
 /// Pure `toFloat(Number[1]):Float[1]` — numeric → Float coercion.
 #[derive(Debug)]
 pub struct ToFloat;
@@ -285,6 +304,7 @@ pub fn register(registry: &mut NativeRegistry) {
 
     // analytic
     registry.register("exp_Number_1__Float_1_", Exp);
+    registry.register("log_Number_1__Float_1_", Log);
 
     // numeric conversion
     registry.register("toFloat_Number_1__Float_1_", ToFloat);
@@ -455,6 +475,45 @@ mod tests {
     #[test]
     fn exp_type_mismatch() {
         assert!(Exp.execute(&[lit_str("x")], &mut MockCtx).is_err());
+    }
+
+    #[test]
+    fn log_one_is_zero() {
+        let r = Log.execute(&[lit_float(1.0)], &mut MockCtx).unwrap();
+        match r.into_value() {
+            Value::Float(f) => assert!(approx_eq(f, 0.0)),
+            other => panic!("expected Float, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn log_e_is_one() {
+        let r = Log
+            .execute(&[lit_float(std::f64::consts::E)], &mut MockCtx)
+            .unwrap();
+        match r.into_value() {
+            Value::Float(f) => assert!(approx_eq(f, 1.0)),
+            other => panic!("expected Float, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn log_zero_is_neg_inf() {
+        let r = Log.execute(&[lit_float(0.0)], &mut MockCtx).unwrap();
+        match r.into_value() {
+            Value::Float(f) => assert!(f.is_infinite() && f.is_sign_negative()),
+            other => panic!("expected Float, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn log_wrong_arg_count() {
+        assert!(Log.execute(&[], &mut MockCtx).is_err());
+    }
+
+    #[test]
+    fn log_type_mismatch() {
+        assert!(Log.execute(&[lit_str("x")], &mut MockCtx).is_err());
     }
 
     #[test]
