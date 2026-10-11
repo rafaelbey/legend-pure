@@ -1041,6 +1041,22 @@ fn pair_first_second(
     Ok((k.clone(), v.clone()))
 }
 
+/// Pure `isEmpty(Any[*]): Boolean[1]`
+#[derive(Debug)]
+pub struct IsEmpty;
+
+impl NativeFunction for IsEmpty {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("isEmpty", &values, 1)?;
+        Ok(Evaluated::new(Value::Boolean(values[0].is_empty())))
+    }
+}
+
 /// Register the fished collection natives.
 pub fn register(registry: &mut NativeRegistry) {
     registry.register("fold_T_MANY__Function_1__V_m__V_m_", Fold);
@@ -1077,6 +1093,7 @@ pub fn register(registry: &mut NativeRegistry) {
     registry.register("put_Map_1__U_1__V_1__Map_1_", Put);
     registry.register("putAll_Map_1__Pair_MANY__Map_1_", PutAll);
     registry.register("putAll_Map_1__Map_1__Map_1_", PutAll);
+    registry.register("isEmpty_Any_MANY__Boolean_1_", IsEmpty);
 }
 
 #[cfg(test)]
@@ -1282,6 +1299,28 @@ mod tests {
                 .unwrap()
                 .into_value(),
             Value::Integer(0)
+        );
+    }
+
+    #[test]
+    fn is_empty_true() {
+        assert_eq!(
+            IsEmpty
+                .execute(&[lit_collection(vec![])], &mut MockCtx)
+                .unwrap()
+                .into_value(),
+            Value::Boolean(true)
+        );
+    }
+
+    #[test]
+    fn is_empty_false() {
+        assert_eq!(
+            IsEmpty
+                .execute(&[lit_int(1)], &mut MockCtx)
+                .unwrap()
+                .into_value(),
+            Value::Boolean(false)
         );
     }
 

@@ -58,6 +58,7 @@ const LAST: &str = "last_T_MANY__T_$0_1$_";
 const PUT: &str = "put_Map_1__U_1__V_1__Map_1_";
 const PUT_ALL_PAIRS: &str = "putAll_Map_1__Pair_MANY__Map_1_";
 const PUT_ALL_MAP: &str = "putAll_Map_1__Map_1__Map_1_";
+const IS_EMPTY: &str = "isEmpty_Any_MANY__Boolean_1_";
 const TIMES: &str = "times_Number_MANY__Number_1_";
 const EQ: &str = "eq_Any_1__Any_1__Boolean_1_";
 const PLUS: &str = "plus_Number_MANY__Number_1_";
@@ -697,5 +698,18 @@ fn put_all_merges_pairs_or_a_map_over_the_input() {
     assert_eq!(
         string_int_entries(&from_map),
         [("key1".to_string(), 9), ("key2".to_string(), 0)]
+    );
+}
+
+#[test]
+fn is_empty_is_true_only_for_no_elements() {
+    let is_empty = |v: ValueSpec| run(&expr::call(IS_EMPTY, vec![v]));
+    assert_eq!(is_empty(ints(&[])), Value::Boolean(true));
+    assert_eq!(is_empty(expr::int(0)), Value::Boolean(false));
+    assert_eq!(is_empty(strings(&["a", "b"])), Value::Boolean(false));
+    // Over a filter that keeps nothing.
+    assert_eq!(
+        is_empty(expr::call(FILTER, vec![ints(&[1, 3]), is_lambda(2)])),
+        Value::Boolean(true)
     );
 }
