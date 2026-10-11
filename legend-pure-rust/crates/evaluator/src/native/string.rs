@@ -669,6 +669,48 @@ impl NativeFunction for JoinStrings {
     }
 }
 
+/// Pure `indexOf(String[1], String[1]): Integer[1]`
+/// Pure `indexOf(String[1], String[1], Integer[1]): Integer[1]` — search
+/// from a non-zero start index.
+///
+/// Returns -1 if not found (matching Java behavior). The 3-arg form's
+/// returned index is absolute (not relative to the start), matching
+/// `String.indexOf(String, int)` in Java.
+#[derive(Debug)]
+pub struct IndexOf;
+
+impl NativeFunction for IndexOf {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        let s = values[0].as_string()?;
+        let sub = values[1].as_string()?;
+        let from = match values.len() {
+            2 => 0usize,
+            3 => {
+                let raw = values[2].as_integer()?.max(0);
+                #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+                let from = (raw as usize).min(s.len());
+                from
+            }
+            n => {
+                return Err(PureRuntimeError::EvaluationError(format!(
+                    "indexOf: expected 2 or 3 argument(s), got {n}"
+                ))
+                .into());
+            }
+        };
+        #[allow(clippy::cast_possible_wrap)]
+        let idx = s[from..]
+            .find(sub.as_str())
+            .map_or(-1, |i| (i + from) as i64);
+        Ok(Evaluated::new(Value::Integer(idx)))
+    }
+}
+
 /// Register the fished string natives.
 pub fn register(registry: &mut NativeRegistry) {
     registry.register("toString_Any_1__String_1_", ToString);
@@ -678,6 +720,8 @@ pub fn register(registry: &mut NativeRegistry) {
         "joinStrings_String_MANY__String_1__String_1__String_1__String_1_",
         JoinStrings,
     );
+    registry.register("indexOf_String_1__String_1__Integer_1_", IndexOf);
+    registry.register("indexOf_String_1__String_1__Integer_1__Integer_1_", IndexOf);
 }
 
 #[cfg(test)]
@@ -816,6 +860,45 @@ mod tests {
             .unwrap();
         // f64::to_string formatting — exact form pinned for regression.
         assert_eq!(r.into_value(), Value::String("3.25".into()));
+    }
+
+    #[test]
+    fn string_index_of_found() {
+        assert_eq!(
+            IndexOf
+                .execute(&[lit_str("hello"), lit_str("ll")], &mut MockCtx)
+                .unwrap()
+                .into_value(),
+            Value::Integer(2)
+        );
+    }
+
+    #[test]
+    fn string_index_of_not_found() {
+        assert_eq!(
+            IndexOf
+                .execute(&[lit_str("hello"), lit_str("xyz")], &mut MockCtx)
+                .unwrap()
+                .into_value(),
+            Value::Integer(-1)
+        );
+    }
+
+    /// `testFromIndex`: the 3-arg form searches from the index and
+    /// answers an absolute position.
+    #[test]
+    fn string_index_of_from_index() {
+        let from = |i| {
+            IndexOf
+                .execute(
+                    &[lit_str("the the"), lit_str("h"), lit_int(i)],
+                    &mut MockCtx,
+                )
+                .unwrap()
+                .into_value()
+        };
+        assert_eq!(from(0), Value::Integer(1));
+        assert_eq!(from(3), Value::Integer(5));
     }
 
     // -- joinStrings --
