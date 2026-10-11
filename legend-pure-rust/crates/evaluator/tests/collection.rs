@@ -44,6 +44,8 @@ const AT: &str = "at_T_MANY__Integer_1__T_1_";
 const EXISTS: &str = "exists_T_MANY__Function_1__Boolean_1_";
 const INDEX_OF: &str = "indexOf_T_MANY__T_1__Integer_1_";
 const TAIL: &str = "tail_T_MANY__T_MANY_";
+const TO_ONE: &str = "toOne_T_MANY__T_1_";
+const TO_ONE_WITH_MESSAGE: &str = "toOne_T_MANY__String_1__T_1_";
 const TIMES: &str = "times_Number_MANY__Number_1_";
 const EQ: &str = "eq_Any_1__Any_1__Boolean_1_";
 const PLUS: &str = "plus_Number_MANY__Number_1_";
@@ -465,4 +467,43 @@ fn tail_drops_the_first_element() {
     assert_eq!(tail(ints(&[1, 2])), [2]);
     assert_eq!(tail(expr::int(1)), Vec::<i64>::new());
     assert_eq!(tail(ints(&[])), Vec::<i64>::new());
+}
+
+#[test]
+fn to_one_unwraps_a_singleton_and_rejects_other_sizes() {
+    assert_eq!(
+        run(&expr::call(TO_ONE, vec![ints(&[5])])),
+        Value::Integer(5)
+    );
+    assert_eq!(
+        run(&expr::call(
+            TO_ONE_WITH_MESSAGE,
+            vec![expr::string("x"), expr::string("must be one")]
+        )),
+        Value::String("x".into())
+    );
+    // toOne over a find result, as testLetWithParam-style bodies do.
+    assert_eq!(
+        run(&expr::call(
+            TO_ONE,
+            vec![expr::call(FIND, vec![ints(&[1, 2]), is_lambda(2)])]
+        )),
+        Value::Integer(2)
+    );
+    let model = model();
+    let registry = NativeRegistry::standard();
+    let mut eval = Evaluator::new(&model, &registry);
+    for (items, size) in [(ints(&[]), 0), (ints(&[1, 2]), 2)] {
+        let err = eval.eval(&expr::call(TO_ONE, vec![items])).unwrap_err();
+        assert!(
+            matches!(
+                &err.kind,
+                PureExceptionKind::ExecutionError(PureRuntimeError::MultiplicityViolation {
+                    actual,
+                    ..
+                }) if *actual == size
+            ),
+            "{err:?}"
+        );
+    }
 }

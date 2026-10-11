@@ -673,6 +673,35 @@ impl NativeFunction for Tail {
     }
 }
 
+/// Pure `toOne<T>(values:T[*]):T[1]` / `toOne<T>(values:T[0..1]):T[1]`
+///
+/// Asserts the collection contains exactly one element and returns that
+/// element as a scalar. Produces [`PureRuntimeError::MultiplicityViolation`]
+/// when the input is empty or has multiple elements.
+#[derive(Debug)]
+pub struct ToOne;
+
+impl NativeFunction for ToOne {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        // 1-arg form: cast to [1]; 2-arg form: same with custom error message.
+        // The platform declaration in toOne.pure has both shapes; the message
+        // arg is informational only — we don't currently surface it.
+        if values.is_empty() || values.len() > 2 {
+            return Err(PureRuntimeError::EvaluationError(format!(
+                "toOne: expected 1 or 2 argument(s), got {}",
+                values.len()
+            ))
+            .into());
+        }
+        Ok(Evaluated::new(values[0].to_one()?.clone()))
+    }
+}
+
 /// Register the fished collection natives.
 pub fn register(registry: &mut NativeRegistry) {
     registry.register("fold_T_MANY__Function_1__V_m__V_m_", Fold);
@@ -699,6 +728,8 @@ pub fn register(registry: &mut NativeRegistry) {
     registry.register("exists_T_MANY__Function_1__Boolean_1_", Exists);
     registry.register("indexOf_T_MANY__T_1__Integer_1_", IndexOf);
     registry.register("tail_T_MANY__T_MANY_", Tail);
+    registry.register("toOne_T_MANY__T_1_", ToOne);
+    registry.register("toOne_T_MANY__String_1__T_1_", ToOne);
 }
 
 #[cfg(test)]
@@ -1097,5 +1128,38 @@ mod tests {
     #[test]
     fn index_of_wrong_arg_count() {
         assert!(IndexOf.execute(&[lit_int(1)], &mut MockCtx).is_err());
+    }
+
+    #[test]
+    fn to_one_scalar_passthrough() {
+        assert_eq!(
+            ToOne
+                .execute(&[lit_int(42)], &mut MockCtx)
+                .unwrap()
+                .into_value(),
+            Value::Integer(42)
+        );
+        assert_eq!(
+            ToOne
+                .execute(&[int_spec(&[42])], &mut MockCtx)
+                .unwrap()
+                .into_value(),
+            Value::Integer(42)
+        );
+    }
+
+    #[test]
+    fn to_one_empty_errors() {
+        assert!(
+            ToOne
+                .execute(&[lit_collection(vec![])], &mut MockCtx)
+                .is_err()
+        );
+        assert!(ToOne.execute(&[int_spec(&[])], &mut MockCtx).is_err());
+    }
+
+    #[test]
+    fn to_one_multi_errors() {
+        assert!(ToOne.execute(&[int_spec(&[1, 2])], &mut MockCtx).is_err());
     }
 }
