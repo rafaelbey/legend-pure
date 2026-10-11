@@ -12,11 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Comparison natives fished so far: `eq` (identity) and `equal`
-//! (structural, via [`crate::native::equality`]). The ordering natives
-//! (`lessThan`, `compare`, …) stay on the archive until a test asks.
+//! Comparison natives: `eq` (identity), `equal` (structural, via
+//! [`crate::native::equality`]), and the total comparator
+//! [`compare_values`](crate::native::comparison::compare_values) that the ordering natives and the collection
+//! natives (`sort`, `removeDuplicates`) share.
+
+use std::cmp::Ordering;
 
 use legend_pure_metamodel::types::ValueSpec;
+use rust_decimal::Decimal;
+use rust_decimal::prelude::FromPrimitive;
 
 use crate::error::PureException;
 use crate::native::{
@@ -68,6 +73,112 @@ impl NativeFunction for Equal {
     }
 }
 
+/// Total comparator behind `compare` and the ordering natives.
+///
+/// Mixed numeric types promote toward the wider type:
+/// - Integer ↔ Float: convert Integer to f64 and `partial_cmp`
+/// - Integer ↔ Decimal: convert Integer to Decimal and compare exactly
+/// - Float ↔ Decimal: convert Decimal to f64 and `partial_cmp`
+///
+/// Cross-type comparisons (Integer ↔ String, Boolean ↔ Date, etc.)
+/// fall through to a stable per-variant ordinal so the contract stays
+/// total — `compare(5, '5')` returns a non-zero value with consistent
+/// direction (`compare(a, b) < 0` ⇒ `compare(b, a) > 0`).
+///
+/// Reused by the `compare` native and by the sort/iteration natives
+/// that need comparator semantics without a user-supplied lambda.
+#[must_use]
+#[allow(clippy::cast_precision_loss)]
+pub fn compare_values(a: &Value, b: &Value) -> i64 {
+    let ord = match (a, b) {
+        (Value::Integer(a), Value::Integer(b)) => a.cmp(b),
+        (Value::Integer(a), Value::Float(b)) => {
+            (*a as f64).partial_cmp(b).unwrap_or(Ordering::Equal)
+        }
+        (Value::Float(a), Value::Integer(b)) => {
+            a.partial_cmp(&(*b as f64)).unwrap_or(Ordering::Equal)
+        }
+        (Value::Float(a), Value::Float(b)) => a.partial_cmp(b).unwrap_or(Ordering::Equal),
+        (Value::Decimal(a), Value::Decimal(b)) => a.cmp(b),
+        (Value::Integer(a), Value::Decimal(b)) => Decimal::from(*a).cmp(b),
+        (Value::Decimal(a), Value::Integer(b)) => a.cmp(&Decimal::from(*b)),
+        (Value::Decimal(a), Value::Float(b)) => {
+            Decimal::from_f64(*b).map_or(Ordering::Equal, |bd| a.cmp(&bd))
+        }
+        (Value::Float(a), Value::Decimal(b)) => {
+            Decimal::from_f64(*a).map_or(Ordering::Equal, |ad| ad.cmp(b))
+        }
+        (Value::Boolean(a), Value::Boolean(b)) => a.cmp(b),
+        (Value::String(a), Value::String(b)) => a.cmp(b),
+        (Value::Date(a), Value::Date(b)) => a.cmp(b),
+        // `%latest` is greater than every concrete Date.
+        (Value::Latest, Value::Latest) => Ordering::Equal,
+        (Value::Latest, Value::Date(_)) => Ordering::Greater,
+        (Value::Date(_), Value::Latest) => Ordering::Less,
+        (Value::StrictTime(a), Value::StrictTime(b)) => a.cmp(b),
+        // Heap objects: compare by allocation address. Stable but
+        // semantically arbitrary — the only contract is "two distinct
+        // objects compare consistently in some order", which `sort`
+        // leans on for determinism over object collections.
+        (Value::Object(a), Value::Object(b)) => {
+            let av = std::rc::Rc::as_ptr(a) as usize;
+            let bv = std::rc::Rc::as_ptr(b) as usize;
+            av.cmp(&bv)
+        }
+        // Element refs: compare by their rendered ElementId string. Same
+        // "stable but arbitrary" intent as Object.
+        (Value::Element(a), Value::Element(b)) => format!("{a}").cmp(&format!("{b}")),
+        // Enum values from the same enumeration: compare by member name.
+        // From different enumerations: fall through to the type ordinal
+        // (both EnumValue → Equal), i.e. unordered.
+        (
+            Value::EnumValue {
+                enum_id: e1,
+                member: m1,
+                ..
+            },
+            Value::EnumValue {
+                enum_id: e2,
+                member: m2,
+                ..
+            },
+        ) if e1 == e2 => m1.cmp(m2),
+        // Cross-type: stable ordinal so comparison stays total + symmetric.
+        _ => type_ordinal(a).cmp(&type_ordinal(b)),
+    };
+    match ord {
+        Ordering::Less => -1,
+        Ordering::Equal => 0,
+        Ordering::Greater => 1,
+    }
+}
+
+/// Stable per-variant ordinal for cross-type comparisons. Ordering is
+/// arbitrary but fixed — `compare(5, '5')` consistently routes one way
+/// (here: Integer < String) and the reverse call routes the other.
+fn type_ordinal(v: &Value) -> u8 {
+    match v {
+        Value::Boolean(_) => 0,
+        Value::Integer(_) => 1,
+        Value::Float(_) => 2,
+        Value::Decimal(_) => 3,
+        Value::String(_) => 4,
+        // `%latest` shares the Date ordinal: the Date/Latest arms of
+        // `compare_values` already order them, so this only decides
+        // cross-type placement.
+        Value::Date(_) | Value::Latest => 5,
+        Value::StrictTime(_) => 6,
+        Value::EnumValue { .. } => 7,
+        Value::UnitInstance { .. } => 8,
+        Value::Element(_) => 9,
+        Value::Object(_) => 10,
+        Value::Collection(_) => 11,
+        Value::Map(_) => 12,
+        Value::Function(_) => 13,
+        Value::Unit => 14,
+    }
+}
+
 /// Register the fished comparison natives.
 pub fn register(registry: &mut NativeRegistry) {
     registry.register("eq_Any_1__Any_1__Boolean_1_", Eq);
@@ -78,6 +189,85 @@ pub fn register(registry: &mut NativeRegistry) {
 mod tests {
     use super::*;
     use crate::native::{MockCtx, lit_int, lit_str};
+
+    #[test]
+    fn compare_decimal_and_integer_exactly_at_the_i64_limit() {
+        // testCompareDecimalAndLongTypes — Decimal vs Integer with the same
+        // value must compare equal even near the i64 limit.
+        let d = Decimal::from(9_999_999_999_999_992_i64);
+        assert_eq!(
+            compare_values(&Value::Decimal(d), &Value::Integer(9_999_999_999_999_992)),
+            0
+        );
+        assert_eq!(
+            compare_values(&Value::Decimal(d), &Value::Integer(9_999_999_999_999_991)),
+            1
+        );
+        assert_eq!(
+            compare_values(&Value::Decimal(d), &Value::Integer(9_999_999_999_999_993)),
+            -1
+        );
+    }
+
+    #[test]
+    fn compare_strings_lexicographic() {
+        assert_eq!(
+            compare_values(&Value::String("a".into()), &Value::String("b".into())),
+            -1
+        );
+        assert_eq!(
+            compare_values(&Value::String("aaa".into()), &Value::String("aaa".into())),
+            0
+        );
+        assert_eq!(
+            compare_values(&Value::String("baa".into()), &Value::String("aaa".into())),
+            1
+        );
+        assert_eq!(
+            compare_values(&Value::String("aa".into()), &Value::String("aaa".into())),
+            -1
+        );
+    }
+
+    #[test]
+    fn compare_booleans_false_lt_true() {
+        assert_eq!(
+            compare_values(&Value::Boolean(true), &Value::Boolean(false)),
+            1
+        );
+        assert_eq!(
+            compare_values(&Value::Boolean(true), &Value::Boolean(true)),
+            0
+        );
+        assert_eq!(
+            compare_values(&Value::Boolean(false), &Value::Boolean(true)),
+            -1
+        );
+    }
+
+    #[test]
+    fn compare_mixed_types_nonzero_and_symmetric() {
+        // testCompareMixedTypes invariant: compare(a, b) and compare(b, a)
+        // must be non-zero with opposite signs for any cross-type pair.
+        let pairs = [
+            (Value::Integer(5), Value::String("5".into())),
+            (Value::Boolean(true), Value::String("true".into())),
+            (Value::String("2014".into()), Value::Integer(2014)),
+            (
+                Value::Integer(2014),
+                Value::Date(crate::date::PureDate::year(2014).unwrap()),
+            ),
+        ];
+        for (a, b) in &pairs {
+            let ab = compare_values(a, b);
+            let ba = compare_values(b, a);
+            assert_ne!(ab, 0, "compare({a:?}, {b:?}) returned 0");
+            assert_eq!(
+                ab, -ba,
+                "compare not symmetric for {a:?} vs {b:?}: ab={ab} ba={ba}"
+            );
+        }
+    }
 
     #[test]
     fn equal_same_type() {

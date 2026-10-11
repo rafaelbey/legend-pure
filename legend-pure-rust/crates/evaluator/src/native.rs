@@ -345,8 +345,12 @@ impl NativeRegistry {
         let mut registry = Self::new();
         arithmetic::register(&mut registry);
         boolean::register(&mut registry);
+        collection::register(&mut registry);
         comparison::register(&mut registry);
+        datetime::register(&mut registry);
         lang::register(&mut registry);
+        math::register(&mut registry);
+        string::register(&mut registry);
         testing::register(&mut registry);
         registry
     }
@@ -455,8 +459,14 @@ pub mod arithmetic;
 /// Boolean natives: `and`, `or`, `not`.
 pub mod boolean;
 
-/// Comparison natives: `eq`, `equal` (the ordering natives stay on the archive).
+/// Collection natives (`map`, `filter`, `fold`, `zip`, the `Map` natives, …).
+pub mod collection;
+
+/// Comparison natives: `eq`, `equal`, and the ordering helpers.
 pub mod comparison;
+
+/// Date and time natives (`adjust`, `dateDiff`, `date`, the `has*` family, …).
+pub mod datetime;
 
 /// Heap-aware structural equality behind `equal`.
 pub mod equality;
@@ -464,8 +474,31 @@ pub mod equality;
 /// Language-level natives: `letFunction`, `if`, `new`, `copy`.
 pub mod lang;
 
+/// Mathematical natives (`round`, `floor`, the transcendental family, parsing).
+pub mod math;
+
+/// String natives (`toString`, `format`, `joinStrings`, …).
+pub mod string;
+
 /// Test-support natives: `assert`.
 pub mod testing;
+
+/// A native registered under its mangled key before its implementation
+/// is fished: dispatch finds it and it fails with
+/// [`PureRuntimeError::NotImplemented`] naming the key, so the PCT
+/// manifests record `NotImplemented: <key>` instead of `FunctionNotFound`.
+#[derive(Debug)]
+pub struct NotYet(pub &'static str);
+
+impl NativeFunction for NotYet {
+    fn execute(
+        &self,
+        _args: &[ValueSpec],
+        _ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        Err(PureRuntimeError::NotImplemented(SmolStr::new(self.0)).into())
+    }
+}
 
 /// Heap shapes for reflection over functions and multiplicities
 /// (helpers only; no natives registered).
@@ -638,6 +671,29 @@ mod tests {
         let func = reg.get("myFunc").unwrap();
         let result = func.execute(&[], &mut MockCtx).unwrap();
         assert_eq!(result.into_value(), Value::Integer(42));
+    }
+
+    #[test]
+    fn not_yet_native_fails_with_not_implemented_naming_the_key() {
+        let mut reg = NativeRegistry::new();
+        reg.register(
+            "deactivate_Any_MANY__ValueSpecification_1_",
+            NotYet("deactivate_Any_MANY__ValueSpecification_1_"),
+        );
+        let err = reg
+            .get("deactivate_Any_MANY__ValueSpecification_1_")
+            .unwrap()
+            .execute(&[], &mut MockCtx)
+            .unwrap_err();
+        assert!(matches!(
+            &err.kind,
+            crate::error::PureExceptionKind::ExecutionError(PureRuntimeError::NotImplemented(k))
+                if k == "deactivate_Any_MANY__ValueSpecification_1_"
+        ));
+        assert!(
+            reg.get_or_err("deactivate_Any_MANY__ValueSpecification_1_")
+                .is_ok()
+        );
     }
 
     #[test]
