@@ -342,6 +342,23 @@ impl NativeFunction for Pow {
     }
 }
 
+/// Pure `sin(Number[1]):Float[1]` — sine of `x` in radians.
+#[derive(Debug)]
+pub struct Sin;
+
+impl NativeFunction for Sin {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("sin", &values, 1)?;
+        let x = number_to_f64("sin", &values[0])?;
+        Ok(Evaluated::new(Value::Float(x.sin())))
+    }
+}
+
 /// Pure `toFloat(Number[1]):Float[1]` — numeric → Float coercion.
 #[derive(Debug)]
 pub struct ToFloat;
@@ -475,6 +492,9 @@ pub fn register(registry: &mut NativeRegistry) {
     // common supertype of the actual `Float` return. Alias under both
     // so exact-FQN dispatch hits the impl either way.
     registry.register("pow_Number_1__Number_1__Number_1_", Pow);
+
+    // trigonometric
+    registry.register("sin_Number_1__Float_1_", Sin);
 
     // numeric conversion
     registry.register("toFloat_Number_1__Float_1_", ToFloat);
@@ -854,6 +874,36 @@ mod tests {
             Pow.execute(&[lit_float(1.0), lit_str("x")], &mut MockCtx)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn sin_zero() {
+        let r = Sin.execute(&[lit_float(0.0)], &mut MockCtx).unwrap();
+        match r.into_value() {
+            Value::Float(f) => assert!(approx_eq(f, 0.0)),
+            other => panic!("expected Float, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn sin_half_pi() {
+        let r = Sin
+            .execute(&[lit_float(std::f64::consts::FRAC_PI_2)], &mut MockCtx)
+            .unwrap();
+        match r.into_value() {
+            Value::Float(f) => assert!(approx_eq(f, 1.0)),
+            other => panic!("expected Float, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn sin_wrong_arg_count() {
+        assert!(Sin.execute(&[], &mut MockCtx).is_err());
+    }
+
+    #[test]
+    fn sin_type_mismatch() {
+        assert!(Sin.execute(&[lit_str("x")], &mut MockCtx).is_err());
     }
 
     #[test]
