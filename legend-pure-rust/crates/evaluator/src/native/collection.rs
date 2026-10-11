@@ -582,6 +582,34 @@ impl NativeFunction for At {
     }
 }
 
+/// Pure `exists<T>(value:T[*], func:Function<{T[1]->Boolean[1]}>[1]):Boolean[1]`
+///
+/// Returns `true` as soon as any element satisfies the predicate. For an
+/// empty input returns `false`.
+#[derive(Debug)]
+pub struct Exists;
+
+impl NativeFunction for Exists {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        expect_args("exists", args, 2)?;
+        let source = ctx.evaluate(&args[0])?.into_value().to_collection();
+        let lambda_val = ctx.evaluate(&args[1])?.into_value();
+
+        for item in &source {
+            let pred = ctx.call_function(&lambda_val, std::slice::from_ref(item))?;
+            if pred.as_boolean()? {
+                return Ok(Evaluated::new(Value::Boolean(true)));
+            }
+        }
+
+        Ok(Evaluated::new(Value::Boolean(false)))
+    }
+}
+
 /// Register the fished collection natives.
 pub fn register(registry: &mut NativeRegistry) {
     registry.register("fold_T_MANY__Function_1__V_m__V_m_", Fold);
@@ -605,6 +633,7 @@ pub fn register(registry: &mut NativeRegistry) {
     registry.register("slice_T_MANY__Integer_1__Integer_1__T_MANY_", Slice);
     registry.register("find_T_MANY__Function_1__T_$0_1$_", Find);
     registry.register("at_T_MANY__Integer_1__T_1_", At);
+    registry.register("exists_T_MANY__Function_1__Boolean_1_", Exists);
 }
 
 #[cfg(test)]

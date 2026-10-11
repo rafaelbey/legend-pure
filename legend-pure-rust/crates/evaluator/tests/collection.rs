@@ -41,6 +41,7 @@ const MAP_ZERO_ONE: &str = "map_T_$0_1$__Function_1__V_$0_1$_";
 const SLICE: &str = "slice_T_MANY__Integer_1__Integer_1__T_MANY_";
 const FIND: &str = "find_T_MANY__Function_1__T_$0_1$_";
 const AT: &str = "at_T_MANY__Integer_1__T_1_";
+const EXISTS: &str = "exists_T_MANY__Function_1__Boolean_1_";
 const TIMES: &str = "times_Number_MANY__Number_1_";
 const EQ: &str = "eq_Any_1__Any_1__Boolean_1_";
 const PLUS: &str = "plus_Number_MANY__Number_1_";
@@ -412,4 +413,12 @@ fn at_indexes_from_zero_and_reports_java_text_past_the_end() {
         run_err(&at(ints(&[1, 2]), 2)),
         "The system is trying to get an element at offset 2 where the collection is of size 2"
     );
+}
+
+#[test]
+fn exists_is_true_when_any_element_matches() {
+    let exists = |items: &[i64], n: i64| run(&expr::call(EXISTS, vec![ints(items), is_lambda(n)]));
+    assert_eq!(exists(&[1, 2, 3], 2), Value::Boolean(true));
+    assert_eq!(exists(&[1, 3], 2), Value::Boolean(false));
+    assert_eq!(exists(&[], 2), Value::Boolean(false));
 }
