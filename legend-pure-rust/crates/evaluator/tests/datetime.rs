@@ -19,6 +19,7 @@
 
 use legend_pure_evaluator::builders::{ModelBuilder, expr};
 use legend_pure_evaluator::date::{PureDate, TimePrecision};
+use legend_pure_evaluator::error::{PureException, PureExceptionKind, PureRuntimeError};
 use legend_pure_evaluator::eval::Evaluator;
 use legend_pure_evaluator::native::NativeRegistry;
 use legend_pure_evaluator::value::Value;
@@ -29,6 +30,64 @@ use legend_pure_metamodel::types::{DateValue, ValueSpec};
 const ADJUST: &str = "adjust_Date_1__Integer_1__DurationUnit_1__Date_1_";
 const DATE_DIFF: &str = "dateDiff_Date_1__Date_1__DurationUnit_1__Integer_1_";
 const DATE_PART: &str = "datePart_Date_1__Date_1_";
+const DAY_OF_MONTH: &str = "dayOfMonth_Date_1__Integer_1_";
+
+/// `%y` — a year-only date.
+fn year_only(year: i16) -> ValueSpec {
+    expr::date(DateValue::StrictDate {
+        year,
+        month: None,
+        day: None,
+    })
+}
+
+/// `%y-m` — a year-month date.
+fn year_month(year: i16, month: i8) -> ValueSpec {
+    expr::date(DateValue::StrictDate {
+        year,
+        month: Some(month),
+        day: None,
+    })
+}
+
+/// `%2015-04-15T17:09:21.398` cut at `digits` time components: 1 is
+/// `T17`, 2 `T17:09`, 3 `T17:09:21`, 4 `T17:09:21.398`.
+fn extract_fixture(digits: u8) -> ValueSpec {
+    expr::date(DateValue::DateTime {
+        year: 2015,
+        month: 4,
+        day: 15,
+        hour: 17,
+        minute: if digits >= 2 { 9 } else { 0 },
+        second: if digits >= 3 { 21 } else { 0 },
+        subsecond_nanos: if digits >= 4 { 398_000_000 } else { 0 },
+        subsecond_digits: if digits >= 4 { 3 } else { 0 },
+        has_minutes: digits >= 2,
+        has_seconds: digits >= 3,
+        tz_offset_minutes: None,
+    })
+}
+
+/// The fixtures of `essential/date/extract/*.pure`, coarsest first:
+/// `%2015-04`, `%2015-04-15`, `T17`, `T17:09`, `T17:09:21`, `T17:09:21.398`.
+fn extract_ladder() -> Vec<ValueSpec> {
+    let mut ladder = vec![year_month(2015, 4), strict(2015, 4, 15)];
+    ladder.extend((1..=4).map(extract_fixture));
+    ladder
+}
+
+/// Apply a one-argument date native to `date`.
+#[allow(clippy::result_large_err)]
+fn apply(eval: &mut Evaluator<'_>, key: &str, date: ValueSpec) -> Result<Value, PureException> {
+    eval.eval(&expr::call(key, vec![date]))
+}
+
+fn evaluation_error(err: &PureException) -> Option<&str> {
+    match &err.kind {
+        PureExceptionKind::ExecutionError(PureRuntimeError::EvaluationError(m)) => Some(m),
+        _ => None,
+    }
+}
 
 /// The platform's `meta::pure::functions::date::DurationUnit` (`_structures.pure`).
 fn duration_unit_model() -> (PureModel, ElementId) {
@@ -241,5 +300,25 @@ fn date_part_drops_the_time_and_keeps_partial_dates() {
     assert_eq!(
         eval.eval(&part(year_month)).unwrap(),
         Value::Date(PureDate::year_month(1973, 11).unwrap())
+    );
+}
+
+#[test]
+fn day_of_month_reads_the_day_or_fails_with_the_java_message() {
+    let model = ModelBuilder::new().finish();
+    let registry = NativeRegistry::standard();
+    let mut eval = Evaluator::new(&model, &registry);
+    // testDayOfMonth: every fixture from day precision down.
+    for date in extract_ladder().into_iter().skip(1) {
+        assert_eq!(
+            apply(&mut eval, DAY_OF_MONTH, date).unwrap(),
+            Value::Integer(15)
+        );
+    }
+    // testDayOfMonthError
+    let err = apply(&mut eval, DAY_OF_MONTH, year_only(2017)).unwrap_err();
+    assert_eq!(
+        evaluation_error(&err),
+        Some("Cannot get day of month for 2017")
     );
 }

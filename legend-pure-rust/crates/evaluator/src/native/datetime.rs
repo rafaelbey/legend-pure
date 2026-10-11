@@ -100,6 +100,34 @@ fn duration_unit(v: &Value) -> Result<DurationUnit, PureRuntimeError> {
     }
 }
 
+/// Pure `dayOfMonth(Date[1]): Integer[1]`.
+///
+/// Throws `"Cannot get day of month for <date>"` (mirroring
+/// `legend-pure-runtime-java-engine-interpreted/.../DayOfMonth.java`)
+/// when the date has no day component (year-only, year-month).
+/// `testDayOfMonthError` pins the exact text.
+#[derive(Debug)]
+pub struct DayOfMonth;
+
+impl NativeFunction for DayOfMonth {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("dayOfMonth", &values, 1)?;
+        let d = values[0].as_date()?;
+        match d.get_day() {
+            Some(day) => Ok(Evaluated::new(Value::Integer(i64::from(day)))),
+            None => Err(PureRuntimeError::EvaluationError(format!(
+                "Cannot get day of month for {d}"
+            ))
+            .into()),
+        }
+    }
+}
+
 /// Pure `datePart(Date[1]): Date[1]` — drop the time component.
 ///
 /// Per the platform comment on `datePart` (`essential/date/extract/
@@ -731,6 +759,8 @@ impl NativeFunction for DateConstruct {
 
 /// Register the fished date and time natives under their platform keys.
 pub fn register(registry: &mut NativeRegistry) {
+    registry.register("dayOfMonth_Date_1__Integer_1_", DayOfMonth);
+
     registry.register("datePart_Date_1__Date_1_", DatePart);
     registry.register(
         "dateDiff_Date_1__Date_1__DurationUnit_1__Integer_1_",
