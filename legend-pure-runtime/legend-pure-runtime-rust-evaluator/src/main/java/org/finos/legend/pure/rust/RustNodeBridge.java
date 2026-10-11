@@ -358,6 +358,11 @@ final class RustNodeBridge
         return this.host.newStrictTime(StrictTimeFunctions.parsePureStrictTime(text.toString()));
     }
 
+    CoreInstance newMap(CoreInstance[] keys, CoreInstance[] values)
+    {
+        return this.host.newMap(keys, values);
+    }
+
     CoreInstance element(String userPath)
     {
         return _Package.getByUserPath(userPath, this.processorSupport);

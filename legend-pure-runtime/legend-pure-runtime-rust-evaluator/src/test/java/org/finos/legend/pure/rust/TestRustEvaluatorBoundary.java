@@ -20,6 +20,7 @@ import org.eclipse.collections.api.list.MutableList;
 import org.finos.legend.pure.m3.PlatformCodeRepositoryProvider;
 import org.finos.legend.pure.m3.exception.PureAssertFailException;
 import org.finos.legend.pure.m3.execution.test.TestCollection;
+import org.finos.legend.pure.m3.navigation.M3Paths;
 import org.finos.legend.pure.m3.navigation.M3Properties;
 import org.finos.legend.pure.m3.navigation.PrimitiveUtilities;
 import org.finos.legend.pure.m3.navigation.ProcessorSupport;
@@ -33,6 +34,7 @@ import org.finos.legend.pure.m4.coreinstance.primitive.StringCoreInstance;
 import org.finos.legend.pure.m4.coreinstance.primitive.date.DateFunctions;
 import org.finos.legend.pure.m4.exception.PureException;
 import org.finos.legend.pure.rust.pct.RustPlatformGraph;
+import org.finos.legend.pure.runtime.java.interpreted.natives.MapCoreInstance;
 import org.junit.AfterClass;
 import org.junit.Assert;
 import org.junit.BeforeClass;
@@ -198,6 +200,34 @@ public class TestRustEvaluatorBoundary
         Assert.assertNotEquals(first.getName(), second.getName());
         ((RustCoreInstance) first).close();
         ((RustCoreInstance) second).close();
+    }
+
+    /**
+     * A map built in Rust comes back as the interpreted engine's own
+     * {@link MapCoreInstance}, its entries materialised like any value, so
+     * the engine's equality and lookups apply. A Java map handed to a Rust
+     * map native does not cross as a map: the native refuses it, typed.
+     */
+    @Test
+    public void aRustMapComesBackAsTheEnginesMapAndAJavaMapDoesNotCrossIn()
+    {
+        String pair = "meta::pure::functions::collection::Pair";
+        CoreInstance one = evaluator.create(pair, new String[]{"first", "second"}, new CoreInstance[][]{{repository.newStringCoreInstance("a")}, {repository.newIntegerCoreInstance(1L)}});
+        CoreInstance two = evaluator.create(pair, new String[]{"first", "second"}, new CoreInstance[][]{{repository.newStringCoreInstance("b")}, {repository.newIntegerCoreInstance(2L)}});
+        CoreInstance result = values(evaluator.start(node("meta::pure::functions::collection::newMap_Pair_MANY__Map_1_"), Lists.mutable.with(wrapAll(one, two)))).get(0);
+        ((RustCoreInstance) one).close();
+        ((RustCoreInstance) two).close();
+        Assert.assertTrue(result.getClass().getName(), result instanceof MapCoreInstance);
+        MapCoreInstance map = (MapCoreInstance) result;
+        Assert.assertEquals(2, map.getMap().size());
+        Assert.assertEquals("2", map.getMap().get(repository.newStringCoreInstance("b")).getName());
+        Assert.assertSame(node(M3Paths.Map), map.getClassifier());
+
+        PureRustEvaluationException e = Assert.assertThrows(PureRustEvaluationException.class,
+                () -> evaluator.start(node("meta::pure::functions::collection::keys_Map_1__U_MANY_"), Lists.mutable.with(wrap(map))));
+        Assert.assertEquals(e.getMessage(), PureRustEvaluationException.Kind.EXECUTION_ERROR, e.getKind());
+        Assert.assertTrue(e.getMessage(), e.getMessage().contains("expected Map"));
+        Assert.assertEquals(0L, evaluator.liveHandleCount());
     }
 
     @Test

@@ -29,11 +29,11 @@ use legend_pure_evaluator::date::{DatePrecision, TimePrecision};
 use legend_pure_evaluator::error::PureException;
 use legend_pure_evaluator::heap::{HeapEntry, RuntimeHeap};
 use legend_pure_evaluator::model_utils::build_element_path;
-use legend_pure_evaluator::value::Value;
+use legend_pure_evaluator::value::{MapState, Value, ValueKey};
 use legend_pure_metamodel::ids::ElementId;
 
-use crate::bridge::{BridgeShared, JniHandleTable};
-use crate::failure::{ffi_error, jni_failure, unsupported};
+use crate::bridge::{BridgeShared, CORE_INSTANCE_CLASS, JniHandleTable};
+use crate::failure::{ffi_error, in_local_frame, jni_failure, unsupported};
 use crate::java_node::JavaNode;
 
 /// Call one of the bridge's materialising methods (`newInteger`,
@@ -67,6 +67,88 @@ fn element_path(shared: &BridgeShared, id: ElementId) -> String {
     // SAFETY: values are materialised inside an entry point of the
     // context that owns `shared`, never while it grows its model.
     build_element_path(unsafe { shared.model() }, id, "::", false)
+}
+
+/// A map key as the value it was made from. A key built from an object's
+/// `<<equality.Key>>` fields no longer holds the object, so it cannot
+/// cross.
+fn key_value(key: &ValueKey) -> Result<Value, PureException> {
+    Ok(match key {
+        ValueKey::Boolean(b) => Value::Boolean(*b),
+        ValueKey::Integer(i) => Value::Integer(*i),
+        ValueKey::Decimal(d) => Value::Decimal(*d),
+        ValueKey::String(s) => Value::String(s.clone()),
+        ValueKey::Date(d) => Value::Date(*d),
+        ValueKey::StrictTime(t) => Value::StrictTime(*t),
+        ValueKey::Object(handle) => Value::Object(handle.clone()),
+        ValueKey::EnumValue { enum_id, member } => Value::EnumValue {
+            enum_id: *enum_id,
+            member: member.clone(),
+        },
+        ValueKey::ObjectByEqualityKeys { .. } => {
+            return Err(unsupported(
+                "a Map keyed by objects with equality keys across the boundary (the key holds their key fields, not the objects)",
+            ));
+        }
+    })
+}
+
+/// A map crosses as the host engine's own map (`RustEngineHost.newMap`)
+/// over its entries, each key and value materialised like any other
+/// value; one value per key, as `Map<U,V>` holds.
+fn map_to_java<'l>(
+    env: &mut JNIEnv<'l>,
+    shared: &Rc<BridgeShared>,
+    map: &std::cell::RefCell<MapState>,
+) -> Result<JObject<'l>, PureException> {
+    let entries: Vec<(Value, Value)> = map
+        .borrow()
+        .entries
+        .iter()
+        .map(|(k, v)| Ok((key_value(k)?, v.clone())))
+        .collect::<Result<_, PureException>>()?;
+    let len =
+        i32::try_from(entries.len()).map_err(|_| unsupported("a Map of more than 2^31 entries"))?;
+    let keys = env
+        .new_object_array(len, CORE_INSTANCE_CLASS, JObject::null())
+        .map_err(|e| jni_failure(env, shared, "newMap", &e))?;
+    let values = env
+        .new_object_array(len, CORE_INSTANCE_CLASS, JObject::null())
+        .map_err(|e| jni_failure(env, shared, "newMap", &e))?;
+    for (i, (key, value)) in entries.iter().enumerate() {
+        let index = i32::try_from(i).unwrap_or(i32::MAX);
+        in_local_frame(env, shared, 8, |env| {
+            let key = leaf_to_java(env, shared, single(key)?)?;
+            env.set_object_array_element(&keys, index, &key)
+                .map_err(|e| jni_failure(env, shared, "newMap", &e))?;
+            let value = leaf_to_java(env, shared, single(value)?)?;
+            env.set_object_array_element(&values, index, &value)
+                .map_err(|e| jni_failure(env, shared, "newMap", &e))
+        })?;
+    }
+    call_object(
+        env,
+        shared,
+        shared.methods.new_map,
+        "newMap",
+        &[
+            JValue::Object(&keys).as_jni(),
+            JValue::Object(&values).as_jni(),
+        ],
+    )
+}
+
+/// The one value a map key or map value holds.
+fn single(value: &Value) -> Result<&Value, PureException> {
+    let mut found = Vec::new();
+    leaves(value, &mut found);
+    match found.as_slice() {
+        [one] => Ok(one),
+        _ => Err(unsupported(format!(
+            "a Map entry holding {} values across the boundary",
+            found.len()
+        ))),
+    }
 }
 
 /// The values `value` stands for once collections are flattened and
@@ -278,7 +360,7 @@ pub fn leaf_to_java<'l>(
             }
         }
         Value::Function(_) => return Err(unsupported("a function value across the boundary")),
-        Value::Map(_) => return Err(unsupported("a Map value across the boundary")),
+        Value::Map(map) => map_to_java(env, shared, map)?,
         Value::UnitInstance { .. } => {
             return Err(unsupported("a unit instance across the boundary"));
         }

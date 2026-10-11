@@ -24,7 +24,6 @@ import org.finos.legend.pure.rust.PureRustEvaluator;
 import org.finos.legend.pure.rust.PureRustException;
 import org.finos.legend.pure.runtime.java.compiled.execution.CompiledExecutionSupport;
 import org.finos.legend.pure.runtime.java.compiled.extension.EvalRustExecutor;
-import org.finos.legend.pure.runtime.java.compiled.generation.processors.support.coreinstance.ValCoreInstance;
 
 import java.util.IdentityHashMap;
 import java.util.Map;
@@ -65,7 +64,7 @@ public final class CompiledEvalRust implements EvalRustExecutor
         MutableList<Object> values = Lists.mutable.ofInitialCapacity(results.length);
         for (CoreInstance result : results)
         {
-            values.add((result instanceof ValCoreInstance) ? ((ValCoreInstance<?>) result).getValue() : result);
+            values.add(CompiledValue.unwrap(result));
         }
         return values;
     }

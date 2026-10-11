@@ -127,6 +127,7 @@ pub struct BridgeMethods {
     pub enum_value: JMethodID,
     pub node: JMethodID,
     pub rust_object: JMethodID,
+    pub new_map: JMethodID,
     pub failure_of: JMethodID,
 }
 
@@ -194,6 +195,7 @@ impl BridgeMethods {
                 "rustObject",
                 format!("(JLjava/lang/String;){ci}"),
             )?,
+            new_map: env.get_method_id(&cls, "newMap", format!("([{ci}[{ci}){ci}"))?,
             failure_of: env.get_method_id(
                 &cls,
                 "failureOf",

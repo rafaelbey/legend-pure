@@ -22,30 +22,6 @@
       "expectedError": "Execution error at (resource:/platform/pure/essential/collection/iteration/fold.pure lines:78c71-83c1), \"Unexpected error executing function with params [testAdapterForRustExecution_Function_1__X_o_]\""
     },
     {
-      "test": "meta::pure::functions::collection::tests::put::testPut_addsEntry_Function_1__Boolean_1_",
-      "expectedError": "Execution error at (resource:<ffi> line:0 column:0), \"Unsupported: a Map value across the boundary\""
-    },
-    {
-      "test": "meta::pure::functions::collection::tests::put::testPut_emptyMap_Function_1__Boolean_1_",
-      "expectedError": "Execution error at (resource:<ffi> line:0 column:0), \"Unsupported: a Map value across the boundary\""
-    },
-    {
-      "test": "meta::pure::functions::collection::tests::put::testPut_overridesEntry_Function_1__Boolean_1_",
-      "expectedError": "Execution error at (resource:<ffi> line:0 column:0), \"Unsupported: a Map value across the boundary\""
-    },
-    {
-      "test": "meta::pure::functions::collection::tests::putAll::testPutAll_emptyInputMap_Function_1__Boolean_1_",
-      "expectedError": "Execution error at (resource:<ffi> line:0 column:0), \"Unsupported: a Map value across the boundary\""
-    },
-    {
-      "test": "meta::pure::functions::collection::tests::putAll::testPutAll_emptyPutEntries_Function_1__Boolean_1_",
-      "expectedError": "Execution error at (resource:<ffi> line:0 column:0), \"Unsupported: a Map value across the boundary\""
-    },
-    {
-      "test": "meta::pure::functions::collection::tests::putAll::testPutAll_overridesExistingAndAddNew_Function_1__Boolean_1_",
-      "expectedError": "Execution error at (resource:<ffi> line:0 column:0), \"Unsupported: a Map value across the boundary\""
-    },
-    {
       "test": "meta::pure::functions::collection::tests::slice::testSliceInList_Function_1__Boolean_1_",
       "expectedError": "Execution error at (resource:/platform/pure/essential/collection/slice/slice.pure lines:46c72-49c1), \"Unexpected error executing function with params [testAdapterForRustExecution_Function_1__X_o_]\""
     },

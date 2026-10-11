@@ -62,4 +62,15 @@ public interface RustEngineHost
     CoreInstance newLatestDate();
 
     CoreInstance newStrictTime(PureStrictTime time);
+
+    /**
+     * The engine's own map over entries the Rust side materialised, each key
+     * and value as this host represents it. The Rust map carries no type
+     * arguments, so the map's generic type is {@code Map} with none.
+     *
+     * @param keys   the keys, parallel to {@code values}
+     * @param values one value per key
+     * @return the map as a graph value of this engine
+     */
+    CoreInstance newMap(CoreInstance[] keys, CoreInstance[] values);
 }
