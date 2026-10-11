@@ -544,6 +544,44 @@ impl NativeFunction for Find {
     }
 }
 
+/// Pure `at(Any[*], Integer[1]): Any[1]` — element at index.
+///
+/// Pure uses 0-based indexing.
+#[derive(Debug)]
+pub struct At;
+
+impl NativeFunction for At {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("at", &values, 2)?;
+        let coll = values[0].to_collection();
+        let idx = values[1].as_integer()?;
+        if idx < 0 {
+            return Err(PureRuntimeError::EvaluationError(format!(
+                "at: index cannot be negative, got {idx}"
+            ))
+            .into());
+        }
+        #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+        let idx = idx as usize;
+        coll.get(idx).cloned().map(Evaluated::new).ok_or_else(|| {
+            // Java-parity message: assertError tests in the platform
+            // (testSimpleAssertError* in essential/tests/assertError.pure)
+            // pin this exact phrasing via String equality on the error
+            // text. Anything else fails the assertion silently.
+            PureRuntimeError::EvaluationError(format!(
+                "The system is trying to get an element at offset {idx} where the collection is of size {}",
+                coll.len()
+            ))
+            .into()
+        })
+    }
+}
+
 /// Register the fished collection natives.
 pub fn register(registry: &mut NativeRegistry) {
     registry.register("fold_T_MANY__Function_1__V_m__V_m_", Fold);
@@ -566,6 +604,7 @@ pub fn register(registry: &mut NativeRegistry) {
     registry.register("map_T_$0_1$__Function_1__V_$0_1$_", Map);
     registry.register("slice_T_MANY__Integer_1__Integer_1__T_MANY_", Slice);
     registry.register("find_T_MANY__Function_1__T_$0_1$_", Find);
+    registry.register("at_T_MANY__Integer_1__T_1_", At);
 }
 
 #[cfg(test)]
@@ -870,5 +909,61 @@ mod tests {
     #[test]
     fn find_wrong_arg_count() {
         assert!(Find.execute(&[int_spec(&[1])], &mut MockCtx).is_err());
+    }
+
+    #[test]
+    fn at_valid_index() {
+        assert_eq!(
+            At.execute(&[int_spec(&[10, 20, 30]), lit_int(1)], &mut MockCtx)
+                .unwrap()
+                .into_value(),
+            Value::Integer(20)
+        );
+    }
+
+    #[test]
+    fn at_out_of_bounds() {
+        assert!(
+            At.execute(&[int_spec(&[10, 20]), lit_int(5)], &mut MockCtx)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn type_mismatch_errors() {
+        assert!(
+            At.execute(&[int_spec(&[1, 2]), lit_str("1")], &mut MockCtx)
+                .is_err()
+        );
+        assert!(
+            Range
+                .execute(&[lit_str("1"), lit_int(5), lit_int(1)], &mut MockCtx)
+                .is_err()
+        );
+        assert!(
+            Take.execute(&[int_spec(&[1, 2]), lit_str("1")], &mut MockCtx)
+                .is_err()
+        );
+        assert!(
+            Drop.execute(&[int_spec(&[1, 2]), lit_str("1")], &mut MockCtx)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn wrong_arg_count_errors() {
+        assert!(Size.execute(&[], &mut MockCtx).is_err());
+        assert!(At.execute(&[int_spec(&[1])], &mut MockCtx).is_err());
+        // Range now accepts 1, 2, or 3 args (Phase 3) — only 0 or >3 errors.
+        assert!(Range.execute(&[], &mut MockCtx).is_err());
+        assert!(
+            Range
+                .execute(
+                    &[lit_int(1), lit_int(2), lit_int(3), lit_int(4)],
+                    &mut MockCtx,
+                )
+                .is_err()
+        );
+        assert!(Take.execute(&[int_spec(&[1])], &mut MockCtx).is_err());
     }
 }

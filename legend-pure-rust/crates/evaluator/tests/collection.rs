@@ -40,6 +40,7 @@ const MAP_MANY: &str = "map_T_MANY__Function_1__V_MANY_";
 const MAP_ZERO_ONE: &str = "map_T_$0_1$__Function_1__V_$0_1$_";
 const SLICE: &str = "slice_T_MANY__Integer_1__Integer_1__T_MANY_";
 const FIND: &str = "find_T_MANY__Function_1__T_$0_1$_";
+const AT: &str = "at_T_MANY__Integer_1__T_1_";
 const TIMES: &str = "times_Number_MANY__Number_1_";
 const EQ: &str = "eq_Any_1__Any_1__Boolean_1_";
 const PLUS: &str = "plus_Number_MANY__Number_1_";
@@ -387,5 +388,28 @@ fn find_returns_the_first_match_or_nothing() {
     assert_eq!(
         run(&expr::call(FIND, vec![ints(&[]), is_lambda(2)])),
         Value::Unit
+    );
+}
+
+#[test]
+fn at_indexes_from_zero_and_reports_java_text_past_the_end() {
+    let at = |items: ValueSpec, i: i64| expr::call(AT, vec![items, expr::int(i)]);
+    assert_eq!(
+        run(&at(strings(&["a", "b", "c"]), 1)),
+        Value::String("b".into())
+    );
+    // A single item is a collection of one.
+    assert_eq!(run(&at(expr::string("a"), 0)), Value::String("a".into()));
+    // at over a map result, as testAtOtherScenario does.
+    assert_eq!(
+        run(&at(
+            expr::call(MAP_M, vec![ints(&[2, 3]), square_lambda()]),
+            1
+        )),
+        Value::Integer(9)
+    );
+    assert_eq!(
+        run_err(&at(ints(&[1, 2]), 2)),
+        "The system is trying to get an element at offset 2 where the collection is of size 2"
     );
 }
