@@ -906,6 +906,33 @@ fn object_equality_key(
     Ok(ValueKey::ObjectByEqualityKeys { class_id, fields })
 }
 
+/// Inverse of [`value_to_key`] — recover a [`Value`] shape from a stored
+/// key so `keys()` can emit the collection.
+fn key_to_value(k: &ValueKey) -> Value {
+    match k {
+        ValueKey::Boolean(b) => Value::Boolean(*b),
+        ValueKey::Integer(i) => Value::Integer(*i),
+        ValueKey::Decimal(d) => Value::Decimal(*d),
+        ValueKey::String(s) => Value::String(s.clone()),
+        ValueKey::Date(d) => Value::Date(*d),
+        ValueKey::StrictTime(t) => Value::StrictTime(*t),
+        ValueKey::Object(id) => Value::Object(id.clone()),
+        ValueKey::ObjectByEqualityKeys { .. } => {
+            // No reified heap instance corresponds uniquely to a
+            // value-keyed entry; callers that need the original object
+            // (e.g. `keys()` for introspection) see a placeholder. This
+            // matches the Java runtime's "keyed by fields, not instance"
+            // semantic — the original instance isn't recoverable from a
+            // stored key.
+            Value::Unit
+        }
+        ValueKey::EnumValue { enum_id, member } => Value::EnumValue {
+            enum_id: *enum_id,
+            member: member.clone(),
+        },
+    }
+}
+
 /// Wrap a freshly-built [`MapState`] in the `Rc<RefCell<…>>` cell that
 /// `Value::Map` carries. Keeps the construction site for new map
 /// identities centralised — every `put` / `putAll` / `replaceAll` / etc.
@@ -983,6 +1010,32 @@ impl NativeFunction for Put {
         let mut updated = m.borrow().entries.clone();
         updated.insert(key, values[2].clone());
         Ok(Evaluated::new(Value::Map(new_map_cell(updated, 0))))
+    }
+}
+
+/// Pure `keys<U,V>(m:Map<U,V>[1]):U[*]`
+///
+/// Returns the map's keys as a collection. Ordering follows the
+/// underlying HAMT's iteration order — deterministic per run, but not
+/// insertion-ordered. Platform tests assert set-equality (`assertEquals`
+/// with a single key or sorted sets), not a specific order.
+#[derive(Debug)]
+pub struct Keys;
+
+impl NativeFunction for Keys {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("keys", &values, 1)?;
+        let Value::Map(m) = &values[0] else {
+            return Err(PureRuntimeError::type_mismatch("Map", &values[0]).into());
+        };
+        let state = m.borrow();
+        let items: Vec<Value> = state.entries.keys().map(key_to_value).collect();
+        Ok(Evaluated::new(Value::from_vec(items)))
     }
 }
 
@@ -1187,6 +1240,7 @@ pub fn register(registry: &mut NativeRegistry) {
     registry.register("add_T_MANY__Integer_1__T_1__T_$1_MANY$_", Add);
     registry.register("reverse_T_m__T_m_", Reverse);
     registry.register("get_Map_1__U_1__V_$0_1$_", Get);
+    registry.register("keys_Map_1__U_MANY_", Keys);
 }
 
 #[cfg(test)]
