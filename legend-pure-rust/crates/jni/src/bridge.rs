@@ -125,6 +125,7 @@ pub struct BridgeMethods {
     pub enum_value: JMethodID,
     pub node: JMethodID,
     pub rust_object: JMethodID,
+    pub failure_of: JMethodID,
 }
 
 /// Java class names the crate talks to.
@@ -190,6 +191,11 @@ impl BridgeMethods {
                 &cls,
                 "rustObject",
                 format!("(JLjava/lang/String;){ci}"),
+            )?,
+            failure_of: env.get_method_id(
+                &cls,
+                "failureOf",
+                "(Ljava/lang/Throwable;)[Ljava/lang/String;",
             )?,
         })
     }

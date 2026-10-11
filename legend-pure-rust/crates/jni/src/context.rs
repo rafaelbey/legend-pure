@@ -27,6 +27,7 @@ use legend_pure_metamodel::model::PureModel;
 use smol_str::SmolStr;
 
 use crate::bridge::{BridgeShared, JniHandleTable};
+use crate::failure::ffi_error;
 use crate::java_node::JavaNode;
 
 /// Classifier of a `.par` native-function node.
@@ -34,14 +35,6 @@ const NATIVE_FUNCTION: &str = "meta::pure::metamodel::function::NativeFunction";
 
 /// Classifier of a Java lambda.
 const LAMBDA_FUNCTION: &str = legend_pure_evaluator::m3_paths::LAMBDA_FUNCTION;
-
-fn ffi_error(message: String) -> PureException {
-    PureException::execution(
-        PureRuntimeError::EvaluationError(message),
-        legend_pure_metamodel::source_info::SourceInfo::new("<ffi>", 0, 0, 0, 0),
-        Vec::new(),
-    )
-}
 
 /// Where the last `start` on this thread spent its time: the lowering
 /// (Phase A and B, including every JNI read it made) and the run.
@@ -136,7 +129,7 @@ impl JniContext {
                 Some((_, _, user_path)) => Err(PureException::from(
                     PureRuntimeError::FunctionNotFound(user_path),
                 )),
-                None => Err(ffi_error("start: the function is not a graph node".into())),
+                None => Err(ffi_error("start: the function is not a graph node")),
             },
             other => Err(ffi_error(format!(
                 "start: expected a function node, got {other:?}"

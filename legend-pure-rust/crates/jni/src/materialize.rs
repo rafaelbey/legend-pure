@@ -26,36 +26,20 @@ use jni::JNIEnv;
 use jni::objects::{JObject, JValue};
 use jni::signature::ReturnType;
 use legend_pure_evaluator::date::{DatePrecision, TimePrecision};
-use legend_pure_evaluator::error::{PureException, PureRuntimeError};
+use legend_pure_evaluator::error::PureException;
 use legend_pure_evaluator::heap::{HeapEntry, RuntimeHeap};
 use legend_pure_evaluator::model_utils::build_element_path;
 use legend_pure_evaluator::value::Value;
 use legend_pure_metamodel::ids::ElementId;
 
 use crate::bridge::{BridgeShared, JniHandleTable};
+use crate::failure::{ffi_error, jni_failure, unsupported};
 use crate::java_node::JavaNode;
 
-fn ffi_error(message: String) -> PureException {
-    PureException::execution(
-        PureRuntimeError::EvaluationError(message),
-        legend_pure_metamodel::source_info::SourceInfo::new("<ffi>", 0, 0, 0, 0),
-        Vec::new(),
-    )
-}
-
-fn unsupported(what: &str) -> PureException {
-    PureException::execution(
-        PureRuntimeError::Unsupported(what.to_string()),
-        legend_pure_metamodel::source_info::SourceInfo::new("<ffi>", 0, 0, 0, 0),
-        Vec::new(),
-    )
-}
-
-fn jni_err(env: &mut JNIEnv, what: &str, e: jni::errors::Error) -> PureException {
-    let _ = env.exception_clear();
-    ffi_error(format!("{what}: {e}"))
-}
-
+/// Call one of the bridge's materialising methods (`newInteger`,
+/// `element`, …), each returning a `CoreInstance`. Every caller in this
+/// module passes a method id from [`BridgeMethods`](crate::bridge::BridgeMethods)
+/// with the argument list that method was resolved with.
 fn call_object<'l>(
     env: &mut JNIEnv<'l>,
     shared: &BridgeShared,
@@ -63,6 +47,10 @@ fn call_object<'l>(
     what: &str,
     args: &[jni::sys::jvalue],
 ) -> Result<JObject<'l>, PureException> {
+    // SAFETY: `method` is a bridge method returning an object and `args`
+    // follow its parameter list (the callers below pair each id with the
+    // signature `BridgeMethods::resolve` looked it up with); the bridge
+    // global reference is an instance of the bridge's class.
     let result = unsafe {
         env.call_method_unchecked(shared.bridge.as_obj(), method, ReturnType::Object, args)
     };
@@ -71,7 +59,7 @@ fn call_object<'l>(
         Ok(_) => Err(ffi_error(format!(
             "{what}: the Java graph has no such node"
         ))),
-        Err(e) => Err(jni_err(env, what, e)),
+        Err(e) => Err(jni_failure(env, shared, what, &e)),
     }
 }
 
@@ -79,26 +67,36 @@ fn element_path(shared: &BridgeShared, id: ElementId) -> String {
     build_element_path(shared.model(), id, "::", false)
 }
 
-/// Append the Java objects standing for `value` to `out`.
+/// The values `value` stands for once collections are flattened and
+/// `Unit` dropped, in order: one Java object each.
+pub fn leaves<'v>(value: &'v Value, out: &mut Vec<&'v Value>) {
+    match value {
+        Value::Unit => {}
+        Value::Collection(items) => {
+            for item in items.iter() {
+                leaves(item, out);
+            }
+        }
+        other => out.push(other),
+    }
+}
+
+/// The Java object standing for one value that is neither a collection
+/// nor `Unit` (see [`leaves`]).
 ///
 /// # Errors
 /// Value kinds that cannot cross yet, elements missing from the Java graph,
 /// JNI failures.
 #[allow(clippy::too_many_lines)]
-pub fn value_to_java<'l>(
+pub fn leaf_to_java<'l>(
     env: &mut JNIEnv<'l>,
     shared: &Rc<BridgeShared>,
     value: &Value,
-    out: &mut Vec<JObject<'l>>,
-) -> Result<(), PureException> {
+) -> Result<JObject<'l>, PureException> {
     let m = &shared.methods;
     let obj = match value {
-        Value::Unit => return Ok(()),
-        Value::Collection(items) => {
-            for item in items.iter() {
-                value_to_java(env, shared, item, out)?;
-            }
-            return Ok(());
+        Value::Unit | Value::Collection(_) => {
+            return Err(ffi_error("a collection is flattened before it crosses"));
         }
         Value::Boolean(b) => call_object(
             env,
@@ -120,7 +118,7 @@ pub fn value_to_java<'l>(
             }
             let text = env
                 .new_string(f.to_string())
-                .map_err(|e| jni_err(env, "newFloat", e))?;
+                .map_err(|e| jni_failure(env, shared, "newFloat", &e))?;
             call_object(
                 env,
                 shared,
@@ -132,7 +130,7 @@ pub fn value_to_java<'l>(
         Value::Decimal(d) => {
             let text = env
                 .new_string(d.to_string())
-                .map_err(|e| jni_err(env, "newDecimal", e))?;
+                .map_err(|e| jni_failure(env, shared, "newDecimal", &e))?;
             call_object(
                 env,
                 shared,
@@ -144,7 +142,7 @@ pub fn value_to_java<'l>(
         Value::String(s) => {
             let text = env
                 .new_string(s.as_str())
-                .map_err(|e| jni_err(env, "newString", e))?;
+                .map_err(|e| jni_failure(env, shared, "newString", &e))?;
             call_object(
                 env,
                 shared,
@@ -170,7 +168,7 @@ pub fn value_to_java<'l>(
             };
             let sub = env
                 .new_string(subsecond)
-                .map_err(|e| jni_err(env, "newDate", e))?;
+                .map_err(|e| jni_failure(env, shared, "newDate", &e))?;
             call_object(
                 env,
                 shared,
@@ -198,7 +196,7 @@ pub fn value_to_java<'l>(
             };
             let sub = env
                 .new_string(subsecond)
-                .map_err(|e| jni_err(env, "newStrictTime", e))?;
+                .map_err(|e| jni_failure(env, shared, "newStrictTime", &e))?;
             call_object(
                 env,
                 shared,
@@ -216,7 +214,7 @@ pub fn value_to_java<'l>(
         Value::Element(id) => {
             let path = env
                 .new_string(element_path(shared, *id))
-                .map_err(|e| jni_err(env, "element", e))?;
+                .map_err(|e| jni_failure(env, shared, "element", &e))?;
             call_object(
                 env,
                 shared,
@@ -228,10 +226,10 @@ pub fn value_to_java<'l>(
         Value::EnumValue { enum_id, member } => {
             let path = env
                 .new_string(element_path(shared, *enum_id))
-                .map_err(|e| jni_err(env, "enumValue", e))?;
+                .map_err(|e| jni_failure(env, shared, "enumValue", &e))?;
             let name = env
                 .new_string(member.as_str())
-                .map_err(|e| jni_err(env, "enumValue", e))?;
+                .map_err(|e| jni_failure(env, shared, "enumValue", &e))?;
             call_object(
                 env,
                 shared,
@@ -253,7 +251,7 @@ pub fn value_to_java<'l>(
             } else if let Some(eid) = RuntimeHeap::element_for_object(handle) {
                 let path = env
                     .new_string(element_path(shared, eid))
-                    .map_err(|e| jni_err(env, "element", e))?;
+                    .map_err(|e| jni_failure(env, shared, "element", &e))?;
                 call_object(
                     env,
                     shared,
@@ -267,7 +265,7 @@ pub fn value_to_java<'l>(
                 let id = JniHandleTable::to_i64(key);
                 let path = env
                     .new_string(classifier.as_str())
-                    .map_err(|e| jni_err(env, "rustObject", e))?;
+                    .map_err(|e| jni_failure(env, shared, "rustObject", &e))?;
                 call_object(
                     env,
                     shared,
@@ -283,6 +281,5 @@ pub fn value_to_java<'l>(
             return Err(unsupported("a unit instance across the boundary"));
         }
     };
-    out.push(obj);
-    Ok(())
+    Ok(obj)
 }

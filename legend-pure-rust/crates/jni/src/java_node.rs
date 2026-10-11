@@ -38,6 +38,7 @@ use legend_pure_metamodel::source_info::SourceInfo;
 use smol_str::SmolStr;
 
 use crate::bridge::{BridgeShared, JniHandleTable};
+use crate::failure::{ffi_error, in_local_frame, jni_failure, unsupported};
 
 /// Kind tags of a `NodeDescription`, mirrored from the Java constants.
 pub mod kind {
@@ -122,16 +123,12 @@ fn string_field(
 /// Decode a Java `NodeDescription`.
 ///
 /// # Errors
-/// Any JNI failure.
+/// Any JNI failure; the caller clears the pending Java exception.
 pub fn read_description(env: &mut JNIEnv, obj: &JObject) -> jni::errors::Result<Description> {
     let int =
         |env: &mut JNIEnv, n: &str| -> jni::errors::Result<i32> { env.get_field(obj, n, "I")?.i() };
-    let int_or_zero = |env: &mut JNIEnv, n: &str| -> u32 {
-        env.get_field(obj, n, "I")
-            .and_then(|v| v.i())
-            .ok()
-            .and_then(|v| u32::try_from(v).ok())
-            .unwrap_or(0)
+    let unsigned = |env: &mut JNIEnv, n: &str| -> jni::errors::Result<u32> {
+        Ok(u32::try_from(env.get_field(obj, n, "I")?.i()?).unwrap_or(0))
     };
     let kind = int(env, "kind")?;
     let id = env.get_field(obj, "id", "J")?.j()?;
@@ -151,17 +148,18 @@ pub fn read_description(env: &mut JNIEnv, obj: &JObject) -> jni::errors::Result<
             keys.push(SmolStr::new(s));
         }
     }
-    let source = string_field(env, obj, "sourceId")?.map(|source_id| {
+    let source = match string_field(env, obj, "sourceId")? {
         // Java's anchor (`line`/`column`) is the span's start on this
         // side; the evaluator and `assertError` both read the anchor.
-        SourceInfo::new(
+        Some(source_id) => Some(SourceInfo::new(
             source_id,
-            int_or_zero(env, "line"),
-            int_or_zero(env, "column"),
-            int_or_zero(env, "endLine"),
-            int_or_zero(env, "endColumn"),
-        )
-    });
+            unsigned(env, "line")?,
+            unsigned(env, "column")?,
+            unsigned(env, "endLine")?,
+            unsigned(env, "endColumn")?,
+        )),
+        None => None,
+    };
     Ok(Description {
         kind,
         id,
@@ -180,22 +178,6 @@ pub fn read_description(env: &mut JNIEnv, obj: &JObject) -> jni::errors::Result<
         keys,
         source,
     })
-}
-
-fn ffi_error(message: String) -> PureException {
-    PureException::execution(
-        PureRuntimeError::EvaluationError(message),
-        legend_pure_metamodel::source_info::SourceInfo::new("<ffi>", 0, 0, 0, 0),
-        Vec::new(),
-    )
-}
-
-fn unsupported(what: &str) -> PureException {
-    PureException::execution(
-        PureRuntimeError::Unsupported(what.to_string()),
-        legend_pure_metamodel::source_info::SourceInfo::new("<ffi>", 0, 0, 0, 0),
-        Vec::new(),
-    )
 }
 
 #[allow(clippy::cast_possible_truncation)]
@@ -241,7 +223,7 @@ pub fn description_to_value(
         kind::LATEST_DATE => Ok(Value::Latest),
         kind::DATE => {
             let (year, month, day) = (
-                i16::try_from(d.year).map_err(|_| ffi_error("year out of range".into()))?,
+                i16::try_from(d.year).map_err(|_| ffi_error("year out of range"))?,
                 small(d.month),
                 small(d.day),
             );
@@ -397,56 +379,69 @@ impl JavaNode {
         self.cache.borrow_mut().clear();
     }
 
-    fn fetch(&self, name: &str) -> Result<PVector<Value>, String> {
+    fn fetch(&self, name: &str) -> Result<PVector<Value>, PureException> {
         self.call_descriptions(self.shared.methods.property_values, name)
             .map(|values| values.unwrap_or_default())
     }
 
     /// Call a bridge method `(long id, String name) -> NodeDescription[]`
-    /// and decode the result; a Java `null` is `None`.
+    /// and decode the result; a Java `null` is `None`. Every local
+    /// reference the call creates lives in a frame of its own.
     fn call_descriptions(
         &self,
         method: jni::objects::JMethodID,
         name: &str,
-    ) -> Result<Option<PVector<Value>>, String> {
+    ) -> Result<Option<PVector<Value>>, PureException> {
         self.shared.jni_reads.set(self.shared.jni_reads.get() + 1);
         let mut guard = self
             .shared
             .vm
             .attach_current_thread()
-            .map_err(|e| format!("attach: {e}"))?;
+            .map_err(|e| ffi_error(format!("attach: {e}")))?;
         let env: &mut JNIEnv = &mut guard;
-        let jname = env.new_string(name).map_err(|e| e.to_string())?;
-        let result = unsafe {
-            env.call_method_unchecked(
-                self.shared.bridge.as_obj(),
-                method,
-                ReturnType::Array,
-                &[
-                    JValue::Long(self.id).as_jni(),
-                    JValue::Object(&jname).as_jni(),
-                ],
-            )
-        };
-        let arr = match result.and_then(|v| v.l()) {
-            Ok(obj) if obj.is_null() => return Ok(None),
-            Ok(obj) => JObjectArray::from(obj),
-            Err(e) => {
-                let _ = env.exception_clear();
-                return Err(format!("reading `{name}` on Java node {}: {e}", self.id));
+        let shared = &self.shared;
+        in_local_frame(env, shared, 16, |env| {
+            let what = format!("reading `{name}` on Java node {}", self.id);
+            let jname = env
+                .new_string(name)
+                .map_err(|e| jni_failure(env, shared, &what, &e))?;
+            // SAFETY: `method` is one of the bridge's `(JLjava/lang/String;)
+            // [Lorg/finos/legend/pure/rust/NodeDescription;` methods resolved
+            // on its class, the bridge global reference is an instance of that
+            // class, and the arguments are a `long` and a `String`.
+            let result = unsafe {
+                env.call_method_unchecked(
+                    shared.bridge.as_obj(),
+                    method,
+                    ReturnType::Array,
+                    &[
+                        JValue::Long(self.id).as_jni(),
+                        JValue::Object(&jname).as_jni(),
+                    ],
+                )
+            };
+            let arr = match result.and_then(|v| v.l()) {
+                Ok(obj) if obj.is_null() => return Ok(None),
+                Ok(obj) => JObjectArray::from(obj),
+                Err(e) => return Err(jni_failure(env, shared, &what, &e)),
+            };
+            let len = env
+                .get_array_length(&arr)
+                .map_err(|e| jni_failure(env, shared, &what, &e))?;
+            let mut values = PVector::new();
+            for i in 0..len {
+                let value = in_local_frame(env, shared, 8, |env| {
+                    let obj = env
+                        .get_object_array_element(&arr, i)
+                        .map_err(|e| jni_failure(env, shared, &what, &e))?;
+                    let d = read_description(env, &obj)
+                        .map_err(|e| jni_failure(env, shared, &what, &e))?;
+                    description_to_value(shared, d)
+                })?;
+                values.push_back(value);
             }
-        };
-        let len = env.get_array_length(&arr).map_err(|e| e.to_string())?;
-        let mut values = PVector::new();
-        for i in 0..len {
-            let obj = env
-                .get_object_array_element(&arr, i)
-                .map_err(|e| e.to_string())?;
-            let d = read_description(env, &obj).map_err(|e| e.to_string())?;
-            let v = description_to_value(&self.shared, d).map_err(|e| e.to_string())?;
-            values.push_back(v);
-        }
-        Ok(Some(values))
+            Ok(Some(values))
+        })
     }
 }
 
@@ -473,8 +468,8 @@ impl TypedObject for JavaNode {
                     .insert(SmolStr::new(name), values.clone());
                 values
             }
-            Err(message) => {
-                self.shared.note_error(message);
+            Err(failure) => {
+                self.shared.note_error(failure.to_string());
                 PVector::new()
             }
         }
@@ -504,8 +499,8 @@ impl TypedObject for JavaNode {
     fn captured_values(&self, name: &str) -> Option<PVector<Value>> {
         match self.call_descriptions(self.shared.methods.captured_value, name) {
             Ok(values) => values,
-            Err(message) => {
-                self.shared.note_error(message);
+            Err(failure) => {
+                self.shared.note_error(failure.to_string());
                 None
             }
         }

@@ -404,6 +404,20 @@ public class TestRustEvaluatorBoundary
         Assert.assertEquals(0L, evaluator.liveHandleCount());
     }
 
+    /**
+     * A Java exception raised while the bridge serves the Rust side is
+     * taken and cleared before any other JNI call, arrives as a typed
+     * failure carrying its text, and leaves the evaluator usable.
+     */
+    @Test
+    public void aJavaFailureInsideTheBridgeArrivesTypedAndLeavesTheEvaluatorUsable()
+    {
+        PureRustEvaluationException e = Assert.assertThrows(PureRustEvaluationException.class, () -> evaluator.crossingKind(null));
+        Assert.assertEquals(PureRustEvaluationException.Kind.EXECUTION_ERROR, e.getKind());
+        Assert.assertTrue(e.getMessage(), e.getMessage().startsWith("ExecutionError: describe: java.lang.NullPointerException"));
+        Assert.assertEquals("42", roundTrip(repository.newIntegerCoreInstance(42L)).getName());
+    }
+
     @Test
     public void closedEvaluatorRefusesCalls()
     {

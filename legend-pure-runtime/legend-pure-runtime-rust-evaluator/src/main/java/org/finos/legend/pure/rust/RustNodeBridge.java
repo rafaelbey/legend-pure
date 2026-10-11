@@ -374,6 +374,21 @@ final class RustNodeBridge
         return this.nodes.get((int) id);
     }
 
+    /**
+     * A Java failure raised while serving the Rust side, as {@code {kind, text}}:
+     * a {@link PureRustEvaluationException} keeps its kind and info, anything
+     * else is an execution error described by its {@code toString()}.
+     */
+    String[] failureOf(Throwable failure)
+    {
+        if (failure instanceof PureRustEvaluationException)
+        {
+            PureRustEvaluationException e = (PureRustEvaluationException) failure;
+            return new String[]{e.getKind().name(), e.getInfo()};
+        }
+        return new String[]{PureRustEvaluationException.Kind.EXECUTION_ERROR.name(), String.valueOf(failure)};
+    }
+
     CoreInstance rustObject(long handle, String classifierPath)
     {
         RustCoreInstance proxy = this.proxies.get(handle);
