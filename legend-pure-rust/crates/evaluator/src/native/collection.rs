@@ -1057,6 +1057,47 @@ impl NativeFunction for IsEmpty {
     }
 }
 
+/// Pure `add<T|m>(T[m], T[1]): T[$1_MANY$]`
+/// Pure `add<T|m>(T[m], Integer[1], T[1]): T[$1_MANY$]`
+///
+/// 2-arg form appends to the end; 3-arg form inserts at the given index
+/// (0-based, clamped to `[0, len]`). Scalar inputs are promoted; empty
+/// inputs yield a singleton.
+#[derive(Debug)]
+pub struct Add;
+
+impl NativeFunction for Add {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        match values.len() {
+            2 => {
+                let mut coll = values[0].to_collection();
+                coll.push_back(values[1].clone());
+                let as_vec: Vec<Value> = coll.into_iter().collect();
+                Ok(Evaluated::new(Value::from_vec(as_vec)))
+            }
+            3 => {
+                let mut coll = values[0].to_collection();
+                let raw_index = values[1].as_integer()?;
+                let len = i64::try_from(coll.len()).unwrap_or(i64::MAX);
+                let index = raw_index.clamp(0, len);
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                coll.insert(index as usize, values[2].clone());
+                let as_vec: Vec<Value> = coll.into_iter().collect();
+                Ok(Evaluated::new(Value::from_vec(as_vec)))
+            }
+            n => Err(PureRuntimeError::EvaluationError(format!(
+                "add: expected 2 or 3 argument(s), got {n}"
+            ))
+            .into()),
+        }
+    }
+}
+
 /// Register the fished collection natives.
 pub fn register(registry: &mut NativeRegistry) {
     registry.register("fold_T_MANY__Function_1__V_m__V_m_", Fold);
@@ -1094,6 +1135,8 @@ pub fn register(registry: &mut NativeRegistry) {
     registry.register("putAll_Map_1__Pair_MANY__Map_1_", PutAll);
     registry.register("putAll_Map_1__Map_1__Map_1_", PutAll);
     registry.register("isEmpty_Any_MANY__Boolean_1_", IsEmpty);
+    registry.register("add_T_MANY__T_1__T_$1_MANY$_", Add);
+    registry.register("add_T_MANY__Integer_1__T_1__T_$1_MANY$_", Add);
 }
 
 #[cfg(test)]
@@ -1568,5 +1611,40 @@ mod tests {
                 .into_value(),
             int_collection(&[1, 2, 3, 4])
         );
+    }
+
+    #[test]
+    fn add_appends_to_collection() {
+        assert_eq!(
+            Add.execute(&[int_spec(&[1, 2]), lit_int(3)], &mut MockCtx)
+                .unwrap()
+                .into_value(),
+            int_collection(&[1, 2, 3])
+        );
+    }
+
+    #[test]
+    fn add_to_empty_yields_singleton() {
+        assert_eq!(
+            Add.execute(&[lit_collection(vec![]), lit_int(1)], &mut MockCtx)
+                .unwrap()
+                .into_value(),
+            Value::Integer(1)
+        );
+    }
+
+    #[test]
+    fn add_to_scalar_promotes_to_collection() {
+        assert_eq!(
+            Add.execute(&[lit_int(1), lit_int(2)], &mut MockCtx)
+                .unwrap()
+                .into_value(),
+            int_collection(&[1, 2])
+        );
+    }
+
+    #[test]
+    fn add_wrong_arg_count() {
+        assert!(Add.execute(&[lit_int(1)], &mut MockCtx).is_err());
     }
 }

@@ -59,6 +59,8 @@ const PUT: &str = "put_Map_1__U_1__V_1__Map_1_";
 const PUT_ALL_PAIRS: &str = "putAll_Map_1__Pair_MANY__Map_1_";
 const PUT_ALL_MAP: &str = "putAll_Map_1__Map_1__Map_1_";
 const IS_EMPTY: &str = "isEmpty_Any_MANY__Boolean_1_";
+const ADD: &str = "add_T_MANY__T_1__T_$1_MANY$_";
+const ADD_AT: &str = "add_T_MANY__Integer_1__T_1__T_$1_MANY$_";
 const TIMES: &str = "times_Number_MANY__Number_1_";
 const EQ: &str = "eq_Any_1__Any_1__Boolean_1_";
 const PLUS: &str = "plus_Number_MANY__Number_1_";
@@ -711,5 +713,42 @@ fn is_empty_is_true_only_for_no_elements() {
     assert_eq!(
         is_empty(expr::call(FILTER, vec![ints(&[1, 3]), is_lambda(2)])),
         Value::Boolean(true)
+    );
+}
+
+#[test]
+fn add_appends_or_inserts_at_an_offset() {
+    let set = || strings(&["a", "b"]);
+    let as_strings = |v: &Value| -> Vec<String> {
+        v.to_collection()
+            .iter()
+            .map(|s| s.as_string().expect("a String").to_string())
+            .collect()
+    };
+    assert_eq!(
+        as_strings(&run(&expr::call(ADD, vec![set(), expr::string("c")]))),
+        ["a", "b", "c"]
+    );
+    assert_eq!(
+        as_strings(&run(&expr::call(
+            ADD_AT,
+            vec![set(), expr::int(1), expr::string("c")]
+        ))),
+        ["a", "c", "b"]
+    );
+    // testFoldCollectionAccumulator: [1, 2, 3, 4]->fold({x, y | $y->add($x)}, [-1, 0]).
+    let append = expr::lambda(
+        vec![
+            param("x", named(INTEGER_ID), Multiplicity::PureOne),
+            param("y", named(INTEGER_ID), Multiplicity::ZeroOrMany),
+        ],
+        vec![expr::call(ADD, vec![expr::var("y"), expr::var("x")])],
+    );
+    assert_eq!(
+        as_ints(&run(&expr::call(
+            FOLD,
+            vec![ints(&[1, 2, 3, 4]), append, ints(&[-1, 0])]
+        ))),
+        [-1, 0, 1, 2, 3, 4]
     );
 }
