@@ -199,6 +199,23 @@ fn scale_arg(v: &Value) -> Result<u32, PureException> {
     }
 }
 
+/// Pure `toFloat(Number[1]):Float[1]` — numeric → Float coercion.
+#[derive(Debug)]
+pub struct ToFloat;
+
+impl NativeFunction for ToFloat {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("toFloat", &values, 1)?;
+        let x = number_to_f64("toFloat", &values[0])?;
+        Ok(Evaluated::new(Value::Float(x)))
+    }
+}
+
 /// Pure `toDecimal(Number[1]):Decimal[1]` — numeric → Decimal coercion.
 ///
 /// `Decimal` inputs pass through unchanged. `Integer` is exact via
@@ -250,6 +267,7 @@ pub fn register(registry: &mut NativeRegistry) {
     registry.register("round_Float_1__Integer_1__Float_1_", Round);
 
     // numeric conversion
+    registry.register("toFloat_Number_1__Float_1_", ToFloat);
     registry.register("toDecimal_Number_1__Decimal_1_", ToDecimal);
 }
 
@@ -259,6 +277,12 @@ mod tests {
     use std::str::FromStr;
 
     use crate::native::{MockCtx, lit_bool, lit_decimal, lit_float, lit_int, lit_str};
+
+    // Small helper — abs-difference comparison for floats. Avoids pulling in
+    // `approx` or hand-rolling tolerances throughout the test body.
+    fn approx_eq(a: f64, b: f64) -> bool {
+        (a - b).abs() < 1e-10
+    }
 
     /// Decimal-literal shim — mirrors the `ld` helper in arithmetic.rs.
     fn ld(d: Decimal) -> legend_pure_metamodel::types::ValueSpec {
@@ -386,6 +410,39 @@ mod tests {
     #[test]
     fn round_type_mismatch() {
         assert!(Round.execute(&[lit_str("x")], &mut MockCtx).is_err());
+    }
+
+    #[test]
+    fn to_float_from_integer() {
+        let r = ToFloat.execute(&[lit_int(7)], &mut MockCtx).unwrap();
+        assert_eq!(r.into_value(), Value::Float(7.0));
+    }
+
+    #[test]
+    fn to_float_from_float() {
+        let r = ToFloat.execute(&[lit_float(2.5)], &mut MockCtx).unwrap();
+        assert_eq!(r.into_value(), Value::Float(2.5));
+    }
+
+    #[test]
+    #[allow(clippy::approx_constant)] // 3.14 is the test decimal value, not π
+    fn to_float_from_decimal() {
+        let d = Decimal::from_str("3.14").unwrap();
+        let r = ToFloat.execute(&[ld(d)], &mut MockCtx).unwrap();
+        match r.into_value() {
+            Value::Float(f) => assert!(approx_eq(f, 3.14)),
+            other => panic!("expected Float, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn to_float_wrong_arg_count() {
+        assert!(ToFloat.execute(&[], &mut MockCtx).is_err());
+    }
+
+    #[test]
+    fn to_float_type_mismatch() {
+        assert!(ToFloat.execute(&[lit_str("x")], &mut MockCtx).is_err());
     }
 
     #[test]

@@ -64,6 +64,7 @@ const FISHED: &[&str] = &[
     "round_Number_1__Integer_1_",
     "round_Decimal_1__Integer_1__Decimal_1_",
     "round_Float_1__Integer_1__Float_1_",
+    "toFloat_Number_1__Float_1_",
     "toDecimal_Number_1__Decimal_1_",
     // testing
     "assert_Boolean_1__Function_1__Boolean_1_",
