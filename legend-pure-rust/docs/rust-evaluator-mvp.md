@@ -625,8 +625,17 @@ engine and 614 µs through `Rust_JNI`, of which the evaluator's run of the
 lowered closure is under 1 µs (p90 2 µs, max 15 µs), the lowering 229 µs,
 and the rest, about 300 µs, the crossing itself (describe, materialise,
 cache clearing, the JNI entry). So the evaluator is not the cost; the
-per-call re-lowering and the crossing are, and the list below is the menu,
-roughly in order of payoff per line:
+per-call re-lowering and the crossing are. The apples-to-apples pair
+(`crates/evaluator/examples/expressions.rs` and the module's
+`BenchmarkNativeExpressions`, the same twelve expressions built on each
+side, no JNI, 2026-10-11) puts the evaluator itself between the two Java
+engines: 10 to 20 times faster than the interpreted engine's entry, 2 to
+13 times slower than the compiled engine's generated method, the gap
+widest where lambdas are applied per element (`filter` over a hundred
+integers: 37 µs against 2.8 µs, about 350 ns per lambda application).
+The lambda application path is therefore the evaluator's own hot spot.
+The list below is the bridge's menu, roughly in order of payoff per
+line:
 
 - *Columnar description*: `describe` / `propertyValues` return one `long[]`
   (kind, id, classifier id, date components) plus a `String[]` of the
