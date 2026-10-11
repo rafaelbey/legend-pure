@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Arithmetic natives fished so far: `plus`, `minus` and `times`.
+//! Arithmetic natives fished so far: `plus`, `minus`, `times` and `rem`.
 //!
-//! Both are **eager** — the native forces every argument up front via
+//! All are **eager** — the native forces every argument up front via
 //! `ctx.evaluate`. Helpers return `PureRuntimeError`; `?` on each call
 //! promotes that into the `PureException` the trait requires.
-//! `divide`, `abs`, `mod` and `rem` stay on the archive until a test asks.
+//! `divide`, `abs` and `mod` stay on the archive until a test asks.
 
 use legend_pure_metamodel::types::ValueSpec;
 use rust_decimal::Decimal;
@@ -252,6 +252,64 @@ fn times_fold(values: Vec<Value>) -> Result<Value, PureRuntimeError> {
     iter.try_fold(first, |acc, next| times_pair(&acc, &next))
 }
 
+/// Pure `rem(Number[1], Number[1]): Number[1]` — remainder (preserves sign of dividend).
+///
+/// Promotes via `promote_pair` so mixed-type calls like `rem(7.5, 2)`
+/// or `rem(7d, 2)` work without the caller having to coerce. Empty
+/// remainder for `Decimal` uses `Decimal::checked_rem` which returns
+/// `None` only on division-by-zero (already trapped above).
+#[derive(Debug)]
+pub struct Rem;
+
+impl NativeFunction for Rem {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("rem", &values, 2)?;
+        let promoted = promote_pair(&values[0], &values[1]).ok_or_else(|| {
+            PureRuntimeError::EvaluationError(format!(
+                "rem: unsupported types {} and {}",
+                values[0].type_name(),
+                values[1].type_name()
+            ))
+        })?;
+        // Java Pure's `Rem.execute` throws "Cannot divide <dividend> by zero"
+        // (Rem.java:?), parametric on the dividend's display value. Build the
+        // dividend representation once before promotion-loss can change its
+        // shape, then reuse for any zero-divisor branch.
+        let dividend_str = crate::native::math::java_number_string(&values[0]);
+        let div_zero_err = || -> PureException {
+            PureRuntimeError::EvaluationError(format!("Cannot divide {dividend_str} by zero"))
+                .into()
+        };
+        let v = match promoted {
+            (Value::Integer(a), Value::Integer(b)) => {
+                if b == 0 {
+                    return Err(div_zero_err());
+                }
+                Value::Integer(a % b)
+            }
+            (Value::Float(a), Value::Float(b)) => {
+                if b == 0.0 {
+                    return Err(div_zero_err());
+                }
+                Value::Float(a % b)
+            }
+            (Value::Decimal(a), Value::Decimal(b)) => {
+                if b.is_zero() {
+                    return Err(div_zero_err());
+                }
+                Value::Decimal(a % b)
+            }
+            _ => unreachable!("promote_pair returns matched types"),
+        };
+        Ok(Evaluated::new(v))
+    }
+}
+
 /// Register the fished arithmetic natives under every signature the
 /// platform declares for them (one implementation each).
 pub fn register(registry: &mut NativeRegistry) {
@@ -269,6 +327,8 @@ pub fn register(registry: &mut NativeRegistry) {
     registry.register("times_Float_MANY__Float_1_", Times);
     registry.register("times_Decimal_MANY__Decimal_1_", Times);
     registry.register("times_Number_MANY__Number_1_", Times);
+
+    registry.register("rem_Number_1__Number_1__Number_1_", Rem);
 }
 
 #[cfg(test)]
@@ -451,5 +511,27 @@ mod tests {
         assert_eq!(r, dec("4"));
         let r = plus_pair(&dec("2.5"), &Value::Float(1.5)).unwrap();
         assert_eq!(r, dec("4"));
+    }
+
+    #[test]
+    fn rem_negative_dividend() {
+        // Rust remainder: -7 % 3 = -1 (preserves sign)
+        assert_eq!(
+            Rem.execute(&[lit_int(-7), lit_int(3)], &mut MockCtx)
+                .unwrap()
+                .into_value(),
+            Value::Integer(-1)
+        );
+    }
+
+    #[test]
+    fn rem_handles_mixed_types() {
+        // Previously errored with "rem: both arguments must be the same
+        // numeric type". Now promotes via promote_pair.
+        let r = Rem
+            .execute(&[lit_float(7.5), lit_int(2)], &mut MockCtx)
+            .unwrap()
+            .into_value();
+        assert_eq!(r, Value::Float(1.5));
     }
 }

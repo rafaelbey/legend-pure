@@ -33,6 +33,7 @@ const FISHED: &[&str] = &[
     "times_Float_MANY__Float_1_",
     "times_Decimal_MANY__Decimal_1_",
     "times_Number_MANY__Number_1_",
+    "rem_Number_1__Number_1__Number_1_",
     // boolean
     "and_Boolean_1__Boolean_1__Boolean_1_",
     "or_Boolean_1__Boolean_1__Boolean_1_",

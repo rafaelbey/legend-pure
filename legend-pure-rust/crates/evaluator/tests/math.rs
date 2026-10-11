@@ -20,6 +20,7 @@
 use std::str::FromStr;
 
 use legend_pure_evaluator::builders::{ModelBuilder, expr};
+use legend_pure_evaluator::error::{PureException, PureExceptionKind, PureRuntimeError};
 use legend_pure_evaluator::eval::Evaluator;
 use legend_pure_evaluator::native::NativeRegistry;
 use legend_pure_evaluator::value::Value;
@@ -30,6 +31,7 @@ const ROUND: &str = "round_Number_1__Integer_1_";
 const ROUND_DECIMAL: &str = "round_Decimal_1__Integer_1__Decimal_1_";
 const ROUND_FLOAT: &str = "round_Float_1__Integer_1__Float_1_";
 const LESS_THAN: &str = "lessThan_Number_1__Number_1__Boolean_1_";
+const REM: &str = "rem_Number_1__Number_1__Number_1_";
 
 /// Evaluate one call node against the bootstrap model with every fished native.
 fn run(call: &ValueSpec) -> Value {
@@ -37,6 +39,23 @@ fn run(call: &ValueSpec) -> Value {
     let registry = NativeRegistry::standard();
     let mut eval = Evaluator::new(&model, &registry);
     eval.eval(call).unwrap()
+}
+
+/// Evaluate one call node that must fail.
+fn run_err(call: &ValueSpec) -> PureException {
+    let model = ModelBuilder::new().finish();
+    let registry = NativeRegistry::standard();
+    let mut eval = Evaluator::new(&model, &registry);
+    eval.eval(call).unwrap_err()
+}
+
+/// The text of an `EvaluationError` — what Pure's `assertError` compares
+/// against once the failure crosses the boundary.
+fn evaluation_error(call: &ValueSpec) -> String {
+    match run_err(call).kind {
+        PureExceptionKind::ExecutionError(PureRuntimeError::EvaluationError(m)) => m,
+        other => panic!("expected an EvaluationError, got {other:?}"),
+    }
 }
 
 fn dec(s: &str) -> Decimal {
@@ -101,5 +120,25 @@ fn less_than_orders_numbers_and_strings_through_the_evaluator() {
     assert_eq!(
         lt(expr::string("a"), expr::string("b")),
         Value::Boolean(true)
+    );
+}
+
+#[test]
+#[allow(clippy::approx_constant)] // 3.14 is testRemWithDecimals' dividend, not π
+fn rem_keeps_the_dividend_sign_and_reports_java_s_zero_divisor_text() {
+    let rem = |a: ValueSpec, b: ValueSpec| run(&expr::call(REM, vec![a, b]));
+    // testRem / testRemWithNegativeIntegers / testRemWithMixedIntegersAndFloats
+    assert_eq!(rem(expr::int(7), expr::int(3)), Value::Integer(1));
+    assert_eq!(rem(expr::int(-12), expr::int(5)), Value::Integer(-2));
+    assert_eq!(rem(expr::float(7.5), expr::int(5)), Value::Float(2.5));
+    // testRemWithDecimals: `rem(3.14, 1.5d)` promotes the Float to Decimal.
+    assert_eq!(
+        rem(expr::float(3.14), expr::decimal(dec("1.5"))),
+        Value::Decimal(dec("0.14"))
+    );
+    // testRemError pins Java's text verbatim.
+    assert_eq!(
+        evaluation_error(&expr::call(REM, vec![expr::int(5), expr::int(0)])),
+        "Cannot divide 5 by zero"
     );
 }
