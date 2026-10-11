@@ -393,6 +393,23 @@ impl NativeFunction for Tan {
     }
 }
 
+/// Pure `cot(Number[1]):Float[1]` — cotangent (`1 / tan(x)`) of `x` in radians.
+#[derive(Debug)]
+pub struct Cot;
+
+impl NativeFunction for Cot {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("cot", &values, 1)?;
+        let x = number_to_f64("cot", &values[0])?;
+        Ok(Evaluated::new(Value::Float(1.0 / x.tan())))
+    }
+}
+
 /// Pure `toFloat(Number[1]):Float[1]` — numeric → Float coercion.
 #[derive(Debug)]
 pub struct ToFloat;
@@ -531,6 +548,7 @@ pub fn register(registry: &mut NativeRegistry) {
     registry.register("sin_Number_1__Float_1_", Sin);
     registry.register("cos_Number_1__Float_1_", Cos);
     registry.register("tan_Number_1__Float_1_", Tan);
+    registry.register("cot_Number_1__Float_1_", Cot);
 
     // numeric conversion
     registry.register("toFloat_Number_1__Float_1_", ToFloat);
@@ -1000,6 +1018,37 @@ mod tests {
     #[test]
     fn tan_type_mismatch() {
         assert!(Tan.execute(&[lit_str("x")], &mut MockCtx).is_err());
+    }
+
+    #[test]
+    fn cot_pi_over_four() {
+        let r = Cot
+            .execute(&[lit_float(std::f64::consts::FRAC_PI_4)], &mut MockCtx)
+            .unwrap();
+        match r.into_value() {
+            Value::Float(f) => assert!(approx_eq(f, 1.0)),
+            other => panic!("expected Float, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn cot_zero_is_infinite() {
+        // 1 / tan(0) = 1 / 0 = +inf (IEEE-754).
+        let r = Cot.execute(&[lit_float(0.0)], &mut MockCtx).unwrap();
+        match r.into_value() {
+            Value::Float(f) => assert!(f.is_infinite()),
+            other => panic!("expected Float, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn cot_wrong_arg_count() {
+        assert!(Cot.execute(&[], &mut MockCtx).is_err());
+    }
+
+    #[test]
+    fn cot_type_mismatch() {
+        assert!(Cot.execute(&[lit_bool(true)], &mut MockCtx).is_err());
     }
 
     #[test]
