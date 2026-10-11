@@ -40,6 +40,7 @@ const HAS_DAY: &str = "hasDay_Date_1__Boolean_1_";
 const HAS_MONTH: &str = "hasMonth_Date_1__Boolean_1_";
 const HAS_HOUR: &str = "hasHour_Date_1__Boolean_1_";
 const HAS_MINUTE: &str = "hasMinute_Date_1__Boolean_1_";
+const HAS_SECOND: &str = "hasSecond_Date_1__Boolean_1_";
 
 /// `%y` — a year-only date.
 fn year_only(year: i16) -> ValueSpec {
@@ -450,4 +451,10 @@ fn has_hour_holds_from_hour_precision() {
 #[test]
 fn has_minute_holds_from_minute_precision() {
     assert_precision_predicate(HAS_MINUTE, 4);
+}
+
+/// testHasSecond: true from `%2015-04-15T17:09:21` down.
+#[test]
+fn has_second_holds_from_second_precision() {
+    assert_precision_predicate(HAS_SECOND, 5);
 }
