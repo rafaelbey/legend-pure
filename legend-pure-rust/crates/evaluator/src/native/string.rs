@@ -1566,28 +1566,17 @@ mod tests {
         );
     }
 
-    /// Build `Collection(Collection(... Integer(0) ...))` `depth`
-    /// levels deep.
-    fn deep_nested_collection(depth: usize) -> Value {
-        let mut v = Value::Integer(0);
-        for _ in 0..depth {
-            let mut inner = im_rc::Vector::new();
-            inner.push_back(v);
-            v = Value::Collection(Box::new(inner));
-        }
-        v
-    }
-
-    /// Locks the iterative `pure_to_string` contract: rendering a
-    /// 10 000-level-deep `Collection(...)` chain must not overflow
-    /// the Rust thread stack.
+    /// Rendering the widest shape Pure produces, a flat collection of ten
+    /// thousand integers (collection literals flatten, so a collection
+    /// never nests).
     #[test]
-    fn pure_to_string_deep_collection_no_overflow() {
-        let v = deep_nested_collection(10_000);
+    fn pure_to_string_renders_a_wide_collection() {
+        let items: im_rc::Vector<Value> = (0..10_000).map(Value::Integer).collect();
+        let v = Value::Collection(Box::new(items));
         let s = super::pure_to_string(&v, &mut MockCtx).expect("render must succeed");
-        assert_eq!(s.matches('[').count(), 10_000);
-        assert_eq!(s.matches(']').count(), 10_000);
-        assert!(s.contains('0'));
+        assert!(s.starts_with("[0, 1, 2,"));
+        assert!(s.ends_with("9999]"));
+        assert_eq!(s.matches(", ").count(), 9_999);
     }
 
     /// Sanity: shape produced for a small list matches `toString`

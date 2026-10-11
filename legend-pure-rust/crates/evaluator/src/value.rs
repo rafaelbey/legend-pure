@@ -55,7 +55,13 @@ pub struct MapState {
 }
 
 /// A runtime value produced by evaluating a Pure expression.
-#[derive(Debug)]
+///
+/// Cloning is structural: a collection shares its persistent vector, so
+/// the cost is constant whatever its size. Pure collections are flat (a
+/// collection literal flattens its elements), a unit instance wraps one
+/// scalar, so no value nests deeply enough for the derived clone or drop
+/// to recurse meaningfully.
+#[derive(Debug, Clone)]
 pub enum Value {
     /// Pure `Boolean` — stored inline.
     Boolean(bool),
@@ -664,126 +670,6 @@ impl Value {
     }
 }
 
-impl Clone for Value {
-    /// Iterative clone for `Value`, scaling with heap allocations
-    /// instead of Rust thread-stack frames.
-    fn clone(&self) -> Self {
-        deep_clone_iter(self)
-    }
-}
-
-/// Bottom-up iterative clone of an arbitrarily nested `Value`.
-#[allow(clippy::expect_used)]
-fn deep_clone_iter(root: &Value) -> Value {
-    enum Op<'a> {
-        Visit(&'a Value),
-        AssembleCollection(usize),
-        AssembleUnitInstance(ElementId),
-    }
-
-    let mut ops: Vec<Op<'_>> = vec![Op::Visit(root)];
-    let mut built: Vec<Value> = Vec::new();
-
-    while let Some(op) = ops.pop() {
-        match op {
-            Op::Visit(v) => match v {
-                Value::Collection(boxed) => {
-                    let pvec: &PVector<Value> = boxed;
-                    ops.push(Op::AssembleCollection(pvec.len()));
-                    for child in pvec.iter().rev() {
-                        ops.push(Op::Visit(child));
-                    }
-                }
-                Value::UnitInstance { unit_id, inner } => {
-                    ops.push(Op::AssembleUnitInstance(*unit_id));
-                    ops.push(Op::Visit(inner));
-                }
-                other => built.push(clone_leaf(other)),
-            },
-            Op::AssembleCollection(len) => {
-                let start = built.len() - len;
-                let items: PVector<Value> = built.drain(start..).collect();
-                built.push(Value::Collection(Box::new(items)));
-            }
-            Op::AssembleUnitInstance(unit_id) => {
-                let inner = built
-                    .pop()
-                    .expect("deep_clone_iter: AssembleUnitInstance reached with empty built stack");
-                built.push(Value::UnitInstance {
-                    unit_id,
-                    inner: Box::new(inner),
-                });
-            }
-        }
-    }
-
-    built
-        .pop()
-        .expect("deep_clone_iter: built stack empty after traversal")
-}
-
-/// Clone every non-recursive `Value` variant. Recursive variants
-/// (`Collection`, `UnitInstance`) are not handled here — they go
-/// through `deep_clone_iter`'s work-stack instead and never reach
-/// this function.
-fn clone_leaf(v: &Value) -> Value {
-    match v {
-        Value::Boolean(b) => Value::Boolean(*b),
-        Value::Integer(i) => Value::Integer(*i),
-        Value::Float(f) => Value::Float(*f),
-        Value::Decimal(d) => Value::Decimal(*d),
-        Value::String(s) => Value::String(s.clone()),
-        Value::Date(d) => Value::Date(*d),
-        Value::Latest => Value::Latest,
-        Value::StrictTime(t) => Value::StrictTime(*t),
-        Value::Object(h) => Value::Object(h.clone()),
-        Value::Map(m) => Value::Map(m.clone()),
-        Value::Function(fv) => Value::Function(fv.clone()),
-        Value::Element(e) => Value::Element(*e),
-        Value::EnumValue { enum_id, member } => Value::EnumValue {
-            enum_id: *enum_id,
-            member: member.clone(),
-        },
-        Value::Unit => Value::Unit,
-        Value::Collection(_) | Value::UnitInstance { .. } => {
-            unreachable!("deep_clone_iter must not delegate recursive variants to clone_leaf")
-        }
-    }
-}
-
-impl Drop for Value {
-    /// Iterative drop for `Value`, scaling with heap allocations instead
-    /// of Rust thread-stack frames.
-    fn drop(&mut self) {
-        let mut stack: Vec<Value> = Vec::new();
-        match self {
-            Value::Collection(boxed) => {
-                let pvec = std::mem::take(&mut **boxed);
-                stack.extend(pvec);
-            }
-            Value::UnitInstance { inner, .. } => {
-                let inner_val = std::mem::replace(&mut **inner, Value::Unit);
-                stack.push(inner_val);
-            }
-            _ => {}
-        }
-
-        while let Some(mut v) = stack.pop() {
-            match &mut v {
-                Value::Collection(boxed) => {
-                    let pvec = std::mem::take(&mut **boxed);
-                    stack.extend(pvec);
-                }
-                Value::UnitInstance { inner, .. } => {
-                    let inner_val = std::mem::replace(&mut **inner, Value::Unit);
-                    stack.push(inner_val);
-                }
-                _ => {}
-            }
-        }
-    }
-}
-
 impl fmt::Display for Value {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -1063,31 +949,49 @@ mod tests {
         assert!(!Value::Collection(Box::new(pv)).is_empty());
     }
 
-    /// Build `Collection(Collection(... Integer(0) ...))` `depth` levels
-    /// deep. Returns the outermost value.
-    fn deep_nested_collection(depth: usize) -> Value {
-        let mut v = Value::Integer(0);
-        for _ in 0..depth {
-            let mut inner = PVector::new();
-            inner.push_back(v);
-            v = Value::Collection(Box::new(inner));
-        }
-        v
+    /// A collection shares its vector when cloned: constant time whatever
+    /// the size.
+    #[test]
+    fn cloning_a_collection_shares_its_vector() {
+        let items: PVector<Value> = (0..10_000).map(Value::Integer).collect();
+        let original = Value::Collection(Box::new(items));
+        let copy = original.clone();
+        let (Value::Collection(a), Value::Collection(b)) = (&original, &copy) else {
+            unreachable!("both are collections");
+        };
+        assert!(a.ptr_eq(b), "a clone must share the vector, not copy it");
     }
 
-    /// Locks the iterative `Value::Drop` contract: constructing a 10 000-
-    /// level-deep `Collection(Collection(...))` chain and letting it go
-    /// out of scope must not overflow the thread stack.
+    /// The deepest shapes Pure can produce (a unit instance of a scalar,
+    /// a collection of unit instances, a map holding collections) clone
+    /// and drop on a small stack.
     #[test]
-    fn deep_nested_collection_drops_without_overflow() {
-        let v = deep_nested_collection(10_000);
-        drop(v);
-    }
-
-    #[test]
-    fn deep_nested_collection_clones_without_overflow() {
-        let v = deep_nested_collection(10_000);
-        let _ = v.clone();
-        drop(v);
+    fn the_shapes_pure_produces_clone_and_drop_on_a_small_stack() {
+        std::thread::Builder::new()
+            .stack_size(64 * 1024)
+            .spawn(|| {
+                let unit = ElementId::InstanceId {
+                    chunk_id: 1,
+                    local_idx: 0,
+                };
+                let instances: PVector<Value> = (0..10_000)
+                    .map(|i| Value::UnitInstance {
+                        unit_id: unit,
+                        inner: Box::new(Value::Integer(i)),
+                    })
+                    .collect();
+                let collection = Value::Collection(Box::new(instances));
+                let map = Value::Map(Rc::new(RefCell::new(MapState::default())));
+                let copies: Vec<Value> = (0..100)
+                    .map(|_| collection.clone())
+                    .chain(std::iter::once(map.clone()))
+                    .collect();
+                drop(copies);
+                drop(collection);
+                drop(map);
+            })
+            .expect("spawn")
+            .join()
+            .expect("no stack overflow");
     }
 }
