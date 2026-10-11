@@ -813,6 +813,27 @@ impl NativeFunction for Init {
     }
 }
 
+/// Pure `last(Any[*]): Any[0..1]` — last element or Unit.
+#[derive(Debug)]
+pub struct Last;
+
+impl NativeFunction for Last {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("last", &values, 1)?;
+        let result = match &values[0] {
+            Value::Collection(v) => v.back().cloned().unwrap_or(Value::Unit),
+            Value::Unit => Value::Unit,
+            other => other.clone(),
+        };
+        Ok(Evaluated::new(result))
+    }
+}
+
 /// Register the fished collection natives.
 pub fn register(registry: &mut NativeRegistry) {
     registry.register("fold_T_MANY__Function_1__V_m__V_m_", Fold);
@@ -845,6 +866,7 @@ pub fn register(registry: &mut NativeRegistry) {
     registry.register("concatenate_T_MANY__T_MANY__T_MANY_", Concatenate);
     registry.register("forAll_T_MANY__Function_1__Boolean_1_", ForAll);
     registry.register("init_T_MANY__T_MANY_", Init);
+    registry.register("last_T_MANY__T_$0_1$_", Last);
 }
 
 #[cfg(test)]
@@ -1276,6 +1298,16 @@ mod tests {
     #[test]
     fn to_one_multi_errors() {
         assert!(ToOne.execute(&[int_spec(&[1, 2])], &mut MockCtx).is_err());
+    }
+
+    #[test]
+    fn last_of_collection() {
+        assert_eq!(
+            Last.execute(&[int_spec(&[10, 20, 30])], &mut MockCtx)
+                .unwrap()
+                .into_value(),
+            Value::Integer(30)
+        );
     }
 
     #[test]

@@ -51,6 +51,7 @@ const NOT: &str = "not_Boolean_1__Boolean_1_";
 const CONCATENATE: &str = "concatenate_T_MANY__T_MANY__T_MANY_";
 const FOR_ALL: &str = "forAll_T_MANY__Function_1__Boolean_1_";
 const INIT: &str = "init_T_MANY__T_MANY_";
+const LAST: &str = "last_T_MANY__T_$0_1$_";
 const TIMES: &str = "times_Number_MANY__Number_1_";
 const EQ: &str = "eq_Any_1__Any_1__Boolean_1_";
 const PLUS: &str = "plus_Number_MANY__Number_1_";
@@ -565,4 +566,17 @@ fn init_drops_the_last_element() {
     assert_eq!(init(ints(&[1, 2])), [1]);
     assert_eq!(init(expr::int(1)), Vec::<i64>::new());
     assert_eq!(init(ints(&[])), Vec::<i64>::new());
+}
+
+#[test]
+fn last_returns_the_final_element_or_nothing() {
+    assert_eq!(
+        run(&expr::call(LAST, vec![strings(&["a", "b"])])),
+        Value::String("b".into())
+    );
+    assert_eq!(
+        run(&expr::call(LAST, vec![expr::int(7)])),
+        Value::Integer(7)
+    );
+    assert_eq!(run(&expr::call(LAST, vec![ints(&[])])), Value::Unit);
 }
