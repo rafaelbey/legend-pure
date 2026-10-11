@@ -199,6 +199,30 @@ fn scale_arg(v: &Value) -> Result<u32, PureException> {
     }
 }
 
+/// Pure `sign(Number[1]):Integer[1]` — returns -1, 0, or 1.
+#[derive(Debug)]
+pub struct Sign;
+
+impl NativeFunction for Sign {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("sign", &values, 1)?;
+        let x = number_to_f64("sign", &values[0])?;
+        let s = if x > 0.0 {
+            1
+        } else if x < 0.0 {
+            -1
+        } else {
+            0
+        };
+        Ok(Evaluated::new(Value::Integer(s)))
+    }
+}
+
 /// Pure `exp(Number[1]):Float[1]` — natural exponential, `e^x`.
 #[derive(Debug)]
 pub struct Exp;
@@ -390,6 +414,7 @@ pub fn register(registry: &mut NativeRegistry) {
     registry.register("round_Number_1__Integer_1_", Round);
     registry.register("round_Decimal_1__Integer_1__Decimal_1_", Round);
     registry.register("round_Float_1__Integer_1__Float_1_", Round);
+    registry.register("sign_Number_1__Integer_1_", Sign);
 
     // analytic
     registry.register("exp_Number_1__Float_1_", Exp);
@@ -549,6 +574,46 @@ mod tests {
     #[test]
     fn round_type_mismatch() {
         assert!(Round.execute(&[lit_str("x")], &mut MockCtx).is_err());
+    }
+
+    #[test]
+    fn sign_positive() {
+        assert_eq!(
+            Sign.execute(&[lit_int(7)], &mut MockCtx)
+                .unwrap()
+                .into_value(),
+            Value::Integer(1)
+        );
+    }
+
+    #[test]
+    fn sign_negative() {
+        assert_eq!(
+            Sign.execute(&[lit_float(-0.1)], &mut MockCtx)
+                .unwrap()
+                .into_value(),
+            Value::Integer(-1)
+        );
+    }
+
+    #[test]
+    fn sign_zero() {
+        assert_eq!(
+            Sign.execute(&[lit_int(0)], &mut MockCtx)
+                .unwrap()
+                .into_value(),
+            Value::Integer(0)
+        );
+    }
+
+    #[test]
+    fn sign_wrong_arg_count() {
+        assert!(Sign.execute(&[], &mut MockCtx).is_err());
+    }
+
+    #[test]
+    fn sign_type_mismatch() {
+        assert!(Sign.execute(&[lit_str("x")], &mut MockCtx).is_err());
     }
 
     #[test]
