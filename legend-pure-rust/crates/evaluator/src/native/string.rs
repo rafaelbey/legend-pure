@@ -986,6 +986,25 @@ impl NativeFunction for ToLower {
     }
 }
 
+/// Pure `toUpper(String[1]): String[1]`
+#[derive(Debug)]
+pub struct ToUpper;
+
+impl NativeFunction for ToUpper {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("toUpper", &values, 1)?;
+        let s = values[0].as_string()?;
+        Ok(Evaluated::new(Value::String(SmolStr::new(
+            s.to_uppercase(),
+        ))))
+    }
+}
+
 fn i64_arg(v: &Value, ctx: &str) -> Result<i64, PureException> {
     match v {
         Value::Integer(n) => Ok(*n),
@@ -1026,6 +1045,7 @@ pub fn register(registry: &mut NativeRegistry) {
     registry.register("replace_String_1__String_1__String_1__String_1_", Replace);
     registry.register("reverseString_String_1__String_1_", ReverseString);
     registry.register("toLower_String_1__String_1_", ToLower);
+    registry.register("toUpper_String_1__String_1_", ToUpper);
 }
 
 #[cfg(test)]
@@ -1316,6 +1336,20 @@ mod tests {
                 .into_value(),
             Value::String("hello".into())
         );
+    }
+
+    /// `testToUpper`.
+    #[test]
+    fn string_to_upper() {
+        let upper = |s| {
+            ToUpper
+                .execute(&[lit_str(s)], &mut MockCtx)
+                .unwrap()
+                .into_value()
+        };
+        assert_eq!(upper("TesT"), Value::String("TEST".into()));
+        assert_eq!(upper("TEST"), Value::String("TEST".into()));
+        assert!(ToUpper.execute(&[lit_int(1)], &mut MockCtx).is_err());
     }
 
     // -- reverseString --
