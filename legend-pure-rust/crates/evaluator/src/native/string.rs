@@ -924,6 +924,29 @@ impl NativeFunction for Substring {
     }
 }
 
+/// Pure `replace(String[1], String[1], String[1]): String[1]` — replace all
+/// occurrences of `target` in `source` with `replacement`.
+#[derive(Debug)]
+pub struct Replace;
+
+impl NativeFunction for Replace {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("replace", &values, 3)?;
+        let source = values[0].as_string()?;
+        let target = values[1].as_string()?;
+        let replacement = values[2].as_string()?;
+        let out = source
+            .as_str()
+            .replace(target.as_str(), replacement.as_str());
+        Ok(Evaluated::new(Value::String(SmolStr::new(out))))
+    }
+}
+
 fn i64_arg(v: &Value, ctx: &str) -> Result<i64, PureException> {
     match v {
         Value::Integer(n) => Ok(*n),
@@ -961,6 +984,7 @@ pub fn register(registry: &mut NativeRegistry) {
         Substring,
     );
     registry.register("substring_String_1__Integer_1__String_1_", Substring);
+    registry.register("replace_String_1__String_1__String_1__String_1_", Replace);
 }
 
 #[cfg(test)]
@@ -1238,6 +1262,48 @@ mod tests {
         assert!(
             Substring
                 .execute(&[lit_str("a"), lit_str("b"), lit_int(1)], &mut MockCtx)
+                .is_err()
+        );
+    }
+
+    // -- replace --
+
+    #[test]
+    fn replace_replaces_all_occurrences() {
+        let r = Replace
+            .execute(
+                &[lit_str("foo bar foo"), lit_str("foo"), lit_str("baz")],
+                &mut MockCtx,
+            )
+            .unwrap();
+        assert_eq!(r.into_value(), Value::String("baz bar baz".into()));
+    }
+
+    #[test]
+    fn replace_no_match_returns_source_unchanged() {
+        let r = Replace
+            .execute(
+                &[lit_str("hello"), lit_str("xyz"), lit_str("abc")],
+                &mut MockCtx,
+            )
+            .unwrap();
+        assert_eq!(r.into_value(), Value::String("hello".into()));
+    }
+
+    #[test]
+    fn replace_wrong_arg_count() {
+        assert!(
+            Replace
+                .execute(&[lit_str("a"), lit_str("b")], &mut MockCtx)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn replace_type_mismatch() {
+        assert!(
+            Replace
+                .execute(&[lit_str("a"), lit_int(1), lit_str("c")], &mut MockCtx)
                 .is_err()
         );
     }
