@@ -18,6 +18,7 @@
 //! cases stay inline in `native/collection.rs`.
 
 use legend_pure_evaluator::builders::{ModelBuilder, expr, named, param};
+use legend_pure_evaluator::error::{PureExceptionKind, PureRuntimeError};
 use legend_pure_evaluator::eval::Evaluator;
 use legend_pure_evaluator::native::NativeRegistry;
 use legend_pure_evaluator::value::Value;
@@ -33,6 +34,7 @@ const FIRST: &str = "first_T_MANY__T_$0_1$_";
 const REMOVE_DUPLICATES: &str = "removeDuplicates_T_MANY__Function_$0_1$__Function_$0_1$__T_MANY_";
 const SORT: &str = "sort_T_m__Function_$0_1$__Function_$0_1$__T_m_";
 const SIZE: &str = "size_Any_MANY__Integer_1_";
+const RANGE: &str = "range_Integer_1__Integer_1__Integer_1__Integer_MANY_";
 const TIMES: &str = "times_Number_MANY__Number_1_";
 const EQ: &str = "eq_Any_1__Any_1__Boolean_1_";
 const PLUS: &str = "plus_Number_MANY__Number_1_";
@@ -49,6 +51,20 @@ fn run(spec: &ValueSpec) -> Value {
     Evaluator::new(&model, &registry)
         .eval(spec)
         .unwrap_or_else(|e| panic!("evaluation failed: {e:?}"))
+}
+
+/// Evaluate `spec` on a fresh evaluator and return the message of the
+/// `EvaluationError` it raises.
+fn run_err(spec: &ValueSpec) -> String {
+    let model = model();
+    let registry = NativeRegistry::standard();
+    let err = Evaluator::new(&model, &registry)
+        .eval(spec)
+        .expect_err("expected an error");
+    match err.kind {
+        PureExceptionKind::ExecutionError(PureRuntimeError::EvaluationError(m)) => m,
+        other => panic!("expected an EvaluationError, got {other:?}"),
+    }
 }
 
 fn ints(items: &[i64]) -> ValueSpec {
@@ -275,4 +291,19 @@ fn size_counts_elements_of_any_multiplicity() {
         size(expr::call(ZIP, vec![ints(&[1, 2]), strings(&["a", "b"])])),
         Value::Integer(2)
     );
+}
+
+#[test]
+fn range_follows_the_sign_of_the_step_and_rejects_zero() {
+    let range = |start: i64, stop: i64, step: i64| {
+        expr::call(
+            RANGE,
+            vec![expr::int(start), expr::int(stop), expr::int(step)],
+        )
+    };
+    assert_eq!(as_ints(&run(&range(0, 10, 3))), [0, 3, 6, 9]);
+    assert_eq!(as_ints(&run(&range(5, 0, -2))), [5, 3, 1]);
+    assert_eq!(as_ints(&run(&range(2, 2, 1))), Vec::<i64>::new());
+    assert_eq!(as_ints(&run(&range(5, 0, 1))), Vec::<i64>::new());
+    assert_eq!(run_err(&range(0, 5, 0)), "range step must not be 0");
 }

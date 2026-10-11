@@ -22,6 +22,7 @@
 //! Each native is fished from the archive one `impl NativeFunction` at a
 //! time, registered under Java's mangled key, when a PCT row asks for it.
 
+use im_rc::Vector as PVector;
 use legend_pure_metamodel::types::ValueSpec;
 
 use crate::error::{PureException, PureRuntimeError};
@@ -365,6 +366,62 @@ impl NativeFunction for Size {
     }
 }
 
+/// Pure `range(Integer[1], Integer[1], Integer[1]): Integer[*]`
+/// Pure `range(Integer[1], Integer[1]): Integer[*]` — step defaults to 1
+/// Pure `range(Integer[1]): Integer[*]` — start defaults to 0, step to 1
+///
+/// Generates integers from `start` (inclusive) to `stop` (exclusive)
+/// with the given `step`. Java's stride direction follows the sign of
+/// `step` — positive step ascends, negative step descends.
+#[derive(Debug)]
+pub struct Range;
+
+impl NativeFunction for Range {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        let (start, end_exclusive, increment) = match values.len() {
+            1 => (0i64, values[0].as_integer()?, 1i64),
+            2 => (values[0].as_integer()?, values[1].as_integer()?, 1i64),
+            3 => (
+                values[0].as_integer()?,
+                values[1].as_integer()?,
+                values[2].as_integer()?,
+            ),
+            n => {
+                return Err(PureRuntimeError::EvaluationError(format!(
+                    "range: expected 1, 2, or 3 argument(s), got {n}"
+                ))
+                .into());
+            }
+        };
+        if increment == 0 {
+            // Java's `Range.execute` throws "range step must not be 0";
+            // platform `testRangeStepError` pins the exact text.
+            return Err(
+                PureRuntimeError::EvaluationError("range step must not be 0".into()).into(),
+            );
+        }
+        let mut result = PVector::new();
+        let mut i = start;
+        if increment > 0 {
+            while i < end_exclusive {
+                result.push_back(Value::Integer(i));
+                i += increment;
+            }
+        } else {
+            while i > end_exclusive {
+                result.push_back(Value::Integer(i));
+                i += increment;
+            }
+        }
+        Ok(Evaluated::new(Value::Collection(Box::new(result))))
+    }
+}
+
 /// Register the fished collection natives.
 pub fn register(registry: &mut NativeRegistry) {
     registry.register("fold_T_MANY__Function_1__V_m__V_m_", Fold);
@@ -378,12 +435,14 @@ pub fn register(registry: &mut NativeRegistry) {
     );
     registry.register("sort_T_m__Function_$0_1$__Function_$0_1$__T_m_", Sort);
     registry.register("size_Any_MANY__Integer_1_", Size);
+    registry.register(
+        "range_Integer_1__Integer_1__Integer_1__Integer_MANY_",
+        Range,
+    );
 }
 
 #[cfg(test)]
 mod tests {
-    use im_rc::Vector as PVector;
-
     use super::*;
     use crate::native::{MockCtx, lit_collection, lit_int, lit_str};
 
@@ -586,5 +645,32 @@ mod tests {
                 .into_value(),
             Value::Integer(0)
         );
+    }
+
+    #[test]
+    fn range_ascending() {
+        let r = Range
+            .execute(&[lit_int(0), lit_int(5), lit_int(1)], &mut MockCtx)
+            .unwrap()
+            .into_value();
+        assert_eq!(r, int_collection(&[0, 1, 2, 3, 4]));
+    }
+
+    #[test]
+    fn range_with_step() {
+        let r = Range
+            .execute(&[lit_int(0), lit_int(10), lit_int(3)], &mut MockCtx)
+            .unwrap()
+            .into_value();
+        assert_eq!(r, int_collection(&[0, 3, 6, 9]));
+    }
+
+    #[test]
+    fn range_descending() {
+        let r = Range
+            .execute(&[lit_int(5), lit_int(0), lit_int(-1)], &mut MockCtx)
+            .unwrap()
+            .into_value();
+        assert_eq!(r, int_collection(&[5, 4, 3, 2, 1]));
     }
 }
