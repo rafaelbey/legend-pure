@@ -30,9 +30,10 @@ from it, `platform/pure/grammar/m3.pure`, as its bootstrap.
   signatures fished) and Step 2 (the JNI boundary with `CoreInstance` as the only
   currency, and the platform PCT corpus running red through the `Rust_JNI` adapter)
   are complete.
-- PCT state: `Rust_JNI essential: 0 / 327`, `Rust_JNI grammar: 0 / 136`; every test
-  is `Unsupported` until Java lambdas are lowered through the bridge, which is next
-  (plan, Step 2 "Next"). Steps 3–7 are in the plan.
+- Java lambdas are lowered through the bridge (plan, Step 2 "Next", done): PCT state
+  `Rust_JNI essential: 2 / 327`, `Rust_JNI grammar: 59 / 136`; what remains is the
+  natives backlog (`FunctionNotFound: <mangled key>` lines in the module's manifests),
+  fished one per commit. Steps 3–7 are in the plan.
 - Build and test: `cargo build --workspace`, `cargo test --workspace` inside
   `legend-pure-rust/`; then `mvn -pl legend-pure-runtime/legend-pure-runtime-rust-evaluator
   clean verify` for the boundary tests and the PCT suites. CI: `.github/workflows/rust.yml`.
