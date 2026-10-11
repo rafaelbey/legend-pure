@@ -39,6 +39,7 @@ const FISHED: &[&str] = &[
     "abs_Float_1__Float_1_",
     "abs_Decimal_1__Decimal_1_",
     "abs_Number_1__Number_1_",
+    "mod_Integer_1__Integer_1__Integer_1_",
     "rem_Number_1__Number_1__Number_1_",
     // boolean
     "and_Boolean_1__Boolean_1__Boolean_1_",

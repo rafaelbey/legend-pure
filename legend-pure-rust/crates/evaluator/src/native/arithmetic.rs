@@ -13,12 +13,11 @@
 // limitations under the License.
 
 //! Arithmetic natives fished so far: `plus`, `minus`, `times`, `divide`,
-//! `abs` and `rem`.
+//! `abs`, `mod` and `rem`.
 //!
 //! All are **eager** — the native forces every argument up front via
 //! `ctx.evaluate`. Helpers return `PureRuntimeError`; `?` on each call
 //! promotes that into the `PureException` the trait requires.
-//! `mod` stays on the archive until a test asks.
 
 use legend_pure_metamodel::types::ValueSpec;
 use rust_decimal::Decimal;
@@ -361,6 +360,27 @@ impl NativeFunction for Abs {
     }
 }
 
+/// Pure `mod(Integer[1], Integer[1]): Integer[1]` — modulus (always non-negative).
+#[derive(Debug)]
+pub struct Mod;
+
+impl NativeFunction for Mod {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("mod", &values, 2)?;
+        let a = values[0].as_integer()?;
+        let b = values[1].as_integer()?;
+        if b == 0 {
+            return Err(PureRuntimeError::DivisionByZero.into());
+        }
+        Ok(Evaluated::new(Value::Integer(a.rem_euclid(b))))
+    }
+}
+
 /// Pure `rem(Number[1], Number[1]): Number[1]` — remainder (preserves sign of dividend).
 ///
 /// Promotes via `promote_pair` so mixed-type calls like `rem(7.5, 2)`
@@ -444,6 +464,8 @@ pub fn register(registry: &mut NativeRegistry) {
     registry.register("abs_Float_1__Float_1_", Abs);
     registry.register("abs_Decimal_1__Decimal_1_", Abs);
     registry.register("abs_Number_1__Number_1_", Abs);
+
+    registry.register("mod_Integer_1__Integer_1__Integer_1_", Mod);
 
     registry.register("rem_Number_1__Number_1__Number_1_", Rem);
 }
@@ -687,6 +709,49 @@ mod tests {
         // One float, one string
         assert!(
             Plus.execute(&[lit_float(1.0), lit_str("2")], &mut MockCtx)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn mod_positive() {
+        assert_eq!(
+            Mod.execute(&[lit_int(7), lit_int(3)], &mut MockCtx)
+                .unwrap()
+                .into_value(),
+            Value::Integer(1)
+        );
+    }
+
+    #[test]
+    fn mod_negative_dividend() {
+        // rem_euclid: -7 mod 3 = 2 (always non-negative)
+        assert_eq!(
+            Mod.execute(&[lit_int(-7), lit_int(3)], &mut MockCtx)
+                .unwrap()
+                .into_value(),
+            Value::Integer(2)
+        );
+    }
+
+    #[test]
+    fn division_by_zero_errors() {
+        assert!(
+            Divide
+                .execute(&[lit_int(5), lit_int(0)], &mut MockCtx)
+                .is_err()
+        );
+        assert!(
+            Divide
+                .execute(&[lit_float(5.0), lit_float(0.0)], &mut MockCtx)
+                .is_err()
+        );
+        assert!(
+            Mod.execute(&[lit_int(5), lit_int(0)], &mut MockCtx)
+                .is_err()
+        );
+        assert!(
+            Rem.execute(&[lit_int(5), lit_int(0)], &mut MockCtx)
                 .is_err()
         );
     }
