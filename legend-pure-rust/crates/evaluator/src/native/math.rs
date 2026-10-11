@@ -410,6 +410,33 @@ impl NativeFunction for Cot {
     }
 }
 
+/// Pure `asin(Number[1]):Float[1]` — inverse sine (radians). Inputs
+/// outside `[-1, 1]` throw `"Unable to compute asin of <input>"`,
+/// mirroring `ArcSine.java:53` (Java throws on `Double.isNaN(result)`).
+#[derive(Debug)]
+pub struct Asin;
+
+impl NativeFunction for Asin {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("asin", &values, 1)?;
+        let x = number_to_f64("asin", &values[0])?;
+        let r = x.asin();
+        if r.is_nan() {
+            return Err(PureRuntimeError::EvaluationError(format!(
+                "Unable to compute asin of {}",
+                java_number_string(&values[0])
+            ))
+            .into());
+        }
+        Ok(Evaluated::new(Value::Float(r)))
+    }
+}
+
 /// Pure `toFloat(Number[1]):Float[1]` — numeric → Float coercion.
 #[derive(Debug)]
 pub struct ToFloat;
@@ -549,6 +576,7 @@ pub fn register(registry: &mut NativeRegistry) {
     registry.register("cos_Number_1__Float_1_", Cos);
     registry.register("tan_Number_1__Float_1_", Tan);
     registry.register("cot_Number_1__Float_1_", Cot);
+    registry.register("asin_Number_1__Float_1_", Asin);
 
     // numeric conversion
     registry.register("toFloat_Number_1__Float_1_", ToFloat);
@@ -1049,6 +1077,46 @@ mod tests {
     #[test]
     fn cot_type_mismatch() {
         assert!(Cot.execute(&[lit_bool(true)], &mut MockCtx).is_err());
+    }
+
+    #[test]
+    fn asin_zero() {
+        let r = Asin.execute(&[lit_float(0.0)], &mut MockCtx).unwrap();
+        match r.into_value() {
+            Value::Float(f) => assert!(approx_eq(f, 0.0)),
+            other => panic!("expected Float, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn asin_one_is_half_pi() {
+        let r = Asin.execute(&[lit_float(1.0)], &mut MockCtx).unwrap();
+        match r.into_value() {
+            Value::Float(f) => assert!(approx_eq(f, std::f64::consts::FRAC_PI_2)),
+            other => panic!("expected Float, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn asin_out_of_range_throws_unable_to_compute() {
+        // Java parity: out-of-domain inputs (|x| > 1) throw
+        // "Unable to compute asin of <input>" — see ArcSine.java.
+        let err = Asin.execute(&[lit_float(2.0)], &mut MockCtx).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("Unable to compute asin of 2.0"),
+            "expected error containing 'Unable to compute asin of 2.0', got: {msg}"
+        );
+    }
+
+    #[test]
+    fn asin_wrong_arg_count() {
+        assert!(Asin.execute(&[], &mut MockCtx).is_err());
+    }
+
+    #[test]
+    fn asin_type_mismatch() {
+        assert!(Asin.execute(&[lit_str("x")], &mut MockCtx).is_err());
     }
 
     #[test]
