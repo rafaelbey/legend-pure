@@ -29,9 +29,10 @@ use legend_pure_metamodel::types::{ExprKind, TypeExpr, ValueSpec};
 use smol_str::SmolStr;
 
 use crate::error::{PureException, PureRuntimeError};
-use crate::heap::ObjectHandle;
+use crate::heap::{ObjectHandle, RuntimeHeap};
 use crate::native::{
-    EvalContextTrait, Evaluated, NativeFunction, NativeRegistry, expect_args, force_all, force2,
+    EvalContextTrait, Evaluated, NativeFunction, NativeRegistry, expect_args, force_all, force1,
+    force2,
 };
 use crate::value::Value;
 
@@ -715,6 +716,93 @@ impl NativeFunction for Copy {
         }
         copy_with_triples(ctx, &values[0], &values[1..])
     }
+}
+
+/// Pure `getAll<T>(type:Class<T>[1]):T[*]`: every live instance of the
+/// class, from the metamodel rows (`Class.all()`) and from the objects
+/// reachable through the variable context (`Trade.all()`), each once.
+/// A metamodel row comes back as its element so reflective reads resolve
+/// through the model.
+#[derive(Debug)]
+pub struct GetAll;
+
+impl NativeFunction for GetAll {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let class = force1("getAll", args, ctx)?;
+        let Value::Element(class_id) = class else {
+            return Err(PureRuntimeError::type_mismatch("Class", &class).into());
+        };
+        let instances = gather_all_instances(ctx, class_id)?;
+        Ok(Evaluated::new(Value::from_vec(instances)))
+    }
+}
+
+fn gather_all_instances(
+    ctx: &mut dyn EvalContextTrait,
+    class_id: ElementId,
+) -> Result<Vec<Value>, PureException> {
+    if Some(class_id) == crate::m3_paths::resolve(ctx.model(), crate::m3_paths::NIL) {
+        return Err(PureRuntimeError::EvaluationError(
+            "Cannot getAll instances of meta::pure::metamodel::type::Nil".into(),
+        )
+        .into());
+    }
+    let target_path = crate::model_utils::build_element_path(ctx.model(), class_id, "::", false);
+    let mut seen: std::collections::HashSet<*const std::cell::RefCell<crate::heap::HeapEntry>> =
+        std::collections::HashSet::new();
+    let mut projected: Vec<Value> = Vec::new();
+
+    for (handle, cls) in ctx.heap().iter_classifiers() {
+        if cls.as_str() != target_path || !seen.insert(std::rc::Rc::as_ptr(&handle)) {
+            continue;
+        }
+        projected.push(match RuntimeHeap::element_for_object(&handle) {
+            Some(eid) => Value::Element(eid),
+            None => Value::Object(handle),
+        });
+    }
+
+    let mut worklist: Vec<Value> = ctx.context().iter_values().cloned().collect();
+    while let Some(value) = worklist.pop() {
+        match &value {
+            Value::Object(handle) => {
+                if !seen.insert(std::rc::Rc::as_ptr(handle)) {
+                    continue;
+                }
+                let (cls, prop_values): (SmolStr, Vec<Value>) = {
+                    let entry = handle.borrow();
+                    let cls = entry.classifier();
+                    let prop_values: Vec<Value> = entry
+                        .property_names()
+                        .iter()
+                        .flat_map(|name| entry.get_property_values(name.as_str()).into_iter())
+                        .collect();
+                    (cls, prop_values)
+                };
+                if cls.as_str() == target_path && RuntimeHeap::element_for_object(handle).is_none()
+                {
+                    projected.push(value);
+                }
+                worklist.extend(prop_values);
+            }
+            Value::Collection(items) => {
+                for v in items.iter() {
+                    worklist.push(v.clone());
+                }
+            }
+            Value::Map(state) => {
+                for v in state.borrow().entries.values() {
+                    worklist.push(v.clone());
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(projected)
 }
 
 /// Pure `copy<T>(object:T[1], id:String[1]):T[1]`: a copy with no override.
@@ -1509,6 +1597,7 @@ pub fn register(registry: &mut NativeRegistry) {
         "new_Class_1__String_1__KeyExpression_MANY__T_1_",
         NewWithKeyExpressions,
     );
+    registry.register("getAll_Class_1__T_MANY_", GetAll);
     registry.register("copy_T_1__String_1__T_1_", CopyWithId);
     registry.register(
         "copy_T_1__String_1__KeyExpression_MANY__T_1_",

@@ -6,10 +6,6 @@
       "expectedError": "Execution error at ??, \"ERROR unhandled type for value: Hoboken instance meta::pure::functions::collection::tests::model::CO_Address (instance of class org.finos.legend.pure.rust.RustCoreInstance)\""
     },
     {
-      "test": "meta::pure::functions::collection::tests::contains::testContainsNonPrimitive_Function_1__Boolean_1_",
-      "expectedError": "Assert failed"
-    },
-    {
       "test": "meta::pure::functions::collection::tests::drop::testDropInList_Function_1__Boolean_1_",
       "expectedError": "Execution error at (resource:/platform/pure/essential/collection/slice/drop.pure lines:69c71-72c1), \"Unexpected error executing function with params [testAdapterForRustExecution_Function_1__X_o_]\""
     },
@@ -104,10 +100,6 @@
     {
       "test": "meta::pure::functions::lang::tests::match::testMatchWithMixedReturnType_Function_1__Boolean_1_",
       "expectedError": "Execution error at (resource:/platform/pure/essential/lang/flow/match.pure line:184 column:172), \"NotImplemented: deactivate_Any_MANY__ValueSpecification_1_\""
-    },
-    {
-      "test": "meta::pure::functions::string::tests::parseDecimal::testParseDecimalWithPrecisionScale_Function_1__Boolean_1_",
-      "expectedError": "expected: 123.12300D"
     }
   ]
 }
