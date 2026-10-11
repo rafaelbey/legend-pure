@@ -618,8 +618,15 @@ every described node until `close`, and every lazy read re-attaches the
 thread. Lowering now walks whole bodies (2026-10-10); the measuring tool is
 the module's `BenchmarkPctExpressions` (2026-10-11: every PCT test timed
 under each engine with its own adapter and with `Rust_JNI`, first run apart
-from the warm median), and the list below is the menu, roughly in order of
-payoff per line:
+from the warm median, and the Rust side's own split of every call:
+lowering, run, JNI reads during the run). First measurement, release
+cdylib, median per PCT test: the whole test 77 µs on the interpreted
+engine and 614 µs through `Rust_JNI`, of which the evaluator's run of the
+lowered closure is under 1 µs (p90 2 µs, max 15 µs), the lowering 229 µs,
+and the rest, about 300 µs, the crossing itself (describe, materialise,
+cache clearing, the JNI entry). So the evaluator is not the cost; the
+per-call re-lowering and the crossing are, and the list below is the menu,
+roughly in order of payoff per line:
 
 - *Columnar description*: `describe` / `propertyValues` return one `long[]`
   (kind, id, classifier id, date components) plus a `String[]` of the

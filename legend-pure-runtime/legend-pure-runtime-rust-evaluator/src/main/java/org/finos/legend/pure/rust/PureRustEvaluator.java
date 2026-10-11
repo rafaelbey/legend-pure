@@ -230,6 +230,20 @@ public final class PureRustEvaluator implements FunctionExecution, Closeable
     }
 
     /**
+     * Where the last lowered call on this thread spent its time, for
+     * measurement: the lowering (both phases, including every JNI read it
+     * made) and the run of the lowered closure, in nanoseconds, then the
+     * number of JNI reads made during the run (zero means the run was the
+     * Rust evaluator alone).
+     *
+     * @return {@code [loweringNanos, runNanos, jniReadsDuringRun]}
+     */
+    public static long[] lastTimings()
+    {
+        return nativeLastTimings();
+    }
+
+    /**
      * Heap objects the Rust side keeps alive for this evaluator in either
      * direction; zero once every proxy is closed and every call returned.
      *
@@ -359,6 +373,8 @@ public final class PureRustEvaluator implements FunctionExecution, Closeable
     private static native String nativeCrossingKind(long contextPtr, CoreInstance node);
 
     private static native long nativeLiveHandleCount(long contextPtr);
+
+    private static native long[] nativeLastTimings();
 
     private static native void nativeFreeInstance(long contextPtr, long handle);
 

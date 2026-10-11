@@ -27,6 +27,7 @@ import org.finos.legend.pure.m3.navigation._package._Package;
 import org.finos.legend.pure.m3.pct.shared.PCTTools;
 import org.finos.legend.pure.m3.pct.shared.model.ReportScope;
 import org.finos.legend.pure.m4.coreinstance.CoreInstance;
+import org.finos.legend.pure.rust.PureRustEvaluator;
 import org.finos.legend.pure.runtime.java.compiled.execution.CompiledExecutionSupport;
 import org.finos.legend.pure.runtime.java.compiled.generation.processors.FunctionProcessor;
 import org.finos.legend.pure.runtime.java.compiled.generation.processors.IdBuilder;
@@ -94,8 +95,8 @@ public class BenchmarkPctExpressions
             {
                 String fqn = PackageableElement.getUserPathForPackageableElement(test, "::");
                 Sample[] row = samples.computeIfAbsent(fqn, k -> new Sample[MODES.length]);
-                row[0] = time(() -> fe.start(test, Lists.immutable.with(adapterValue(IN_MEMORY, ips))));
-                row[1] = time(() -> fe.start(test, Lists.immutable.with(adapterValue(RUST_JNI, ips))));
+                row[0] = time(() -> fe.start(test, Lists.immutable.with(adapterValue(IN_MEMORY, ips))), false);
+                row[1] = time(() -> fe.start(test, Lists.immutable.with(adapterValue(RUST_JNI, ips))), true);
             }
         }
 
@@ -110,8 +111,8 @@ public class BenchmarkPctExpressions
                 Method method = compiledMethod(test);
                 CoreInstance inMemory = _Package.getByUserPath(IN_MEMORY, cps);
                 CoreInstance rust = _Package.getByUserPath(RUST_JNI, cps);
-                row[2] = time(() -> invoke(method, inMemory, es));
-                row[3] = time(() -> invoke(method, rust, es));
+                row[2] = time(() -> invoke(method, inMemory, es), false);
+                row[3] = time(() -> invoke(method, rust, es), true);
             }
         }
 
@@ -180,7 +181,13 @@ public class BenchmarkPctExpressions
         }
     }
 
-    private Sample time(Run run)
+    /**
+     * Time a run: the first run apart, then warm-up, then the timed runs.
+     * For a Rust mode the Rust side's own split of each timed run is read
+     * back: the lowering, the run of the lowered closure (the evaluator
+     * alone when no JNI read happened during it), and those reads.
+     */
+    private Sample time(Run run, boolean rust)
     {
         Sample sample = new Sample();
         try
@@ -193,15 +200,31 @@ public class BenchmarkPctExpressions
                 run.run();
             }
             long[] times = new long[this.runs];
+            long[] lower = new long[this.runs];
+            long[] evaluator = new long[this.runs];
+            long[] reads = new long[this.runs];
             for (int i = 0; i < this.runs; i++)
             {
                 start = System.nanoTime();
                 run.run();
                 times[i] = (System.nanoTime() - start) / 1000L;
+                if (rust)
+                {
+                    long[] split = PureRustEvaluator.lastTimings();
+                    lower[i] = split[0] / 1000L;
+                    evaluator[i] = split[1] / 1000L;
+                    reads[i] = split[2];
+                }
             }
             Arrays.sort(times);
+            Arrays.sort(lower);
+            Arrays.sort(evaluator);
+            Arrays.sort(reads);
             sample.medianUs = times[times.length / 2];
             sample.minUs = times[0];
+            sample.lowerUs = lower[lower.length / 2];
+            sample.evaluatorUs = evaluator[evaluator.length / 2];
+            sample.runReads = reads[reads.length / 2];
             sample.status = "ok";
         }
         catch (Throwable t)
@@ -213,7 +236,7 @@ public class BenchmarkPctExpressions
 
     private static void writeCsv(Path target, Map<String, Sample[]> samples) throws IOException
     {
-        StringBuilder csv = new StringBuilder("test,mode,status,first_us,median_us,min_us\n");
+        StringBuilder csv = new StringBuilder("test,mode,status,first_us,median_us,min_us,rust_lower_us,rust_evaluator_us,jni_reads_in_run\n");
         for (Map.Entry<String, Sample[]> entry : samples.entrySet())
         {
             for (int i = 0; i < MODES.length; i++)
@@ -224,7 +247,8 @@ public class BenchmarkPctExpressions
                     continue;
                 }
                 csv.append(entry.getKey()).append(',').append(MODES[i]).append(',').append(s.status).append(',')
-                        .append(s.firstUs).append(',').append(s.medianUs).append(',').append(s.minUs).append('\n');
+                        .append(s.firstUs).append(',').append(s.medianUs).append(',').append(s.minUs).append(',')
+                        .append(s.lowerUs).append(',').append(s.evaluatorUs).append(',').append(s.runReads).append('\n');
             }
         }
         Files.write(target, csv.toString().getBytes(StandardCharsets.UTF_8));
@@ -242,13 +266,18 @@ public class BenchmarkPctExpressions
         md.append("# PCT expressions: time per test by mode\n\n");
         md.append("Warm-up ").append(this.warmup).append(", timed runs ").append(this.runs).append(", times in microseconds; ")
                 .append("ratios over the ").append(countAllOk(samples)).append(" tests every mode completed.\n\n");
-        md.append("| Mode | Tests ok | Sum of medians (ms) | Median of medians | Median first run | Geomean ratio to interpreted/In-Memory |\n|---|---|---|---|---|---|\n");
+        md.append("| Mode | Tests ok | Sum of medians (ms) | Median of medians | Median first run | Geomean ratio to interpreted/In-Memory | Rust lowering (median) | Rust evaluator alone (median) | Evaluator-alone geomean ratio |\n|---|---|---|---|---|---|---|---|---|\n");
         for (int i = 0; i < MODES.length; i++)
         {
             List<Long> medians = new ArrayList<>();
             List<Long> firsts = new ArrayList<>();
+            List<Long> lowers = new ArrayList<>();
+            List<Long> evaluators = new ArrayList<>();
             double logSum = 0;
+            double evaluatorLogSum = 0;
             int ratioCount = 0;
+            int evaluatorRatioCount = 0;
+            boolean rust = MODES[i].endsWith("Rust_JNI");
             for (Sample[] row : samples.values())
             {
                 Sample s = row[i];
@@ -256,17 +285,33 @@ public class BenchmarkPctExpressions
                 {
                     medians.add(s.medianUs);
                     firsts.add(s.firstUs);
+                    if (rust)
+                    {
+                        lowers.add(s.lowerUs);
+                        if (s.runReads == 0)
+                        {
+                            evaluators.add(s.evaluatorUs);
+                        }
+                    }
                 }
                 if (allOk(row) && (row[0].medianUs > 0))
                 {
                     logSum += Math.log(Math.max(1, row[i].medianUs) / (double) Math.max(1, row[0].medianUs));
                     ratioCount++;
+                    if (rust && (row[i].runReads == 0))
+                    {
+                        evaluatorLogSum += Math.log(Math.max(1, row[i].evaluatorUs) / (double) Math.max(1, row[0].medianUs));
+                        evaluatorRatioCount++;
+                    }
                 }
             }
             md.append("| ").append(MODES[i]).append(" | ").append(medians.size()).append(" | ")
                     .append(String.format(Locale.ROOT, "%.1f", sum(medians) / 1000.0)).append(" | ")
                     .append(median(medians)).append(" | ").append(median(firsts)).append(" | ")
-                    .append(ratioCount == 0 ? "n/a" : String.format(Locale.ROOT, "%.2fx", Math.exp(logSum / ratioCount))).append(" |\n");
+                    .append(ratioCount == 0 ? "n/a" : String.format(Locale.ROOT, "%.2fx", Math.exp(logSum / ratioCount))).append(" | ")
+                    .append(rust ? String.valueOf(median(lowers)) : "").append(" | ")
+                    .append(rust ? median(evaluators) + " (" + evaluators.size() + " tests with no JNI read in the run)" : "").append(" | ")
+                    .append(rust && (evaluatorRatioCount > 0) ? String.format(Locale.ROOT, "%.2fx", Math.exp(evaluatorLogSum / evaluatorRatioCount)) : "").append(" |\n");
         }
         md.append("\n## Where Rust loses the most against its host engine (median, warm)\n\n| Test | interpreted In-Memory | interpreted Rust_JNI | compiled In-Memory | compiled Rust_JNI |\n|---|---|---|---|---|\n");
         Map<String, Long> loss = new LinkedHashMap<>();
@@ -345,5 +390,8 @@ public class BenchmarkPctExpressions
         long firstUs;
         long medianUs;
         long minUs;
+        long lowerUs;
+        long evaluatorUs;
+        long runReads;
     }
 }
