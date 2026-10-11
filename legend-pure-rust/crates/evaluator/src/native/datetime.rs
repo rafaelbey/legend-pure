@@ -100,6 +100,23 @@ fn duration_unit(v: &Value) -> Result<DurationUnit, PureRuntimeError> {
     }
 }
 
+/// Pure `year(Date[1]): Integer[1]`.
+#[derive(Debug)]
+pub struct Year;
+
+impl NativeFunction for Year {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("year", &values, 1)?;
+        let d = values[0].as_date()?;
+        Ok(Evaluated::new(Value::Integer(i64::from(d.get_year()))))
+    }
+}
+
 /// Pure `monthNumber(Date[1]): Integer[1]`.
 #[derive(Debug)]
 pub struct MonthNumber;
@@ -851,6 +868,7 @@ impl NativeFunction for DateConstruct {
 
 /// Register the fished date and time natives under their platform keys.
 pub fn register(registry: &mut NativeRegistry) {
+    registry.register("year_Date_1__Integer_1_", Year);
     registry.register("monthNumber_Date_1__Integer_1_", MonthNumber);
     registry.register("dayOfMonth_Date_1__Integer_1_", DayOfMonth);
     registry.register("hour_Date_1__Integer_1_", Hour);
@@ -947,6 +965,16 @@ mod tests {
     // a real `Evaluator` in `tests/datetime.rs`. The tests below only
     // exercise the natives' own defensive checks — `expect_args` for
     // arity, `as_date()` type assertion — which need no evaluator.
+
+    #[test]
+    fn year_wrong_arg_count() {
+        assert!(Year.execute(&[], &mut MockCtx).is_err());
+    }
+
+    #[test]
+    fn year_type_mismatch() {
+        assert!(Year.execute(&[lit_int(5)], &mut MockCtx).is_err());
+    }
 
     #[test]
     fn date_part_wrong_arg_count() {
@@ -1241,6 +1269,8 @@ mod tests {
             reg.get("dateDiff_Date_1__Date_1__DurationUnit_1__Integer_1_")
                 .is_some()
         );
+        assert!(reg.get("year_Date_1__Integer_1_").is_some());
+        assert!(reg.get("parseDate_String_1__Date_1_").is_some());
         assert!(reg.get("date_Integer_1__Date_1_").is_some());
         assert!(
             reg.get(

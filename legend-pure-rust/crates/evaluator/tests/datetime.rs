@@ -35,6 +35,7 @@ const HOUR: &str = "hour_Date_1__Integer_1_";
 const MINUTE: &str = "minute_Date_1__Integer_1_";
 const SECOND: &str = "second_Date_1__Integer_1_";
 const MONTH_NUMBER: &str = "monthNumber_Date_1__Integer_1_";
+const YEAR: &str = "year_Date_1__Integer_1_";
 
 /// `%y` — a year-only date.
 fn year_only(year: i16) -> ValueSpec {
@@ -390,4 +391,17 @@ fn month_number_reads_the_month() {
         evaluation_error(&err),
         Some("monthNumber: date has no month component")
     );
+}
+
+#[test]
+fn year_reads_the_year_at_every_precision() {
+    let model = ModelBuilder::new().finish();
+    let registry = NativeRegistry::standard();
+    let mut eval = Evaluator::new(&model, &registry);
+    // testYear: year-only through subsecond.
+    let mut dates = vec![year_only(2015)];
+    dates.extend(extract_ladder());
+    for date in dates {
+        assert_eq!(apply(&mut eval, YEAR, date).unwrap(), Value::Integer(2015));
+    }
 }
