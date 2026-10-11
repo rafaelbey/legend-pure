@@ -31,6 +31,17 @@ use legend_pure_metamodel::types::{
 };
 
 const NEW: &str = "new_Class_1__String_1__Any_MANY__T_1_";
+
+/// The platform registry plus the flat key/value spelling of `new` these
+/// tests build their instances with (the platform declares `new` over
+/// `KeyExpression` objects; the builders have none).
+fn registry() -> NativeRegistry {
+    let mut registry = NativeRegistry::standard();
+    registry.register(NEW, legend_pure_evaluator::native::lang::New);
+    meta::register(&mut registry);
+    registry
+}
+
 const MATCH: &str = "match_Any_MANY__Function_$1_MANY$__T_m_";
 const MATCH_WITH: &str = "match_Any_MANY__Function_$1_MANY$__P_o__T_m_";
 const LET: &str = "letFunction_String_1__T_m__T_m_";
@@ -39,12 +50,6 @@ const EVAL_0: &str = "eval_Function_1__V_m_";
 const EVAL_1: &str = "eval_Function_1__T_n__V_m_";
 const EVAL_2: &str = "eval_Function_1__T_n__U_p__V_m_";
 const EVAL_7: &str = "eval_Function_1__S_n__T_o__U_p__W_q__X_r__Y_s__Z_t__V_m_";
-
-fn registry() -> NativeRegistry {
-    let mut registry = NativeRegistry::standard();
-    meta::register(&mut registry);
-    registry
-}
 
 fn evaluation_error(err: &PureException) -> Option<&str> {
     match &err.kind {
@@ -727,4 +732,14 @@ fn not_yet_meta_natives_fail_with_not_implemented() {
             "{key}: {err:?}"
         );
     }
+}
+
+#[test]
+fn the_package_metaclass_lives_at_the_root_as_m3_declares_it() {
+    let model = PureModel::bootstrapped();
+    let package_class = model.resolve_fqn_str("Package").expect("the Package class");
+    assert!(matches!(
+        model.get_element(package_class),
+        Element::Class(_)
+    ));
 }

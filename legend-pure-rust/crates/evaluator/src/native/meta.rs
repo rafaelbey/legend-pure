@@ -251,84 +251,23 @@ fn mult_bounds(m: &legend_pure_metamodel::types::Multiplicity) -> (u32, Option<u
     }
 }
 
-/// Kind-based type check: is `value` an instance of the metamodel type
-/// `type_class_id`.
-///
-/// Unknown type classes conservatively return `false`.
+/// Is `value` an instance of `type_id`: the value's runtime type, as a
+/// model element, extends the target. Both sides are element ids.
 fn value_matches_type(
     model: &PureModel,
     value: &Value,
-    type_class_id: ElementId,
+    type_id: ElementId,
     heap: &RuntimeHeap,
 ) -> bool {
-    let type_name = match type_class_id {
-        ElementId::Package(pkg_id) => &model.get_package(pkg_id).name,
-        ElementId::InstanceId { .. } => &model.get_node(type_class_id).name,
-    };
-
-    match type_name.as_str() {
-        "Any" => true,
-        "Nil" => false,
-        "Package" => matches!(value, Value::Element(id) if id.is_package()),
-        "ConcreteFunctionDefinition" => {
-            matches!(value, Value::Element(id)
-                if matches!(model.get_element(*id), Element::Function(f) if !f.is_native))
-        }
-        "NativeFunctionDefinition" => {
-            matches!(value, Value::Element(id)
-                if matches!(model.get_element(*id), Element::Function(f) if f.is_native))
-        }
-        "FunctionDefinition" | "Function" => {
-            matches!(value, Value::Function(_))
-                || matches!(value, Value::Element(id)
-                    if matches!(model.get_element(*id), Element::Function(_)))
-        }
-        "Class" => matches!(value, Value::Element(id)
-            if matches!(model.get_element(*id), Element::Class(_))),
-        "Enumeration" => matches!(value, Value::Element(id)
-            if matches!(model.get_element(*id), Element::Enumeration(_))),
-        "Enum" => matches!(value, Value::EnumValue { .. }),
-        "Profile" => matches!(value, Value::Element(id)
-            if matches!(model.get_element(*id), Element::Profile(_))),
-        "Association" => matches!(value, Value::Element(id)
-            if matches!(model.get_element(*id), Element::Association(_))),
-        "Measure" => matches!(value, Value::Element(id)
-            if matches!(model.get_element(*id), Element::Measure(_))),
-        "PackageableElement" => matches!(value, Value::Element(_)),
-        "Type" => matches!(value, Value::Element(id) if matches!(
-            model.get_element(*id),
-            Element::Class(_)
-                | Element::Enumeration(_)
-                | Element::PrimitiveType(_)
-                | Element::Measure(_)
-                | Element::Unit(_)
-        )),
-        "Boolean" => matches!(value, Value::Boolean(_)),
-        "Integer" => matches!(value, Value::Integer(_)),
-        "Float" => matches!(value, Value::Float(_)),
-        "Decimal" => matches!(value, Value::Decimal(_)),
-        "Number" => matches!(
-            value,
-            Value::Integer(_) | Value::Float(_) | Value::Decimal(_)
-        ),
-        "String" => matches!(value, Value::String(_)),
-        "Date" | "DateTime" | "StrictDate" => matches!(value, Value::Date(_)),
-        "StrictTime" => matches!(value, Value::StrictTime(_)),
-        _ => {
-            if let Value::Object(obj_id) = value
-                && let Ok(classifier) = heap.classifier(obj_id)
-                && classifier
-                    .rsplit("::")
-                    .next()
-                    .is_some_and(|tail| tail == type_name.as_str())
-            {
-                return true;
-            }
-            if let Ok(value_type_id) = resolve_value_type(value, model, heap) {
-                return type_extends(model, value_type_id, type_class_id);
-            }
-            false
-        }
+    if type_id == bootstrap::ANY_ID {
+        return true;
+    }
+    if type_id == bootstrap::NIL_ID {
+        return false;
+    }
+    match resolve_value_type(value, model, heap) {
+        Ok(value_type) => type_extends(model, value_type, type_id),
+        Err(_) => false,
     }
 }
 
@@ -356,6 +295,11 @@ fn type_extends(model: &PureModel, descendant: ElementId, ancestor: ElementId) -
             Element::PrimitiveType(p) => {
                 if let Some(super_id) = p.super_type {
                     stack.push(super_id);
+                }
+            }
+            Element::Enumeration(_) => {
+                if let Some(enum_class) = crate::m3_paths::resolve(model, crate::m3_paths::ENUM) {
+                    stack.push(enum_class);
                 }
             }
             _ => {}

@@ -415,7 +415,7 @@ impl RuntimeHeap {
                 continue;
             }
             let handle = Rc::new(RefCell::new(HeapEntry::Dynamic(
-                RuntimeObject::new_bootstrap("meta::pure::metamodel::type::Package", eid),
+                RuntimeObject::new_bootstrap("Package", eid),
             )));
             self.element_to_object.insert(eid, handle);
         }

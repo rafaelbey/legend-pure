@@ -616,7 +616,6 @@ pub fn register(registry: &mut NativeRegistry) {
     registry.register("exp_Number_1__Float_1_", Exp);
     registry.register("log_Number_1__Float_1_", Log);
     registry.register("log10_Number_1__Float_1_", Log10);
-    registry.register("pow_Number_1__Number_1__Float_1_", Pow);
     registry.register("pow_Number_1__Number_1__Number_1_", Pow);
 
     registry.register("sin_Number_1__Float_1_", Sin);

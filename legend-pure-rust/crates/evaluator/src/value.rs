@@ -375,6 +375,7 @@ impl PartialEq for Value {
                     inner: i2,
                 },
             ) => u1 == u2 && i1 == i2,
+            (Self::Latest, Self::Latest) => true,
             (Self::Unit, Self::Unit) => true,
             _ => false,
         }

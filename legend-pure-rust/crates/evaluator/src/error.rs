@@ -263,7 +263,7 @@ impl PureException {
         if self.source.is_none() {
             self.source = Some(frame.source.clone());
         }
-        self.call_stack.push(frame);
+        self.call_stack.insert(0, frame);
         self
     }
 }
@@ -513,5 +513,24 @@ mod frame_tests {
                 source: outer,
             });
         assert_eq!(exc.source, Some(inner));
+    }
+
+    #[test]
+    fn frames_added_while_unwinding_keep_the_outermost_first() {
+        let exc = PureException::from(PureRuntimeError::EvaluationError("boom".into()))
+            .with_frame(StackFrame {
+                function_name: "inner".into(),
+                source: SourceInfo::new("a.pure", 5, 7, 5, 9),
+            })
+            .with_frame(StackFrame {
+                function_name: "outer".into(),
+                source: SourceInfo::new("a.pure", 1, 1, 9, 1),
+            });
+        let names: Vec<&str> = exc
+            .call_stack
+            .iter()
+            .map(|f| f.function_name.as_str())
+            .collect();
+        assert_eq!(names, ["outer", "inner"]);
     }
 }

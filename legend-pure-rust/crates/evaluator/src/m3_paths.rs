@@ -73,10 +73,12 @@ pub const TREE_NODE: &Classifier = "meta::pure::functions::collection::TreeNode"
 pub const CLASS: &Classifier = "meta::pure::metamodel::type::Class";
 /// `meta::pure::metamodel::type::Enumeration`.
 pub const ENUMERATION: &Classifier = "meta::pure::metamodel::type::Enumeration";
+/// The class of every enum value.
+pub const ENUM: &Classifier = "meta::pure::metamodel::type::Enum";
 /// `meta::pure::metamodel::type::PrimitiveType`.
 pub const PRIMITIVE_TYPE: &Classifier = "meta::pure::metamodel::type::PrimitiveType";
 /// `meta::pure::metamodel::Package`.
-pub const PACKAGE: &Classifier = "meta::pure::metamodel::Package";
+pub const PACKAGE: &Classifier = "Package";
 /// `meta::pure::metamodel::function::NativeFunction`.
 pub const NATIVE_FUNCTION: &Classifier = "meta::pure::metamodel::function::NativeFunction";
 /// `meta::pure::metamodel::function::ConcreteFunctionDefinition`.

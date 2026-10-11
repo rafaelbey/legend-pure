@@ -1435,13 +1435,11 @@ pub fn register(registry: &mut NativeRegistry) {
         "eval_Function_1__S_n__T_o__U_p__W_q__X_r__Y_s__Z_t__V_m_",
         Eval,
     );
-    registry.register("new_Class_1__String_1__Any_MANY__T_1_", New);
     registry.register("new_Class_1__String_1__T_1_", New);
     registry.register(
         "new_Class_1__String_1__KeyExpression_MANY__T_1_",
         NewWithKeyExpressions,
     );
-    registry.register("copy_T_1__KeyExpression_MANY__T_1_", Copy);
     registry.register("copy_T_1__String_1__T_1_", Copy);
     registry.register("copy_T_1__String_1__KeyExpression_MANY__T_1_", Copy);
 }

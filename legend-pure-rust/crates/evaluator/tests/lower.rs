@@ -279,9 +279,9 @@ fn every_literal_kind_lowers() {
     let Value::Collection(items) = &result else {
         panic!("expected a collection, got {result:?}");
     };
-    assert_eq!(items.len(), 6);
-    assert_eq!(items.iter().take(5).cloned().collect::<Vec<_>>(), values);
-    assert!(matches!(items.last(), Some(Value::Latest)));
+    let mut expected = values;
+    expected.push(Value::Latest);
+    assert_eq!(items.iter().cloned().collect::<Vec<_>>(), expected);
 }
 
 #[test]

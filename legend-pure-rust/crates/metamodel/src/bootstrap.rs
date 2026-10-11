@@ -309,7 +309,7 @@ pub fn metatype_of(model: &crate::model::PureModel, element: &Element) -> Option
             "multiplicity",
             "PackageableMultiplicity",
         ],
-        Element::Package(_) => &["meta", "pure", "metamodel", "type", "Package"],
+        Element::Package(_) => &["Package"],
         Element::DSLInstance(_) => unreachable!(),
     };
     let segments: Vec<SmolStr> = path.iter().map(|&s| SmolStr::new(s)).collect();
