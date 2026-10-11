@@ -13,8 +13,8 @@
 // limitations under the License.
 
 //! Comparison natives: `eq` (identity), `equal` (structural, via
-//! [`crate::native::equality`]), the ordering native `lessThan`, and the
-//! total comparator
+//! [`crate::native::equality`]), the ordering natives `lessThan` and
+//! `lessThanEqual`, and the total comparator
 //! [`compare_values`](crate::native::comparison::compare_values) that the ordering natives and the collection
 //! natives (`sort`, `removeDuplicates`) share. The platform's `greaterThan`
 //! and `greaterThanEqual` are Pure-bodied over `lessThan`/`lessThanEqual`,
@@ -114,6 +114,24 @@ impl NativeFunction for LessThan {
         expect_args("lessThan", &values, 2)?;
         Ok(Evaluated::new(Value::Boolean(
             numeric_cmp(&values[0], &values[1])?.is_lt(),
+        )))
+    }
+}
+
+/// Pure `lessThanEqual(Number[1], Number[1]): Boolean[1]`
+#[derive(Debug)]
+pub struct LessThanEqual;
+
+impl NativeFunction for LessThanEqual {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("lessThanEqual", &values, 2)?;
+        Ok(Evaluated::new(Value::Boolean(
+            !numeric_cmp(&values[0], &values[1])?.is_gt(),
         )))
     }
 }
@@ -229,12 +247,16 @@ pub fn register(registry: &mut NativeRegistry) {
     registry.register("eq_Any_1__Any_1__Boolean_1_", Eq);
     registry.register("equal_Any_MANY__Any_MANY__Boolean_1_", Equal);
     registry.register("lessThan_Number_1__Number_1__Boolean_1_", LessThan);
+    registry.register(
+        "lessThanEqual_Number_1__Number_1__Boolean_1_",
+        LessThanEqual,
+    );
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::native::{MockCtx, lit_float, lit_int, lit_str};
+    use crate::native::{MockCtx, lit_decimal, lit_float, lit_int, lit_str};
 
     #[test]
     fn less_than_integers() {
@@ -262,6 +284,35 @@ mod tests {
                 .unwrap()
                 .into_value(),
             Value::Boolean(true)
+        );
+    }
+
+    #[test]
+    fn less_than_equal_decimal_vs_float_promotes() {
+        // Repro of the `_range(0.5d, 2.5)` window-frame boundary check:
+        // a Decimal literal compared against a Float must promote and
+        // compare (Java parity), not error with "Cannot compare Decimal
+        // and Float". `0.5d <= 2.5` is true.
+        assert_eq!(
+            LessThanEqual
+                .execute(
+                    &[lit_decimal(Decimal::new(5, 1)), lit_float(2.5)],
+                    &mut MockCtx
+                )
+                .unwrap()
+                .into_value(),
+            Value::Boolean(true)
+        );
+        // And the reverse direction / a false case: `2.5 <= 0.5d` is false.
+        assert_eq!(
+            LessThanEqual
+                .execute(
+                    &[lit_float(2.5), lit_decimal(Decimal::new(5, 1))],
+                    &mut MockCtx
+                )
+                .unwrap()
+                .into_value(),
+            Value::Boolean(false)
         );
     }
 
