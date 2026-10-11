@@ -56,6 +56,8 @@ const FOR_ALL: &str = "forAll_T_MANY__Function_1__Boolean_1_";
 const INIT: &str = "init_T_MANY__T_MANY_";
 const LAST: &str = "last_T_MANY__T_$0_1$_";
 const PUT: &str = "put_Map_1__U_1__V_1__Map_1_";
+const PUT_ALL_PAIRS: &str = "putAll_Map_1__Pair_MANY__Map_1_";
+const PUT_ALL_MAP: &str = "putAll_Map_1__Map_1__Map_1_";
 const TIMES: &str = "times_Number_MANY__Number_1_";
 const EQ: &str = "eq_Any_1__Any_1__Boolean_1_";
 const PLUS: &str = "plus_Number_MANY__Number_1_";
@@ -652,5 +654,48 @@ fn put_returns_a_new_map_and_leaves_the_input_alone() {
     assert!(
         format!("{err:?}").contains("Map key must be a hashable"),
         "{err:?}"
+    );
+}
+
+#[test]
+fn put_all_merges_pairs_or_a_map_over_the_input() {
+    let model = model();
+    let registry = NativeRegistry::standard();
+    let mut eval = Evaluator::new(&model, &registry);
+    eval.context_mut().push_scope();
+    eval.context_mut()
+        .set("m", string_int_map(&[("key1", 0), ("key2", 0)]));
+    // Pairs made by zip: ['key2', 'key3']->zip([2, 3]).
+    let pairs = expr::call(ZIP, vec![strings(&["key2", "key3"]), ints(&[2, 3])]);
+    let merged = eval
+        .eval(&expr::call(PUT_ALL_PAIRS, vec![expr::var("m"), pairs]))
+        .unwrap();
+    assert_eq!(
+        string_int_entries(&merged),
+        [
+            ("key1".to_string(), 0),
+            ("key2".to_string(), 2),
+            ("key3".to_string(), 3)
+        ]
+    );
+    // No pairs: the same entries in a new map.
+    let unchanged = eval
+        .eval(&expr::call(PUT_ALL_PAIRS, vec![expr::var("m"), ints(&[])]))
+        .unwrap();
+    assert_eq!(
+        string_int_entries(&unchanged),
+        [("key1".to_string(), 0), ("key2".to_string(), 0)]
+    );
+    // The Map overload.
+    eval.context_mut().set("o", string_int_map(&[("key1", 9)]));
+    let from_map = eval
+        .eval(&expr::call(
+            PUT_ALL_MAP,
+            vec![expr::var("m"), expr::var("o")],
+        ))
+        .unwrap();
+    assert_eq!(
+        string_int_entries(&from_map),
+        [("key1".to_string(), 9), ("key2".to_string(), 0)]
     );
 }

@@ -960,6 +960,87 @@ impl NativeFunction for Put {
     }
 }
 
+/// Pure `putAll<U,V>(m:Map<U,V>[1], pairs:Pair<U,V>[*]):Map<U,V>[1]` /
+/// `putAll<U,V>(m:Map<U,V>[1], o:Map<U,V>[1]):Map<U,V>[1]`
+///
+/// Returns a fresh map with all entries of `m` plus every entry from the
+/// second argument (collection of `Pair` objects or another `Map`). The
+/// second argument's bindings overwrite colliding keys in `m`.
+#[derive(Debug)]
+pub struct PutAll;
+
+impl NativeFunction for PutAll {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("putAll", &values, 2)?;
+        let Value::Map(base) = &values[0] else {
+            return Err(PureRuntimeError::type_mismatch("Map", &values[0]).into());
+        };
+        // Clone the base entries; HAMT structural sharing keeps this O(1).
+        let mut updated: im_rc::HashMap<ValueKey, Value> = base.borrow().entries.clone();
+        match &values[1] {
+            Value::Map(other) => {
+                // Snapshot the other map's entries before iterating so we
+                // never hold a borrow on `other` across the insertion loop
+                // (and so `other == base` aliasing stays sound).
+                let other_entries: Vec<(ValueKey, Value)> = other
+                    .borrow()
+                    .entries
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect();
+                for (k, v) in other_entries {
+                    updated.insert(k, v);
+                }
+            }
+            other => {
+                for pair in &other.to_collection() {
+                    let (k, v) = pair_first_second(ctx, pair, "putAll")?;
+                    updated.insert(value_to_key(&k, ctx)?, v);
+                }
+            }
+        }
+        Ok(Evaluated::new(Value::Map(new_map_cell(updated, 0))))
+    }
+}
+
+/// Read the `first` / `second` properties of a `Pair` heap object. Emits
+/// a consistent error message tagged with the caller's native name so
+/// failure traces point at the right native.
+#[allow(clippy::result_large_err)]
+fn pair_first_second(
+    ctx: &mut dyn EvalContextTrait,
+    pair: &Value,
+    native_name: &'static str,
+) -> Result<(Value, Value), PureException> {
+    let Value::Object(obj_id) = pair else {
+        return Err(PureRuntimeError::EvaluationError(format!(
+            "{native_name}: expected Pair<U,V>, got {}",
+            pair.type_name()
+        ))
+        .into());
+    };
+    let first_vals = ctx.heap().get_property_values(&obj_id.clone(), "first")?;
+    let second_vals = ctx.heap().get_property_values(&obj_id.clone(), "second")?;
+    let Some(k) = first_vals.iter().next() else {
+        return Err(PureRuntimeError::EvaluationError(format!(
+            "{native_name}: Pair.first is empty"
+        ))
+        .into());
+    };
+    let Some(v) = second_vals.iter().next() else {
+        return Err(PureRuntimeError::EvaluationError(format!(
+            "{native_name}: Pair.second is empty"
+        ))
+        .into());
+    };
+    Ok((k.clone(), v.clone()))
+}
+
 /// Register the fished collection natives.
 pub fn register(registry: &mut NativeRegistry) {
     registry.register("fold_T_MANY__Function_1__V_m__V_m_", Fold);
@@ -994,6 +1075,8 @@ pub fn register(registry: &mut NativeRegistry) {
     registry.register("init_T_MANY__T_MANY_", Init);
     registry.register("last_T_MANY__T_$0_1$_", Last);
     registry.register("put_Map_1__U_1__V_1__Map_1_", Put);
+    registry.register("putAll_Map_1__Pair_MANY__Map_1_", PutAll);
+    registry.register("putAll_Map_1__Map_1__Map_1_", PutAll);
 }
 
 #[cfg(test)]
