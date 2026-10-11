@@ -558,6 +558,28 @@ impl NativeFunction for ToDecimal {
     }
 }
 
+/// Pure `parseInteger(String[1]):Integer[1]` — decimal string → `Integer`.
+///
+/// Returns an `EvaluationError` if the string is not a valid `i64`.
+#[derive(Debug)]
+pub struct ParseInteger;
+
+impl NativeFunction for ParseInteger {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("parseInteger", &values, 1)?;
+        let s = values[0].as_string()?;
+        let n = s.parse::<i64>().map_err(|e| {
+            PureRuntimeError::EvaluationError(format!("parseInteger: cannot parse {s:?}: {e}"))
+        })?;
+        Ok(Evaluated::new(Value::Integer(n)))
+    }
+}
+
 /// Pure `parseFloat(String[1]):Float[1]` — decimal string → `Float`.
 ///
 /// Returns an `EvaluationError` if the string is not a valid `f64`.
@@ -649,6 +671,7 @@ pub fn register(registry: &mut NativeRegistry) {
     registry.register("toDecimal_Number_1__Decimal_1_", ToDecimal);
 
     // string parsing
+    registry.register("parseInteger_String_1__Integer_1_", ParseInteger);
     registry.register("parseFloat_String_1__Float_1_", ParseFloat);
     registry.register("parseBoolean_String_1__Boolean_1_", ParseBoolean);
 }
@@ -1341,6 +1364,41 @@ mod tests {
     #[test]
     fn to_decimal_type_mismatch() {
         assert!(ToDecimal.execute(&[lit_str("x")], &mut MockCtx).is_err());
+    }
+
+    #[test]
+    fn parse_integer_positive() {
+        let r = ParseInteger
+            .execute(&[lit_str("123")], &mut MockCtx)
+            .unwrap();
+        assert_eq!(r.into_value(), Value::Integer(123));
+    }
+
+    #[test]
+    fn parse_integer_negative() {
+        let r = ParseInteger
+            .execute(&[lit_str("-42")], &mut MockCtx)
+            .unwrap();
+        assert_eq!(r.into_value(), Value::Integer(-42));
+    }
+
+    #[test]
+    fn parse_integer_invalid_errors() {
+        assert!(
+            ParseInteger
+                .execute(&[lit_str("abc")], &mut MockCtx)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn parse_integer_wrong_arg_count() {
+        assert!(ParseInteger.execute(&[], &mut MockCtx).is_err());
+    }
+
+    #[test]
+    fn parse_integer_type_mismatch() {
+        assert!(ParseInteger.execute(&[lit_int(1)], &mut MockCtx).is_err());
     }
 
     #[test]

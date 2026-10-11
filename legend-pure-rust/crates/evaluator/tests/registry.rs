@@ -84,6 +84,7 @@ const FISHED: &[&str] = &[
     "atan2_Number_1__Number_1__Float_1_",
     "toFloat_Number_1__Float_1_",
     "toDecimal_Number_1__Decimal_1_",
+    "parseInteger_String_1__Integer_1_",
     "parseFloat_String_1__Float_1_",
     "parseBoolean_String_1__Boolean_1_",
     // testing

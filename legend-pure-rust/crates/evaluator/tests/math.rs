@@ -34,6 +34,8 @@ const SQRT: &str = "sqrt_Number_1__Float_1_";
 const ASIN: &str = "asin_Number_1__Float_1_";
 const ACOS: &str = "acos_Number_1__Float_1_";
 const TO_DECIMAL: &str = "toDecimal_Number_1__Decimal_1_";
+const PARSE_INTEGER: &str = "parseInteger_String_1__Integer_1_";
+const PARSE_FLOAT: &str = "parseFloat_String_1__Float_1_";
 const LESS_THAN: &str = "lessThan_Number_1__Number_1__Boolean_1_";
 const COMPARE: &str = "compare_T_1__T_1__Integer_1_";
 const REM: &str = "rem_Number_1__Number_1__Number_1_";
@@ -248,5 +250,27 @@ fn acos_and_asin_out_of_domain_report_java_s_text() {
     assert_eq!(
         evaluation_error(&expr::call(ASIN, vec![expr::float(2.0)])),
         "Unable to compute asin of 2.0"
+    );
+}
+
+#[test]
+#[allow(clippy::approx_constant)] // 3.14159 is testParseFloat's literal, not π
+fn parse_natives_accept_java_s_signed_zero_padded_forms() {
+    // testParseInteger: `parseInteger('+00000017')`, `parseInteger('-17')`.
+    assert_eq!(
+        run(&expr::call(PARSE_INTEGER, vec![expr::string("+00000017")])),
+        Value::Integer(17)
+    );
+    assert_eq!(
+        run(&expr::call(PARSE_INTEGER, vec![expr::string("-17")])),
+        Value::Integer(-17)
+    );
+    // testParseFloat: `parseFloat('+0000003.1415900000')`.
+    assert_eq!(
+        run(&expr::call(
+            PARSE_FLOAT,
+            vec![expr::string("+0000003.1415900000")]
+        )),
+        Value::Float(3.14159)
     );
 }
