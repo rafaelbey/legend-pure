@@ -36,8 +36,9 @@ from it, `platform/pure/grammar/m3.pure`, as its bootstrap.
   `Rust_JNI essential: 303 / 327`, `Rust_JNI grammar: 126 / 136`. The module's manifests
   rank what is left by kind: `FunctionNotFound:` (nothing registered),
   `NotImplemented:` (registered under its key, body not fished), `Unsupported:`
-  (lowering or value-shape gap), then bare Pure error texts. Next: natives round 2 on
-  that residue, then Step 3 (PELT); Steps 3–7 are in the plan.
+  (lowering or value-shape gap), then bare Pure error texts. Next: Step 2b (the
+  evaluator's own cost: clone, operands, variable slots, dispatch), then natives
+  round 2 on that residue, then Step 3 (PELT); Steps 3–7 are in the plan.
 - Build and test: `cargo build --workspace`, `cargo test --workspace` inside
   `legend-pure-rust/`; then `mvn -pl legend-pure-runtime/legend-pure-runtime-rust-evaluator
   clean verify` for the boundary tests and the PCT suites. CI: `.github/workflows/rust.yml`.
