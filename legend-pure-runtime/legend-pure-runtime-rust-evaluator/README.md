@@ -39,6 +39,7 @@ Java engines and runs the platform corpus through each.
 | `pct.Test_RustJni_{Essential,Grammar}Functions_PCT` | The interpreted engine's PCT suites with the `Rust_JNI` adapter (surveyor path). Each prints `Rust_JNI <scope>: <passes> / <total>`. |
 | `pct.Test_RustJniCompiled_{Essential,Grammar}Functions_PCT` | The same corpus through the compiled engine; prints `Rust_JNI <scope> (compiled): <passes> / <total>`. The compiled platform classes come from the engine's test-jar. |
 | `pct.RebaseRustJniManifests` | Regenerates the four manifests from a surveyor run per engine; not in the default surefire run. |
+| `pct.BenchmarkPctExpressions` | Times every PCT test under the four modes (each engine with its own adapter and with `Rust_JNI`): first run, median and minimum per test to `target/benchmarks/pct-expressions.csv`, a summary per mode to `pct-expressions.md`. Not in the default run; `-Dtest=BenchmarkPctExpressions -DfailIfNoTests=false`, with `-Dlegend.rust.libdir=…/target/release` after `cargo build --release` for an optimised Rust side. |
 | `pct.Core_RustJni_PCTReportProvider` | Publishes `pct-reports/ADAPTER_{essential,grammar}_{interpreted,compiled}_Rust_JNI.json`, written at `process-test-classes` by each engine's `PCTReportGenerator` from the manifests alone (no Rust library needed). |
 
 Manifests: `src/test/resources/platform/pure/essential/pct_essential_{interpreted,compiled}_rust_jni.json`

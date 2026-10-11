@@ -615,9 +615,11 @@ per-value `NodeDescription`, read through about fifteen JNI field calls plus
 a string copy per text field, and the `getKeys()` array built for every
 node. Numbers cross as decimal text both ways, `RustNodeBridge.nodes` pins
 every described node until `close`, and every lazy read re-attaches the
-thread. Lowering now walks whole bodies (2026-10-10); profiling the PCT run
-is the next thing after natives round 2, and the list below is the menu,
-roughly in order of payoff per line:
+thread. Lowering now walks whole bodies (2026-10-10); the measuring tool is
+the module's `BenchmarkPctExpressions` (2026-10-11: every PCT test timed
+under each engine with its own adapter and with `Rust_JNI`, first run apart
+from the warm median), and the list below is the menu, roughly in order of
+payoff per line:
 
 - *Columnar description*: `describe` / `propertyValues` return one `long[]`
   (kind, id, classifier id, date components) plus a `String[]` of the
