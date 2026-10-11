@@ -383,6 +383,61 @@ pub fn expect_args<T>(func_name: &str, args: &[T], expected: usize) -> Result<()
     Ok(())
 }
 
+fn arity(func_name: &str, args: &[ValueSpec], expected: usize) -> Result<(), PureException> {
+    if args.len() != expected {
+        return Err(PureRuntimeError::EvaluationError(format!(
+            "{func_name}: expected {expected} argument(s), got {}",
+            args.len()
+        ))
+        .into());
+    }
+    Ok(())
+}
+
+/// Force the one argument of a one-argument native, without a vector.
+///
+/// # Errors
+/// The arity is wrong, or the argument fails to evaluate.
+pub fn force1(
+    func_name: &str,
+    args: &[ValueSpec],
+    ctx: &mut dyn EvalContextTrait,
+) -> Result<Value, PureException> {
+    arity(func_name, args, 1)?;
+    Ok(ctx.evaluate(&args[0])?.into_value())
+}
+
+/// Force the two arguments of a two-argument native, without a vector.
+///
+/// # Errors
+/// The arity is wrong, or an argument fails to evaluate.
+pub fn force2(
+    func_name: &str,
+    args: &[ValueSpec],
+    ctx: &mut dyn EvalContextTrait,
+) -> Result<(Value, Value), PureException> {
+    arity(func_name, args, 2)?;
+    let first = ctx.evaluate(&args[0])?.into_value();
+    let second = ctx.evaluate(&args[1])?.into_value();
+    Ok((first, second))
+}
+
+/// Force the three arguments of a three-argument native, without a vector.
+///
+/// # Errors
+/// The arity is wrong, or an argument fails to evaluate.
+pub fn force3(
+    func_name: &str,
+    args: &[ValueSpec],
+    ctx: &mut dyn EvalContextTrait,
+) -> Result<(Value, Value, Value), PureException> {
+    arity(func_name, args, 3)?;
+    let first = ctx.evaluate(&args[0])?.into_value();
+    let second = ctx.evaluate(&args[1])?.into_value();
+    let third = ctx.evaluate(&args[2])?.into_value();
+    Ok((first, second, third))
+}
+
 /// Validate that at least `min` arguments were provided.
 ///
 /// # Errors

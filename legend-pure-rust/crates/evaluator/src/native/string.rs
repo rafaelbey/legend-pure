@@ -24,7 +24,7 @@ use smol_str::SmolStr;
 
 use crate::error::{PureException, PureRuntimeError};
 use crate::native::{
-    EvalContextTrait, Evaluated, NativeFunction, NativeRegistry, expect_args, force_all,
+    EvalContextTrait, Evaluated, NativeFunction, NativeRegistry, force_all, force1, force2, force3,
 };
 use crate::value::Value;
 
@@ -48,9 +48,8 @@ impl NativeFunction for ToString {
         args: &[ValueSpec],
         ctx: &mut dyn EvalContextTrait,
     ) -> Result<Evaluated, PureException> {
-        let values = force_all(args, ctx)?;
-        expect_args("toString", &values, 1)?;
-        let s = pure_to_string(&values[0], ctx)?;
+        let a0 = force1("toString", args, ctx)?;
+        let s = pure_to_string(&a0, ctx)?;
         Ok(Evaluated::new(Value::String(SmolStr::new(s))))
     }
 }
@@ -232,11 +231,10 @@ impl NativeFunction for Format {
         args: &[ValueSpec],
         ctx: &mut dyn EvalContextTrait,
     ) -> Result<Evaluated, PureException> {
-        let values = force_all(args, ctx)?;
-        expect_args("format", &values, 2)?;
-        let template = values[0].as_string()?.to_string();
+        let (a0, a1) = force2("format", args, ctx)?;
+        let template = a0.as_string()?.to_string();
 
-        let subs: Vec<Value> = match &values[1] {
+        let subs: Vec<Value> = match &a1 {
             Value::Collection(v) => v.iter().cloned().collect(),
             single => vec![single.clone()],
         };
@@ -649,10 +647,9 @@ impl NativeFunction for StartsWith {
         args: &[ValueSpec],
         ctx: &mut dyn EvalContextTrait,
     ) -> Result<Evaluated, PureException> {
-        let values = force_all(args, ctx)?;
-        expect_args("startsWith", &values, 2)?;
-        let s = values[0].as_string()?;
-        let prefix = values[1].as_string()?;
+        let (a0, a1) = force2("startsWith", args, ctx)?;
+        let s = a0.as_string()?;
+        let prefix = a1.as_string()?;
         Ok(Evaluated::new(Value::Boolean(
             s.starts_with(prefix.as_str()),
         )))
@@ -730,10 +727,9 @@ impl NativeFunction for Contains {
         args: &[ValueSpec],
         ctx: &mut dyn EvalContextTrait,
     ) -> Result<Evaluated, PureException> {
-        let values = force_all(args, ctx)?;
-        expect_args("contains", &values, 2)?;
-        let s = values[0].as_string()?;
-        let sub = values[1].as_string()?;
+        let (a0, a1) = force2("contains", args, ctx)?;
+        let s = a0.as_string()?;
+        let sub = a1.as_string()?;
         Ok(Evaluated::new(Value::Boolean(s.contains(sub.as_str()))))
     }
 }
@@ -748,10 +744,9 @@ impl NativeFunction for EndsWith {
         args: &[ValueSpec],
         ctx: &mut dyn EvalContextTrait,
     ) -> Result<Evaluated, PureException> {
-        let values = force_all(args, ctx)?;
-        expect_args("endsWith", &values, 2)?;
-        let s = values[0].as_string()?;
-        let suffix = values[1].as_string()?;
+        let (a0, a1) = force2("endsWith", args, ctx)?;
+        let s = a0.as_string()?;
+        let suffix = a1.as_string()?;
         Ok(Evaluated::new(Value::Boolean(s.ends_with(suffix.as_str()))))
     }
 }
@@ -766,9 +761,8 @@ impl NativeFunction for Length {
         args: &[ValueSpec],
         ctx: &mut dyn EvalContextTrait,
     ) -> Result<Evaluated, PureException> {
-        let values = force_all(args, ctx)?;
-        expect_args("length", &values, 1)?;
-        let s = values[0].as_string()?;
+        let a0 = force1("length", args, ctx)?;
+        let s = a0.as_string()?;
         Ok(Evaluated::new(Value::Integer(
             i64::try_from(utf16_len(s)).unwrap_or(i64::MAX),
         )))
@@ -790,10 +784,9 @@ impl NativeFunction for Split {
         args: &[ValueSpec],
         ctx: &mut dyn EvalContextTrait,
     ) -> Result<Evaluated, PureException> {
-        let values = force_all(args, ctx)?;
-        expect_args("split", &values, 2)?;
-        let s = values[0].as_string()?;
-        let token = values[1].as_string()?;
+        let (a0, a1) = force2("split", args, ctx)?;
+        let s = a0.as_string()?;
+        let token = a1.as_string()?;
         let parts: Vec<Value> = s
             .split(token.as_str())
             .map(|p| Value::String(SmolStr::new(p)))
@@ -851,11 +844,10 @@ impl NativeFunction for Replace {
         args: &[ValueSpec],
         ctx: &mut dyn EvalContextTrait,
     ) -> Result<Evaluated, PureException> {
-        let values = force_all(args, ctx)?;
-        expect_args("replace", &values, 3)?;
-        let source = values[0].as_string()?;
-        let target = values[1].as_string()?;
-        let replacement = values[2].as_string()?;
+        let (a0, a1, a2) = force3("replace", args, ctx)?;
+        let source = a0.as_string()?;
+        let target = a1.as_string()?;
+        let replacement = a2.as_string()?;
         let out = source
             .as_str()
             .replace(target.as_str(), replacement.as_str());
@@ -875,9 +867,8 @@ impl NativeFunction for ReverseString {
         args: &[ValueSpec],
         ctx: &mut dyn EvalContextTrait,
     ) -> Result<Evaluated, PureException> {
-        let values = force_all(args, ctx)?;
-        expect_args("reverseString", &values, 1)?;
-        let s = values[0].as_string()?;
+        let a0 = force1("reverseString", args, ctx)?;
+        let s = a0.as_string()?;
         let reversed: String = s.chars().rev().collect();
         Ok(Evaluated::new(Value::String(SmolStr::new(reversed))))
     }
@@ -893,9 +884,8 @@ impl NativeFunction for ToLower {
         args: &[ValueSpec],
         ctx: &mut dyn EvalContextTrait,
     ) -> Result<Evaluated, PureException> {
-        let values = force_all(args, ctx)?;
-        expect_args("toLower", &values, 1)?;
-        let s = values[0].as_string()?;
+        let a0 = force1("toLower", args, ctx)?;
+        let s = a0.as_string()?;
         Ok(Evaluated::new(Value::String(SmolStr::new(
             s.to_lowercase(),
         ))))
@@ -912,9 +902,8 @@ impl NativeFunction for ToUpper {
         args: &[ValueSpec],
         ctx: &mut dyn EvalContextTrait,
     ) -> Result<Evaluated, PureException> {
-        let values = force_all(args, ctx)?;
-        expect_args("toUpper", &values, 1)?;
-        let s = values[0].as_string()?;
+        let a0 = force1("toUpper", args, ctx)?;
+        let s = a0.as_string()?;
         Ok(Evaluated::new(Value::String(SmolStr::new(
             s.to_uppercase(),
         ))))
@@ -931,9 +920,8 @@ impl NativeFunction for Ltrim {
         args: &[ValueSpec],
         ctx: &mut dyn EvalContextTrait,
     ) -> Result<Evaluated, PureException> {
-        let values = force_all(args, ctx)?;
-        expect_args("ltrim", &values, 1)?;
-        let s = values[0].as_string()?;
+        let a0 = force1("ltrim", args, ctx)?;
+        let s = a0.as_string()?;
         Ok(Evaluated::new(Value::String(SmolStr::new(s.trim_start()))))
     }
 }
@@ -948,9 +936,8 @@ impl NativeFunction for Rtrim {
         args: &[ValueSpec],
         ctx: &mut dyn EvalContextTrait,
     ) -> Result<Evaluated, PureException> {
-        let values = force_all(args, ctx)?;
-        expect_args("rtrim", &values, 1)?;
-        let s = values[0].as_string()?;
+        let a0 = force1("rtrim", args, ctx)?;
+        let s = a0.as_string()?;
         Ok(Evaluated::new(Value::String(SmolStr::new(s.trim_end()))))
     }
 }
@@ -965,9 +952,8 @@ impl NativeFunction for Trim {
         args: &[ValueSpec],
         ctx: &mut dyn EvalContextTrait,
     ) -> Result<Evaluated, PureException> {
-        let values = force_all(args, ctx)?;
-        expect_args("trim", &values, 1)?;
-        let s = values[0].as_string()?;
+        let a0 = force1("trim", args, ctx)?;
+        let s = a0.as_string()?;
         Ok(Evaluated::new(Value::String(SmolStr::new(s.trim()))))
     }
 }

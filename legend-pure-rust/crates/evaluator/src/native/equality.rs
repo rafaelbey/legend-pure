@@ -62,6 +62,9 @@ type HandlePtr = *const RefCell<HeapEntry>;
 /// graphs.
 #[must_use]
 pub fn values_equal(ctx: &dyn EvalContextTrait, a: &Value, b: &Value) -> bool {
+    if is_leaf(a) && is_leaf(b) {
+        return a == b;
+    }
     let mut work: Vec<(Value, Value)> = vec![(a.clone(), b.clone())];
     let mut seen: HashSet<(HandlePtr, HandlePtr)> = HashSet::new();
     while let Some((x, y)) = work.pop() {
@@ -70,6 +73,20 @@ pub fn values_equal(ctx: &dyn EvalContextTrait, a: &Value, b: &Value) -> bool {
         }
     }
     true
+}
+
+/// A value with no structure to walk: two of them compare by value.
+fn is_leaf(v: &Value) -> bool {
+    !matches!(
+        v,
+        Value::Collection(_)
+            | Value::Object(_)
+            | Value::Element(_)
+            | Value::Function(_)
+            | Value::Unit
+            | Value::UnitInstance { .. }
+            | Value::Map(_)
+    )
 }
 
 /// Single comparison step. Pushes child pairs onto `work` instead of

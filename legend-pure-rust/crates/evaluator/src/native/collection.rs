@@ -26,7 +26,8 @@ use smol_str::SmolStr;
 use crate::error::{PureException, PureRuntimeError};
 use crate::heap::ObjectHandle;
 use crate::native::{
-    EvalContextTrait, Evaluated, NativeFunction, NativeRegistry, expect_args, force_all,
+    EvalContextTrait, Evaluated, NativeFunction, NativeRegistry, expect_args, force_all, force1,
+    force2, force3,
 };
 use crate::value::{MapState, Value, ValueKey};
 
@@ -65,11 +66,10 @@ impl NativeFunction for Take {
         args: &[ValueSpec],
         ctx: &mut dyn EvalContextTrait,
     ) -> Result<Evaluated, PureException> {
-        let values = force_all(args, ctx)?;
-        expect_args("take", &values, 2)?;
-        let coll = values[0].to_collection();
+        let (a0, a1) = force2("take", args, ctx)?;
+        let coll = a0.to_collection();
         #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
-        let n = values[1].as_integer()?.max(0) as usize;
+        let n = a1.as_integer()?.max(0) as usize;
         let n = n.min(coll.len());
         Ok(Evaluated::new(Value::Collection(Box::new(coll.take(n)))))
     }
@@ -85,11 +85,10 @@ impl NativeFunction for Drop {
         args: &[ValueSpec],
         ctx: &mut dyn EvalContextTrait,
     ) -> Result<Evaluated, PureException> {
-        let values = force_all(args, ctx)?;
-        expect_args("drop", &values, 2)?;
-        let coll = values[0].to_collection();
+        let (a0, a1) = force2("drop", args, ctx)?;
+        let coll = a0.to_collection();
         #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
-        let n = values[1].as_integer()?.max(0) as usize;
+        let n = a1.as_integer()?.max(0) as usize;
         let n = n.min(coll.len());
         Ok(Evaluated::new(Value::Collection(Box::new(coll.skip(n)))))
     }
@@ -110,10 +109,9 @@ impl NativeFunction for Zip {
         args: &[ValueSpec],
         ctx: &mut dyn EvalContextTrait,
     ) -> Result<Evaluated, PureException> {
-        let values = force_all(args, ctx)?;
-        expect_args("zip", &values, 2)?;
-        let xs = collection_as_vec(&values[0]);
-        let ys = collection_as_vec(&values[1]);
+        let (a0, a1) = force2("zip", args, ctx)?;
+        let xs = collection_as_vec(&a0);
+        let ys = collection_as_vec(&a1);
         let n = xs.len().min(ys.len());
         let mut out: Vec<Value> = Vec::with_capacity(n);
         for i in 0..n {
@@ -147,9 +145,8 @@ impl NativeFunction for First {
         args: &[ValueSpec],
         ctx: &mut dyn EvalContextTrait,
     ) -> Result<Evaluated, PureException> {
-        let values = force_all(args, ctx)?;
-        expect_args("first", &values, 1)?;
-        let result = match &values[0] {
+        let a0 = force1("first", args, ctx)?;
+        let result = match &a0 {
             Value::Collection(v) => v.front().cloned().unwrap_or(Value::Unit),
             Value::Unit => Value::Unit,
             other => other.clone(),
@@ -328,9 +325,8 @@ impl NativeFunction for Size {
         args: &[ValueSpec],
         ctx: &mut dyn EvalContextTrait,
     ) -> Result<Evaluated, PureException> {
-        let values = force_all(args, ctx)?;
-        expect_args("size", &values, 1)?;
-        let coll = values[0].to_collection();
+        let a0 = force1("size", args, ctx)?;
+        let coll = a0.to_collection();
         #[allow(clippy::cast_possible_wrap)]
         Ok(Evaluated::new(Value::Integer(coll.len() as i64)))
     }
@@ -442,11 +438,10 @@ impl NativeFunction for Slice {
         args: &[ValueSpec],
         ctx: &mut dyn EvalContextTrait,
     ) -> Result<Evaluated, PureException> {
-        let values = force_all(args, ctx)?;
-        expect_args("slice", &values, 3)?;
-        let source = values[0].to_collection();
-        let start = values[1].as_integer()?;
-        let end = values[2].as_integer()?;
+        let (a0, a1, a2) = force3("slice", args, ctx)?;
+        let source = a0.to_collection();
+        let start = a1.as_integer()?;
+        let end = a2.as_integer()?;
 
         if start > end {
             return Err(PureRuntimeError::EvaluationError(format!(
@@ -516,10 +511,9 @@ impl NativeFunction for At {
         args: &[ValueSpec],
         ctx: &mut dyn EvalContextTrait,
     ) -> Result<Evaluated, PureException> {
-        let values = force_all(args, ctx)?;
-        expect_args("at", &values, 2)?;
-        let coll = values[0].to_collection();
-        let idx = values[1].as_integer()?;
+        let (a0, a1) = force2("at", args, ctx)?;
+        let coll = a0.to_collection();
+        let idx = a1.as_integer()?;
         if idx < 0 {
             return Err(PureRuntimeError::EvaluationError(format!(
                 "at: index cannot be negative, got {idx}"
@@ -609,9 +603,8 @@ impl NativeFunction for Tail {
         args: &[ValueSpec],
         ctx: &mut dyn EvalContextTrait,
     ) -> Result<Evaluated, PureException> {
-        let values = force_all(args, ctx)?;
-        expect_args("tail", &values, 1)?;
-        let result = match &values[0] {
+        let a0 = force1("tail", args, ctx)?;
+        let result = match &a0 {
             Value::Collection(v) => {
                 if v.is_empty() {
                     Value::Unit
@@ -692,10 +685,9 @@ impl NativeFunction for Concatenate {
         args: &[ValueSpec],
         ctx: &mut dyn EvalContextTrait,
     ) -> Result<Evaluated, PureException> {
-        let values = force_all(args, ctx)?;
-        expect_args("concatenate", &values, 2)?;
-        let mut a = values[0].to_collection();
-        let b = values[1].to_collection();
+        let (a0, a1) = force2("concatenate", args, ctx)?;
+        let mut a = a0.to_collection();
+        let b = a1.to_collection();
         a.append(b);
         Ok(Evaluated::new(Value::Collection(Box::new(a))))
     }
@@ -744,9 +736,8 @@ impl NativeFunction for Init {
         args: &[ValueSpec],
         ctx: &mut dyn EvalContextTrait,
     ) -> Result<Evaluated, PureException> {
-        let values = force_all(args, ctx)?;
-        expect_args("init", &values, 1)?;
-        let result = match &values[0] {
+        let a0 = force1("init", args, ctx)?;
+        let result = match &a0 {
             Value::Collection(v) => {
                 if v.is_empty() {
                     Value::Unit
@@ -773,9 +764,8 @@ impl NativeFunction for Last {
         args: &[ValueSpec],
         ctx: &mut dyn EvalContextTrait,
     ) -> Result<Evaluated, PureException> {
-        let values = force_all(args, ctx)?;
-        expect_args("last", &values, 1)?;
-        let result = match &values[0] {
+        let a0 = force1("last", args, ctx)?;
+        let result = match &a0 {
             Value::Collection(v) => v.back().cloned().unwrap_or(Value::Unit),
             Value::Unit => Value::Unit,
             other => other.clone(),
@@ -942,12 +932,11 @@ impl NativeFunction for Get {
         args: &[ValueSpec],
         ctx: &mut dyn EvalContextTrait,
     ) -> Result<Evaluated, PureException> {
-        let values = force_all(args, ctx)?;
-        expect_args("get", &values, 2)?;
-        let Value::Map(m) = &values[0] else {
-            return Err(PureRuntimeError::type_mismatch("Map", &values[0]).into());
+        let (a0, a1) = force2("get", args, ctx)?;
+        let Value::Map(m) = &a0 else {
+            return Err(PureRuntimeError::type_mismatch("Map", &a0).into());
         };
-        let key = value_to_key(&values[1], ctx)?;
+        let key = value_to_key(&a1, ctx)?;
         match m.borrow().entries.get(&key) {
             Some(v) => Ok(Evaluated::new(v.clone())),
             None => Ok(Evaluated::new(Value::Unit)),
@@ -971,14 +960,13 @@ impl NativeFunction for Put {
         args: &[ValueSpec],
         ctx: &mut dyn EvalContextTrait,
     ) -> Result<Evaluated, PureException> {
-        let values = force_all(args, ctx)?;
-        expect_args("put", &values, 3)?;
-        let Value::Map(m) = &values[0] else {
-            return Err(PureRuntimeError::type_mismatch("Map", &values[0]).into());
+        let (a0, a1, a2) = force3("put", args, ctx)?;
+        let Value::Map(m) = &a0 else {
+            return Err(PureRuntimeError::type_mismatch("Map", &a0).into());
         };
-        let key = value_to_key(&values[1], ctx)?;
+        let key = value_to_key(&a1, ctx)?;
         let mut updated = m.borrow().entries.clone();
-        updated.insert(key, values[2].clone());
+        updated.insert(key, a2.clone());
         Ok(Evaluated::new(Value::Map(new_map_cell(updated, 0))))
     }
 }
@@ -997,10 +985,9 @@ impl NativeFunction for Keys {
         args: &[ValueSpec],
         ctx: &mut dyn EvalContextTrait,
     ) -> Result<Evaluated, PureException> {
-        let values = force_all(args, ctx)?;
-        expect_args("keys", &values, 1)?;
-        let Value::Map(m) = &values[0] else {
-            return Err(PureRuntimeError::type_mismatch("Map", &values[0]).into());
+        let a0 = force1("keys", args, ctx)?;
+        let Value::Map(m) = &a0 else {
+            return Err(PureRuntimeError::type_mismatch("Map", &a0).into());
         };
         let state = m.borrow();
         let items: Vec<Value> = state.entries.keys().map(key_to_value).collect();
@@ -1050,13 +1037,12 @@ impl NativeFunction for PutAll {
         args: &[ValueSpec],
         ctx: &mut dyn EvalContextTrait,
     ) -> Result<Evaluated, PureException> {
-        let values = force_all(args, ctx)?;
-        expect_args("putAll", &values, 2)?;
-        let Value::Map(base) = &values[0] else {
-            return Err(PureRuntimeError::type_mismatch("Map", &values[0]).into());
+        let (a0, a1) = force2("putAll", args, ctx)?;
+        let Value::Map(base) = &a0 else {
+            return Err(PureRuntimeError::type_mismatch("Map", &a0).into());
         };
         let mut updated: im_rc::HashMap<ValueKey, Value> = base.borrow().entries.clone();
-        match &values[1] {
+        match &a1 {
             Value::Map(other) => {
                 // Snapshot the other map's entries before iterating so we
                 // never hold a borrow on `other` across the insertion loop
@@ -1123,9 +1109,8 @@ impl NativeFunction for IsEmpty {
         args: &[ValueSpec],
         ctx: &mut dyn EvalContextTrait,
     ) -> Result<Evaluated, PureException> {
-        let values = force_all(args, ctx)?;
-        expect_args("isEmpty", &values, 1)?;
-        Ok(Evaluated::new(Value::Boolean(values[0].is_empty())))
+        let a0 = force1("isEmpty", args, ctx)?;
+        Ok(Evaluated::new(Value::Boolean(a0.is_empty())))
     }
 }
 
@@ -1184,9 +1169,8 @@ impl NativeFunction for Reverse {
         args: &[ValueSpec],
         ctx: &mut dyn EvalContextTrait,
     ) -> Result<Evaluated, PureException> {
-        let values = force_all(args, ctx)?;
-        expect_args("reverse", &values, 1)?;
-        let source = values[0].to_collection();
+        let a0 = force1("reverse", args, ctx)?;
+        let source = a0.to_collection();
         let reversed: Vec<Value> = source.iter().rev().cloned().collect();
         Ok(Evaluated::new(Value::from_vec(reversed)))
     }

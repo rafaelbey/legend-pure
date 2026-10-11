@@ -21,7 +21,7 @@ use rust_decimal::prelude::{FromPrimitive, ToPrimitive};
 
 use crate::error::{PureException, PureRuntimeError};
 use crate::native::{
-    EvalContextTrait, Evaluated, NativeFunction, NativeRegistry, expect_args, force_all,
+    EvalContextTrait, Evaluated, NativeFunction, NativeRegistry, force_all, force1, force2,
 };
 use crate::value::Value;
 
@@ -336,9 +336,8 @@ impl NativeFunction for Abs {
         args: &[ValueSpec],
         ctx: &mut dyn EvalContextTrait,
     ) -> Result<Evaluated, PureException> {
-        let values = force_all(args, ctx)?;
-        expect_args("abs", &values, 1)?;
-        let v = match &values[0] {
+        let a0 = force1("abs", args, ctx)?;
+        let v = match &a0 {
             Value::Integer(i) => i
                 .checked_abs()
                 .map(Value::Integer)
@@ -361,10 +360,9 @@ impl NativeFunction for Mod {
         args: &[ValueSpec],
         ctx: &mut dyn EvalContextTrait,
     ) -> Result<Evaluated, PureException> {
-        let values = force_all(args, ctx)?;
-        expect_args("mod", &values, 2)?;
-        let a = values[0].as_integer()?;
-        let b = values[1].as_integer()?;
+        let (a0, a1) = force2("mod", args, ctx)?;
+        let a = a0.as_integer()?;
+        let b = a1.as_integer()?;
         if b == 0 {
             return Err(PureRuntimeError::DivisionByZero.into());
         }
@@ -383,16 +381,15 @@ impl NativeFunction for Rem {
         args: &[ValueSpec],
         ctx: &mut dyn EvalContextTrait,
     ) -> Result<Evaluated, PureException> {
-        let values = force_all(args, ctx)?;
-        expect_args("rem", &values, 2)?;
-        let promoted = promote_pair(&values[0], &values[1]).ok_or_else(|| {
+        let (a0, a1) = force2("rem", args, ctx)?;
+        let promoted = promote_pair(&a0, &a1).ok_or_else(|| {
             PureRuntimeError::EvaluationError(format!(
                 "rem: unsupported types {} and {}",
-                values[0].type_name(),
-                values[1].type_name()
+                a0.type_name(),
+                a1.type_name()
             ))
         })?;
-        let dividend_str = crate::native::math::java_number_string(&values[0]);
+        let dividend_str = crate::native::math::java_number_string(&a0);
         let div_zero_err = || -> PureException {
             PureRuntimeError::EvaluationError(format!("Cannot divide {dividend_str} by zero"))
                 .into()
