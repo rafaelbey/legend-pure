@@ -62,6 +62,7 @@ const IS_EMPTY: &str = "isEmpty_Any_MANY__Boolean_1_";
 const ADD: &str = "add_T_MANY__T_1__T_$1_MANY$_";
 const ADD_AT: &str = "add_T_MANY__Integer_1__T_1__T_$1_MANY$_";
 const REVERSE: &str = "reverse_T_m__T_m_";
+const GET: &str = "get_Map_1__U_1__V_$0_1$_";
 const TIMES: &str = "times_Number_MANY__Number_1_";
 const EQ: &str = "eq_Any_1__Any_1__Boolean_1_";
 const PLUS: &str = "plus_Number_MANY__Number_1_";
@@ -760,4 +761,34 @@ fn reverse_flips_the_order() {
     assert_eq!(as_ints(&reverse(ints(&[1, 2, 3]))), [3, 2, 1]);
     assert_eq!(reverse(expr::int(7)), Value::Integer(7));
     assert_eq!(reverse(ints(&[])), Value::Unit);
+}
+
+#[test]
+fn get_reads_what_put_stored() {
+    let model = model();
+    let registry = NativeRegistry::standard();
+    let mut eval = Evaluator::new(&model, &registry);
+    eval.context_mut().push_scope();
+    eval.context_mut().set("m", string_int_map(&[("key1", 0)]));
+    // $m->put('key2', 2)->get('key2')
+    let put = expr::call(
+        PUT,
+        vec![expr::var("m"), expr::string("key2"), expr::int(2)],
+    );
+    assert_eq!(
+        eval.eval(&expr::call(GET, vec![put, expr::string("key2")]))
+            .unwrap(),
+        Value::Integer(2)
+    );
+    assert_eq!(
+        eval.eval(&expr::call(GET, vec![expr::var("m"), expr::string("key1")]))
+            .unwrap(),
+        Value::Integer(0)
+    );
+    // A missing key reads as nothing; the input map never saw key2.
+    assert_eq!(
+        eval.eval(&expr::call(GET, vec![expr::var("m"), expr::string("key2")]))
+            .unwrap(),
+        Value::Unit
+    );
 }

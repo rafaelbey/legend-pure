@@ -921,6 +921,32 @@ fn new_map_cell(
     }))
 }
 
+/// Pure `get<U,V>(m:Map<U,V>[1], key:U[1]):V[0..1]`
+///
+/// Returns the value bound to `key` or [`Value::Unit`] when the map has
+/// no mapping.
+#[derive(Debug)]
+pub struct Get;
+
+impl NativeFunction for Get {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("get", &values, 2)?;
+        let Value::Map(m) = &values[0] else {
+            return Err(PureRuntimeError::type_mismatch("Map", &values[0]).into());
+        };
+        let key = value_to_key(&values[1], ctx)?;
+        match m.borrow().entries.get(&key) {
+            Some(v) => Ok(Evaluated::new(v.clone())),
+            None => Ok(Evaluated::new(Value::Unit)),
+        }
+    }
+}
+
 /// Pure `put<U,V>(m:Map<U,V>[1], key:U[1], value:V[1]):Map<U,V>[1]`
 ///
 /// Returns a **new** map (fresh `Rc<RefCell<MapState>>`) carrying every
@@ -1160,6 +1186,7 @@ pub fn register(registry: &mut NativeRegistry) {
     registry.register("add_T_MANY__T_1__T_$1_MANY$_", Add);
     registry.register("add_T_MANY__Integer_1__T_1__T_$1_MANY$_", Add);
     registry.register("reverse_T_m__T_m_", Reverse);
+    registry.register("get_Map_1__U_1__V_$0_1$_", Get);
 }
 
 #[cfg(test)]
