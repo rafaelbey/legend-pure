@@ -167,6 +167,12 @@ flowchart LR
 - **Lowering.** Turning the generic node shape into the executable form. For
   declarations this is building type and property tables; for function bodies
   this is building an expression tree.
+- **Directory.** The index over a node source: path → node, classifier →
+  its instances, simple name → overloads, reference id → node, element →
+  module. It is what Java's `MetadataPelt` is (`MetadataIndex` +
+  `ElementLoader` + `ReferenceIdResolver`) and the one place where a PELT
+  store and a live Java graph genuinely differ. Nodes are read through it;
+  the executable form is *not* behind it (Step 4).
 - **Native.** A Pure function declared without a body. Each needs a Rust
   implementation.
 - **Fishing.** Copying one existing implementation (typically one native, or
@@ -230,11 +236,20 @@ Design rules that hold for every step:
   metric; a step that does not move it needs a reason.
 - **Lazy by element.** The directory (manifests) is read eagerly; an element's
   nodes are read and lowered the first time something touches it. Platform plus
-  engine is tens of thousands of elements; a request touches hundreds.
+  engine is tens of thousands of elements; a request touches hundreds. *Touch*
+  means a `start` call: each call lowers the transitive closure of what its
+  lambda references before it runs, and the model does not grow while it runs
+  (decided 2026-10-11, Step 4 "The directory").
 - **One node interface.** Everything downstream of "give me this node's
   classifier and properties" is identical whether the node came from PELT bytes
   or from a live Java object. This is what lets the engine's compiler output be
   consumed without a Rust compiler.
+- **One directory, two sources.** Above the node interface sits one
+  `Directory` trait (path → node, classifier → instances, name → overloads,
+  reference id → node) with a JNI implementation and a PELT implementation.
+  Below it, the executable form (`PureModel` and its chunks) is read directly
+  by the evaluator and is never behind a trait: the bootstrap and test-built
+  elements are born lowered and need no directory at all.
 - **Identity by path.** Elements are identified by their Pure path everywhere.
   A Java object that is a packageable element with a path the evaluator already
   knows *is* that element, not a copy of it.
@@ -637,7 +652,9 @@ knowledge of Pure semantics.
   elements from its manifest.
 
 **Integrates with.** The jars Maven already builds. Nothing in the Java build
-changes; the only Java code is the classloader callback below.
+changes; the only Java code is the classloader callback below. The readers
+and the reference-id parser are what the PELT `Directory` of Step 4 is built
+on; this crate itself knows no Pure semantics and no `metamodel` type.
 
 **Proves.** The format is fully understood. Gate: golden tests decoding every
 file in the platform's `target/classes` without error and round-tripping the
@@ -677,6 +694,8 @@ for every element without executing anything.
   paths.
 - A generic "property-bag element" for any classifier the lowering does not
   know (DSL metamodels, engine extensions), so *every* element is loadable.
+- The `Directory` trait and its PELT implementation (below); the lowering
+  takes a `&dyn Directory` and resolves references through it.
 
 **Integrates with.** Module dependencies and repository boundaries exactly as
 Java sees them; a store configuration pointing at a directory, jar list or
@@ -695,6 +714,58 @@ node view, with `ModelExtension` as the growth path into a chunk. This
 step adds the PELT node source behind that view, the directory and the
 indexes; constraints, associations, profiles and the property-bag element
 are still to lower.
+
+**The directory (decided 2026-10-11).** Java's `Metadata` hands out
+`CoreInstance`s, which are at once the node you read and the thing you run.
+Rust keeps those apart, and only the first half still lacks an abstraction:
+
+- *Node.* `TypedObject` already is the node interface (`JavaNode` today, a
+  PELT-inflated node in this step). Nothing changes there.
+- *Model.* `PureModel` and its chunks are the sink, never a backend. The
+  evaluator reads them directly (about 76 sites, half in `eval.rs`) and the
+  PELT analysis rejected M3 instances or raw bytes as the in-memory model.
+  Do not put them behind a trait.
+- *Directory.* The missing piece, one trait in the evaluator crate
+  (`lower/directory.rs`), with these operations and nothing more until a
+  step asks: `node(path) -> Option<Node>` (an element by user path),
+  `resolve(reference_id) -> Option<Node>` (a node inside an element; the
+  Step 3 parser reads the id, the directory walks it, the lowering never
+  sees the string form), `overloads(simple_name) -> Vec<Node>`,
+  `instances(classifier) -> Vec<Node>`, `module_of(path) -> ModuleId`.
+  Two implementations: the PELT one in this step, over the Step 3 readers
+  (manifests, `.pfn`, `.pbr`, the element loader); the JNI one in Step 6, in
+  the `jni` crate, as bulk calls into the engine's indexes. The bridge today
+  needs none of it because Java hands the lowering every referenced object
+  already; it grows the JNI directory when Step 6 asks "who are the
+  instances of `X`".
+
+What this changes in the existing lowering, and it is small: `Lowering`
+takes a `&dyn Directory`, and the three places that follow a reference
+(`func`, `rawType`, `general`) accept a reference id in place of an object
+in hand. Everything after that point is the same code.
+
+*Routing.* The directory answers for definitions and instances alike, but
+they go to different places: definitions the evaluator reasons about by
+type (classes, enumerations, functions, associations, profiles) are lowered
+into `PureModel`; instances (a Mapping, a DSL node, a user object) stay heap
+`TypedObject`s and are never lowered. Step 6's definitions overlay and
+Step 7's property-bag element are this rule, not exceptions to it.
+
+*Chunks.* One chunk per manifest module; the directory is what knows module
+→ chunk. The bridge's single `bridge_chunk` stays as the chunk of the
+unnamed "live Java" module.
+
+*Eager per call, lazy later.* The directory is consulted while a `start`
+call lowers the transitive closure of its lambda (Phase A); it is not
+consulted while the lambda runs. `Evaluator<'model>` borrows the whole
+`PureModel`, so growing a chunk mid-execution is impossible with the
+current shapes; it would need an append-only chunk store with stable
+addresses or interior mutability, and that plumbing is not justified until
+profiling or a run-time query forces it. The queries that would force it are
+known: `getAll` on a static class, `Class.all()`, `match` by a classifier
+not yet in the model, `extractEnumValue` by string path. Until then they are
+answered from what the closure walk brought in, and a miss is a typed
+`Unsupported`, not a silent empty result.
 
 **Start here.** Build the oracle first: a JUnit test in `legend-pure-m3-core`
 that loads `target/classes` through `PureCompilerLoader` and dumps, per
@@ -729,7 +800,9 @@ product code); whether it goes upstream is an open question (Appendix C).
   types and multiplicities are already inferred on every expression. The
   lowering reads them, it does not recompute them. Function nodes get the
   mangled name (Step 1's hidden contract).
-- Lazy per element: a function body is lowered on first call.
+- Lazy per element: a function body is lowered the first time a `start`
+  call's closure walk reaches it (Step 4 "The directory": eager per call,
+  nothing lowered while the lambda runs).
 - Measurement is the Step 2 runner: its report already splits failures by
   kind, so *missing native* (`FunctionNotFound` on a native declaration) and
   *lowering gap* (`Unsupported`) are visible per module without new tooling.
@@ -788,7 +861,12 @@ legend-engine, with no Rust compiler.
   (handcrafted `Root_..._Impl`, PELT-lazy, or interpreted), returns its
   classifier, keys and values in one call, primitives inline and other objects
   as handles. On the Rust side the same node interface as PELT, so the same
-  lowering applies.
+  lowering applies. *(Done 2026-10-10 as `RustNodeBridge` / `JavaNode`.)*
+- The JNI `Directory` (Step 4): `node(path)` through `_Package.getByUserPath`,
+  `instances(classifier)` and `overloads(name)` as one bulk call each into the
+  engine's own indexes, `resolve(reference_id)` through the Java
+  `ReferenceIdResolver`. Whole-model queries never walk the graph node by
+  node across the boundary.
 - **Identity unification.** When a crossing object is a packageable element
   whose path the evaluator already knows (`String`, `Any`, a platform class, a
   profile), substitute the known element. Without this, `instanceOf`, type
@@ -915,6 +993,7 @@ Java. Rough size: ~1 k lines.
 | Native | A Pure function declared without a body, implemented in the host language. |
 | Mangled name | A function's identity string: simple name plus parameter and return types and multiplicities, e.g. `plus_Number_MANY__Number_1_`. The native registry and dispatch are keyed by it. |
 | Lowering | Converting generic graph nodes into evaluator-specific structures. |
+| Directory | The index over a node source (path, classifier, simple name, reference id → nodes); one trait, a PELT and a JNI implementation. Java: `MetadataPelt`. |
 | Overlay | A per-request layer of definitions on top of the shared static graph. |
 | Fishing | Copying one existing implementation from the archive into the workspace because a test or PCT failure needs it. |
 
