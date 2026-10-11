@@ -199,6 +199,23 @@ fn scale_arg(v: &Value) -> Result<u32, PureException> {
     }
 }
 
+/// Pure `exp(Number[1]):Float[1]` — natural exponential, `e^x`.
+#[derive(Debug)]
+pub struct Exp;
+
+impl NativeFunction for Exp {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("exp", &values, 1)?;
+        let x = number_to_f64("exp", &values[0])?;
+        Ok(Evaluated::new(Value::Float(x.exp())))
+    }
+}
+
 /// Pure `toFloat(Number[1]):Float[1]` — numeric → Float coercion.
 #[derive(Debug)]
 pub struct ToFloat;
@@ -265,6 +282,9 @@ pub fn register(registry: &mut NativeRegistry) {
     registry.register("round_Number_1__Integer_1_", Round);
     registry.register("round_Decimal_1__Integer_1__Decimal_1_", Round);
     registry.register("round_Float_1__Integer_1__Float_1_", Round);
+
+    // analytic
+    registry.register("exp_Number_1__Float_1_", Exp);
 
     // numeric conversion
     registry.register("toFloat_Number_1__Float_1_", ToFloat);
@@ -410,6 +430,31 @@ mod tests {
     #[test]
     fn round_type_mismatch() {
         assert!(Round.execute(&[lit_str("x")], &mut MockCtx).is_err());
+    }
+
+    #[test]
+    fn exp_zero() {
+        let r = Exp.execute(&[lit_float(0.0)], &mut MockCtx).unwrap();
+        assert_eq!(r.into_value(), Value::Float(1.0));
+    }
+
+    #[test]
+    fn exp_one_is_e() {
+        let r = Exp.execute(&[lit_float(1.0)], &mut MockCtx).unwrap();
+        match r.into_value() {
+            Value::Float(f) => assert!(approx_eq(f, std::f64::consts::E)),
+            other => panic!("expected Float, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn exp_wrong_arg_count() {
+        assert!(Exp.execute(&[], &mut MockCtx).is_err());
+    }
+
+    #[test]
+    fn exp_type_mismatch() {
+        assert!(Exp.execute(&[lit_str("x")], &mut MockCtx).is_err());
     }
 
     #[test]
