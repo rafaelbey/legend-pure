@@ -28,7 +28,9 @@ use rust_decimal::Decimal;
 use rust_decimal::prelude::ToPrimitive;
 
 use crate::error::{PureException, PureRuntimeError};
-use crate::native::{EvalContextTrait, Evaluated, NativeFunction, NativeRegistry, force_all};
+use crate::native::{
+    EvalContextTrait, Evaluated, NativeFunction, NativeRegistry, expect_args, force_all,
+};
 use crate::value::Value;
 
 /// Coerce a numeric `Value` (Integer, Float, or Decimal) to `f64`.
@@ -76,6 +78,24 @@ pub fn java_number_string(v: &Value) -> String {
         }
         Value::Decimal(d) => d.to_string(),
         other => other.to_string(),
+    }
+}
+
+/// Pure `ceiling(Number[1]):Integer[1]` — smallest integer ≥ x.
+#[derive(Debug)]
+pub struct Ceiling;
+
+impl NativeFunction for Ceiling {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("ceiling", &values, 1)?;
+        let x = number_to_f64("ceiling", &values[0])?;
+        #[allow(clippy::cast_possible_truncation)]
+        Ok(Evaluated::new(Value::Integer(x.ceil() as i64)))
     }
 }
 
@@ -162,6 +182,7 @@ fn scale_arg(v: &Value) -> Result<u32, PureException> {
 /// Register the fished mathematical natives under their mangled Pure FQNs.
 pub fn register(registry: &mut NativeRegistry) {
     // rounding
+    registry.register("ceiling_Number_1__Integer_1_", Ceiling);
     registry.register("round_Number_1__Integer_1_", Round);
     registry.register("round_Decimal_1__Integer_1__Decimal_1_", Round);
     registry.register("round_Float_1__Integer_1__Float_1_", Round);
@@ -170,7 +191,29 @@ pub fn register(registry: &mut NativeRegistry) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::native::{MockCtx, lit_float, lit_str};
+    use crate::native::{MockCtx, lit_bool, lit_float, lit_str};
+
+    #[test]
+    fn ceiling_positive_float() {
+        let r = Ceiling.execute(&[lit_float(3.2)], &mut MockCtx).unwrap();
+        assert_eq!(r.into_value(), Value::Integer(4));
+    }
+
+    #[test]
+    fn ceiling_negative_float() {
+        let r = Ceiling.execute(&[lit_float(-3.7)], &mut MockCtx).unwrap();
+        assert_eq!(r.into_value(), Value::Integer(-3));
+    }
+
+    #[test]
+    fn ceiling_wrong_arg_count() {
+        assert!(Ceiling.execute(&[], &mut MockCtx).is_err());
+    }
+
+    #[test]
+    fn ceiling_type_mismatch() {
+        assert!(Ceiling.execute(&[lit_bool(true)], &mut MockCtx).is_err());
+    }
 
     #[test]
     fn round_half_to_even() {
