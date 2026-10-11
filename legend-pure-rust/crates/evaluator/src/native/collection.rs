@@ -460,6 +460,62 @@ impl NativeFunction for Map {
     }
 }
 
+/// Pure `slice<T>(T[*], Integer[1], Integer[1]): T[*]`
+///
+/// Returns the sub-collection from `start` (inclusive) to `end` (exclusive).
+/// Indices are clamped to the collection bounds: negative indices become 0,
+/// and indices past the end become the length. If `start >= end` after
+/// clamping, the result is empty.
+#[derive(Debug)]
+pub struct Slice;
+
+impl NativeFunction for Slice {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("slice", &values, 3)?;
+        let source = values[0].to_collection();
+        let start = values[1].as_integer()?;
+        let end = values[2].as_integer()?;
+
+        // Java Pure's `Slice.execute` throws when the low bound exceeds
+        // the high bound — `testSliceError` pins the exact text:
+        // "The low bound (X) can't be higher than the high bound (Y) in
+        // a slice operation". Empty result when start == end stays as
+        // a soft return (Java behaves the same).
+        if start > end {
+            return Err(PureRuntimeError::EvaluationError(format!(
+                "The low bound ({start}) can't be higher than the high bound ({end}) in a slice operation"
+            ))
+            .into());
+        }
+
+        #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+        let start = start.max(0) as usize;
+        #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+        let end = end.max(0) as usize;
+        let start = start.min(source.len());
+        let end = end.min(source.len());
+
+        if start >= end {
+            return Ok(Evaluated::new(Value::Unit));
+        }
+
+        // PVector::slice takes Range; we iterate to keep it simple & avoid
+        // accidentally moving the clone out.
+        let out: Vec<Value> = source
+            .iter()
+            .skip(start)
+            .take(end - start)
+            .cloned()
+            .collect();
+        Ok(Evaluated::new(Value::from_vec(out)))
+    }
+}
+
 /// Register the fished collection natives.
 pub fn register(registry: &mut NativeRegistry) {
     registry.register("fold_T_MANY__Function_1__V_m__V_m_", Fold);
@@ -480,6 +536,7 @@ pub fn register(registry: &mut NativeRegistry) {
     registry.register("map_T_MANY__Function_1__V_MANY_", Map);
     registry.register("map_T_m__Function_1__V_m_", Map);
     registry.register("map_T_$0_1$__Function_1__V_$0_1$_", Map);
+    registry.register("slice_T_MANY__Integer_1__Integer_1__T_MANY_", Slice);
 }
 
 #[cfg(test)]
@@ -713,5 +770,68 @@ mod tests {
             .unwrap()
             .into_value();
         assert_eq!(r, int_collection(&[5, 4, 3, 2, 1]));
+    }
+
+    #[test]
+    fn slice_basic_range() {
+        assert_eq!(
+            Slice
+                .execute(
+                    &[int_spec(&[10, 20, 30, 40, 50]), lit_int(1), lit_int(4)],
+                    &mut MockCtx,
+                )
+                .unwrap()
+                .into_value(),
+            int_collection(&[20, 30, 40])
+        );
+    }
+
+    #[test]
+    fn slice_empty_when_start_equals_end() {
+        assert_eq!(
+            Slice
+                .execute(
+                    &[int_spec(&[1, 2, 3]), lit_int(2), lit_int(2)],
+                    &mut MockCtx,
+                )
+                .unwrap()
+                .into_value(),
+            Value::Unit
+        );
+    }
+
+    #[test]
+    fn slice_clamps_out_of_bounds() {
+        assert_eq!(
+            Slice
+                .execute(
+                    &[int_spec(&[1, 2, 3]), lit_int(1), lit_int(99)],
+                    &mut MockCtx,
+                )
+                .unwrap()
+                .into_value(),
+            int_collection(&[2, 3])
+        );
+    }
+
+    #[test]
+    fn slice_type_mismatch_errors() {
+        assert!(
+            Slice
+                .execute(
+                    &[int_spec(&[1, 2, 3]), lit_str("1"), lit_int(2)],
+                    &mut MockCtx,
+                )
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn slice_wrong_arg_count() {
+        assert!(
+            Slice
+                .execute(&[int_spec(&[1, 2, 3]), lit_int(0)], &mut MockCtx)
+                .is_err()
+        );
     }
 }

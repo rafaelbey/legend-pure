@@ -38,6 +38,7 @@ const RANGE: &str = "range_Integer_1__Integer_1__Integer_1__Integer_MANY_";
 const MAP_M: &str = "map_T_m__Function_1__V_m_";
 const MAP_MANY: &str = "map_T_MANY__Function_1__V_MANY_";
 const MAP_ZERO_ONE: &str = "map_T_$0_1$__Function_1__V_$0_1$_";
+const SLICE: &str = "slice_T_MANY__Integer_1__Integer_1__T_MANY_";
 const TIMES: &str = "times_Number_MANY__Number_1_";
 const EQ: &str = "eq_Any_1__Any_1__Boolean_1_";
 const PLUS: &str = "plus_Number_MANY__Number_1_";
@@ -343,5 +344,23 @@ fn map_applies_the_lambda_and_flattens_the_results() {
     assert_eq!(
         run(&expr::call(MAP_ZERO_ONE, vec![ints(&[]), square_lambda()])),
         Value::Unit
+    );
+}
+
+#[test]
+fn slice_clamps_its_bounds_and_rejects_inverted_ones_with_java_text() {
+    let slice = |items: &[i64], start: i64, end: i64| {
+        expr::call(SLICE, vec![ints(items), expr::int(start), expr::int(end)])
+    };
+    assert_eq!(as_ints(&run(&slice(&[1, 2, 3, 4, 5, 6], 1, 4))), [2, 3, 4]);
+    assert_eq!(as_ints(&run(&slice(&[2, 3, 4, 5], -1, 10))), [2, 3, 4, 5]);
+    assert_eq!(
+        as_ints(&run(&slice(&[2, 3, 4, 5], 2, 2))),
+        Vec::<i64>::new()
+    );
+    assert_eq!(as_ints(&run(&slice(&[], 2, 3))), Vec::<i64>::new());
+    assert_eq!(
+        run_err(&slice(&[1, 2, 3, 4, 5], 3, 2)),
+        "The low bound (3) can't be higher than the high bound (2) in a slice operation"
     );
 }
