@@ -33,6 +33,7 @@ const TO_STRING: &str = "toString_Any_1__String_1_";
 const FORMAT: &str = "format_String_1__Any_MANY__String_1_";
 const JOIN: &str = "joinStrings_String_MANY__String_1__String_1_";
 const JOIN_AFFIXED: &str = "joinStrings_String_MANY__String_1__String_1__String_1__String_1_";
+const STARTS_WITH: &str = "startsWith_String_1__String_1__Boolean_1_";
 
 /// The elements `toString` is exercised against.
 struct Fixture {
@@ -234,6 +235,22 @@ fn to_string_of_an_instance_without_to_string_is_anonymous() {
     let f = fixture();
     let s = render(&f.model, new_named(f.person, "Pierre"));
     assert!(s.starts_with("Anonymous_"), "{s}");
+}
+
+/// `testPersonToString`'s lambda: `$str->startsWith('Anonymous_')`.
+#[test]
+fn starts_with_on_the_anonymous_rendering() {
+    let f = fixture();
+    let spec = expr::call(
+        STARTS_WITH,
+        vec![
+            to_string(new_named(f.person, "Pierre")),
+            expr::string("Anonymous_"),
+        ],
+    );
+    let registry = NativeRegistry::standard();
+    let mut eval = Evaluator::new(&f.model, &registry);
+    assert_eq!(eval.eval(&spec).unwrap(), Value::Boolean(true));
 }
 
 /// `testComplexClassToString`: a class's own `toString()` qualified

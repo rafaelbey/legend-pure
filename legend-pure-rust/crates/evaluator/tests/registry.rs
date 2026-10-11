@@ -56,6 +56,7 @@ const FISHED: &[&str] = &[
     "joinStrings_String_MANY__String_1__String_1__String_1__String_1_",
     "indexOf_String_1__String_1__Integer_1_",
     "indexOf_String_1__String_1__Integer_1__Integer_1_",
+    "startsWith_String_1__String_1__Boolean_1_",
     // testing
     "assert_Boolean_1__Function_1__Boolean_1_",
 ];

@@ -711,6 +711,26 @@ impl NativeFunction for IndexOf {
     }
 }
 
+/// Pure `startsWith(String[1], String[1]): Boolean[1]`
+#[derive(Debug)]
+pub struct StartsWith;
+
+impl NativeFunction for StartsWith {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("startsWith", &values, 2)?;
+        let s = values[0].as_string()?;
+        let prefix = values[1].as_string()?;
+        Ok(Evaluated::new(Value::Boolean(
+            s.starts_with(prefix.as_str()),
+        )))
+    }
+}
+
 /// Register the fished string natives.
 pub fn register(registry: &mut NativeRegistry) {
     registry.register("toString_Any_1__String_1_", ToString);
@@ -722,6 +742,7 @@ pub fn register(registry: &mut NativeRegistry) {
     );
     registry.register("indexOf_String_1__String_1__Integer_1_", IndexOf);
     registry.register("indexOf_String_1__String_1__Integer_1__Integer_1_", IndexOf);
+    registry.register("startsWith_String_1__String_1__Boolean_1_", StartsWith);
 }
 
 #[cfg(test)]
@@ -1011,5 +1032,21 @@ mod tests {
             super::pure_to_string(&v, &mut MockCtx).unwrap(),
             "[1, 2, 3]"
         );
+    }
+
+    /// `testTrueStartsWith`, `testFalseStartsWith`.
+    #[test]
+    fn string_starts_with() {
+        let fox = "the quick brown fox jumps over the lazy dog";
+        let starts = |prefix| {
+            StartsWith
+                .execute(&[lit_str(fox), lit_str(prefix)], &mut MockCtx)
+                .unwrap()
+                .into_value()
+        };
+        assert_eq!(starts("the"), Value::Boolean(true));
+        assert_eq!(starts("the quick brown fox"), Value::Boolean(true));
+        assert_eq!(starts("the lazy dog"), Value::Boolean(false));
+        assert!(StartsWith.execute(&[lit_str(fox)], &mut MockCtx).is_err());
     }
 }
