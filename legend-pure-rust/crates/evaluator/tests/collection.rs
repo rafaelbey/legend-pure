@@ -64,6 +64,7 @@ const ADD_AT: &str = "add_T_MANY__Integer_1__T_1__T_$1_MANY$_";
 const REVERSE: &str = "reverse_T_m__T_m_";
 const GET: &str = "get_Map_1__U_1__V_$0_1$_";
 const KEYS: &str = "keys_Map_1__U_MANY_";
+const VALUES: &str = "values_Map_1__V_MANY_";
 const TIMES: &str = "times_Number_MANY__Number_1_";
 const EQ: &str = "eq_Any_1__Any_1__Boolean_1_";
 const PLUS: &str = "plus_Number_MANY__Number_1_";
@@ -815,6 +816,27 @@ fn keys_lists_every_key() {
     eval.context_mut().set("e", string_int_map(&[]));
     assert_eq!(
         eval.eval(&expr::call(KEYS, vec![expr::var("e")])).unwrap(),
+        Value::Unit
+    );
+}
+
+#[test]
+fn values_lists_every_value() {
+    let model = model();
+    let registry = NativeRegistry::standard();
+    let mut eval = Evaluator::new(&model, &registry);
+    eval.context_mut().push_scope();
+    eval.context_mut()
+        .set("m", string_int_map(&[("b", 2), ("a", 1)]));
+    // $m->put('c', 3)->values(), compared as a set (HAMT order).
+    let put = expr::call(PUT, vec![expr::var("m"), expr::string("c"), expr::int(3)]);
+    let mut values = as_ints(&eval.eval(&expr::call(VALUES, vec![put])).unwrap());
+    values.sort_unstable();
+    assert_eq!(values, [1, 2, 3]);
+    eval.context_mut().set("e", string_int_map(&[]));
+    assert_eq!(
+        eval.eval(&expr::call(VALUES, vec![expr::var("e")]))
+            .unwrap(),
         Value::Unit
     );
 }

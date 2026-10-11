@@ -1039,6 +1039,33 @@ impl NativeFunction for Keys {
     }
 }
 
+/// Pure `values<U,V>(m:Map<U,V>[1]):V[*]`
+///
+/// Returns the values stored in the map as a flat collection. Iteration
+/// order follows the HAMT — deterministic per run, not insertion-ordered.
+/// Mirror of [`Keys`].
+#[derive(Debug)]
+pub struct Values;
+
+impl NativeFunction for Values {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("values", &values, 1)?;
+        let Value::Map(m) = &values[0] else {
+            return Err(PureRuntimeError::type_mismatch("Map", &values[0]).into());
+        };
+        let snapshot: Vec<Value> = {
+            let state = m.borrow();
+            state.entries.values().cloned().collect()
+        };
+        Ok(Evaluated::new(Value::from_vec(snapshot)))
+    }
+}
+
 /// Pure `putAll<U,V>(m:Map<U,V>[1], pairs:Pair<U,V>[*]):Map<U,V>[1]` /
 /// `putAll<U,V>(m:Map<U,V>[1], o:Map<U,V>[1]):Map<U,V>[1]`
 ///
@@ -1241,6 +1268,7 @@ pub fn register(registry: &mut NativeRegistry) {
     registry.register("reverse_T_m__T_m_", Reverse);
     registry.register("get_Map_1__U_1__V_$0_1$_", Get);
     registry.register("keys_Map_1__U_MANY_", Keys);
+    registry.register("values_Map_1__V_MANY_", Values);
 }
 
 #[cfg(test)]
