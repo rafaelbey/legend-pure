@@ -43,7 +43,6 @@
 //!   lambda spec to a `Value::Function`, then invoke it per element via
 //!   [`EvalContextTrait::call_function`].
 
-use std::collections::HashMap;
 use std::fmt;
 
 use legend_pure_metamodel::model::PureModel;
@@ -283,7 +282,7 @@ pub trait NativeFunction: fmt::Debug {
 /// `ConcreteFunctionDefinitionNameProcessor` format:
 /// `funcName_ParamType_Mult__ReturnType_Mult_`
 pub struct NativeRegistry {
-    functions: HashMap<SmolStr, Box<dyn NativeFunction>>,
+    functions: crate::context::NameMap<Box<dyn NativeFunction>>,
 }
 
 impl NativeRegistry {
@@ -291,7 +290,7 @@ impl NativeRegistry {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            functions: HashMap::new(),
+            functions: crate::context::NameMap::default(),
         }
     }
 

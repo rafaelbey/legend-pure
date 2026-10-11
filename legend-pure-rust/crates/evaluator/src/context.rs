@@ -49,26 +49,14 @@ impl Hasher for NameHasher {
     }
 }
 
-/// A map keyed by variable name, hashed with [`NameHasher`].
+/// A map keyed by a name, hashed with [`NameHasher`].
 pub type NameMap<V> = HashMap<SmolStr, V, BuildHasherDefault<NameHasher>>;
 
-/// An entry in the undo log — records what to restore on `pop_scope`.
-#[derive(Debug)]
-enum UndoEntry {
-    /// The variable didn't exist before this scope introduced it —
-    /// on pop, remove it from the map entirely.
-    Remove(SmolStr),
-    /// The variable existed with a previous value that was shadowed —
-    /// on pop, restore the old value.
-    Restore(SmolStr, Value),
-}
-
-/// A stack of variable scopes backed by a flat map and one undo log.
-///
-/// Variables are resolved with a single map lookup regardless of scope
-/// depth. A scope is a position in the undo log; popping it replays the
-/// entries above that position in reverse. No scope allocates anything
-/// of its own.
+/// A stack of variable scopes: bindings in the order they were made,
+/// read by scanning from the top, so the latest binding of a name wins.
+/// A scope is a position in the stack; popping it truncates. Binding
+/// costs a push and reading a short scan: lambda bodies see a handful of
+/// bindings, and a scan over a handful beats hashing and undoing.
 ///
 /// # Example
 ///
@@ -88,14 +76,10 @@ enum UndoEntry {
 /// ```
 #[derive(Debug)]
 pub struct VariableContext {
-    /// The single flat map — always contains the "current" value of every
-    /// variable visible at the current scope depth.
-    vars: NameMap<Value>,
+    /// Every binding made since the outermost scope, latest last.
+    bindings: Vec<(SmolStr, Value)>,
 
-    /// The undo log, one entry per binding made since the outermost scope.
-    undo: Vec<UndoEntry>,
-
-    /// Where each open scope starts in the undo log.
+    /// Where each open scope starts in `bindings`.
     frames: Vec<usize>,
 }
 
@@ -104,19 +88,19 @@ impl VariableContext {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            vars: NameMap::default(),
-            undo: Vec::new(),
+            bindings: Vec::new(),
             frames: Vec::new(),
         }
     }
 
     /// Push a new scope. Bindings made until the matching `pop_scope`
-    /// are undone by it.
+    /// are dropped by it.
     pub fn push_scope(&mut self) {
-        self.frames.push(self.undo.len());
+        self.frames.push(self.bindings.len());
     }
 
-    /// Pop the innermost scope, restoring all shadowed/removed variables.
+    /// Pop the innermost scope, dropping its bindings so what they
+    /// shadowed is visible again.
     ///
     /// # Panics
     /// Panics if there are no scopes to pop (programming error).
@@ -124,16 +108,7 @@ impl VariableContext {
         let Some(start) = self.frames.pop() else {
             unreachable!("VariableContext::pop_scope called with no scopes");
         };
-        for entry in self.undo.drain(start..).rev() {
-            match entry {
-                UndoEntry::Remove(name) => {
-                    self.vars.remove(&name);
-                }
-                UndoEntry::Restore(name, old_value) => {
-                    self.vars.insert(name, old_value);
-                }
-            }
-        }
+        self.bindings.truncate(start);
     }
 
     /// Set a variable in the current scope.
@@ -141,22 +116,21 @@ impl VariableContext {
     /// # Panics
     /// Panics if there are no scopes (call `push_scope` first).
     pub fn set(&mut self, name: impl Into<SmolStr>, value: Value) {
-        let name = name.into();
         assert!(
             !self.frames.is_empty(),
             "VariableContext::set called with no scopes"
         );
-        let entry = match self.vars.insert(name.clone(), value) {
-            Some(old_value) => UndoEntry::Restore(name, old_value),
-            None => UndoEntry::Remove(name),
-        };
-        self.undo.push(entry);
+        self.bindings.push((name.into(), value));
     }
 
     /// Look up a variable by name.
     #[must_use]
     pub fn get(&self, name: &str) -> Option<&Value> {
-        self.vars.get(name)
+        self.bindings
+            .iter()
+            .rev()
+            .find(|(bound, _)| bound.as_str() == name)
+            .map(|(_, value)| value)
     }
 
     /// Look up a variable, returning an error if not found.
@@ -176,16 +150,26 @@ impl VariableContext {
 
     /// Iterate every currently visible binding's value.
     pub fn iter_values(&self) -> impl Iterator<Item = &Value> + '_ {
-        self.vars.values()
+        self.iter_bindings().map(|(_, value)| value)
     }
 
     /// Iterate every currently visible binding as a `(name, value)` pair.
     ///
-    /// Order is unspecified (the underlying storage is a
-    /// `HashMap`); callers that need a stable ordering should sort by
-    /// name on the consumer side.
+    /// Shadowed bindings are left out; order is unspecified.
     pub fn iter_bindings(&self) -> impl Iterator<Item = (&SmolStr, &Value)> + '_ {
-        self.vars.iter()
+        let mut seen: Vec<&SmolStr> = Vec::new();
+        self.bindings
+            .iter()
+            .rev()
+            .filter(move |(name, _)| {
+                if seen.contains(&name) {
+                    false
+                } else {
+                    seen.push(name);
+                    true
+                }
+            })
+            .map(|(name, value)| (name, value))
     }
 }
 
