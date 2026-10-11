@@ -31,6 +31,8 @@ const ROUND: &str = "round_Number_1__Integer_1_";
 const ROUND_DECIMAL: &str = "round_Decimal_1__Integer_1__Decimal_1_";
 const ROUND_FLOAT: &str = "round_Float_1__Integer_1__Float_1_";
 const SQRT: &str = "sqrt_Number_1__Float_1_";
+const ASIN: &str = "asin_Number_1__Float_1_";
+const ACOS: &str = "acos_Number_1__Float_1_";
 const TO_DECIMAL: &str = "toDecimal_Number_1__Decimal_1_";
 const LESS_THAN: &str = "lessThan_Number_1__Number_1__Boolean_1_";
 const COMPARE: &str = "compare_T_1__T_1__Integer_1_";
@@ -233,5 +235,18 @@ fn sqrt_of_a_negative_reports_java_s_text() {
     assert_eq!(
         evaluation_error(&expr::call(SQRT, vec![expr::float(-1.0)])),
         "Unable to compute sqrt of -1.0"
+    );
+}
+
+#[test]
+fn acos_and_asin_out_of_domain_report_java_s_text() {
+    // testArcCosineError / testArcSineError: `2.0->acos()`, `2.0->asin()`.
+    assert_eq!(
+        evaluation_error(&expr::call(ACOS, vec![expr::float(2.0)])),
+        "Unable to compute acos of 2.0"
+    );
+    assert_eq!(
+        evaluation_error(&expr::call(ASIN, vec![expr::float(2.0)])),
+        "Unable to compute asin of 2.0"
     );
 }

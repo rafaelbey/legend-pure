@@ -437,6 +437,33 @@ impl NativeFunction for Asin {
     }
 }
 
+/// Pure `acos(Number[1]):Float[1]` — inverse cosine (radians). Inputs
+/// outside `[-1, 1]` throw `"Unable to compute acos of <input>"`,
+/// mirroring `ArcCosine.java:53`.
+#[derive(Debug)]
+pub struct Acos;
+
+impl NativeFunction for Acos {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("acos", &values, 1)?;
+        let x = number_to_f64("acos", &values[0])?;
+        let r = x.acos();
+        if r.is_nan() {
+            return Err(PureRuntimeError::EvaluationError(format!(
+                "Unable to compute acos of {}",
+                java_number_string(&values[0])
+            ))
+            .into());
+        }
+        Ok(Evaluated::new(Value::Float(r)))
+    }
+}
+
 /// Pure `toFloat(Number[1]):Float[1]` — numeric → Float coercion.
 #[derive(Debug)]
 pub struct ToFloat;
@@ -577,6 +604,7 @@ pub fn register(registry: &mut NativeRegistry) {
     registry.register("tan_Number_1__Float_1_", Tan);
     registry.register("cot_Number_1__Float_1_", Cot);
     registry.register("asin_Number_1__Float_1_", Asin);
+    registry.register("acos_Number_1__Float_1_", Acos);
 
     // numeric conversion
     registry.register("toFloat_Number_1__Float_1_", ToFloat);
@@ -1117,6 +1145,34 @@ mod tests {
     #[test]
     fn asin_type_mismatch() {
         assert!(Asin.execute(&[lit_str("x")], &mut MockCtx).is_err());
+    }
+
+    #[test]
+    fn acos_one_is_zero() {
+        let r = Acos.execute(&[lit_float(1.0)], &mut MockCtx).unwrap();
+        match r.into_value() {
+            Value::Float(f) => assert!(approx_eq(f, 0.0)),
+            other => panic!("expected Float, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn acos_neg_one_is_pi() {
+        let r = Acos.execute(&[lit_float(-1.0)], &mut MockCtx).unwrap();
+        match r.into_value() {
+            Value::Float(f) => assert!(approx_eq(f, std::f64::consts::PI)),
+            other => panic!("expected Float, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn acos_wrong_arg_count() {
+        assert!(Acos.execute(&[], &mut MockCtx).is_err());
+    }
+
+    #[test]
+    fn acos_type_mismatch() {
+        assert!(Acos.execute(&[lit_bool(false)], &mut MockCtx).is_err());
     }
 
     #[test]
