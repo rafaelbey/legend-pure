@@ -50,6 +50,7 @@ const FILTER: &str = "filter_T_MANY__Function_1__T_MANY_";
 const NOT: &str = "not_Boolean_1__Boolean_1_";
 const CONCATENATE: &str = "concatenate_T_MANY__T_MANY__T_MANY_";
 const FOR_ALL: &str = "forAll_T_MANY__Function_1__Boolean_1_";
+const INIT: &str = "init_T_MANY__T_MANY_";
 const TIMES: &str = "times_Number_MANY__Number_1_";
 const EQ: &str = "eq_Any_1__Any_1__Boolean_1_";
 const PLUS: &str = "plus_Number_MANY__Number_1_";
@@ -555,4 +556,13 @@ fn for_all_is_true_when_every_element_matches_and_on_empty() {
     assert_eq!(for_all(&[2, 2], 2), Value::Boolean(true));
     assert_eq!(for_all(&[2, 3], 2), Value::Boolean(false));
     assert_eq!(for_all(&[], 2), Value::Boolean(true));
+}
+
+#[test]
+fn init_drops_the_last_element() {
+    let init = |v: ValueSpec| as_ints(&run(&expr::call(INIT, vec![v])));
+    assert_eq!(init(ints(&[1, 2, 3])), [1, 2]);
+    assert_eq!(init(ints(&[1, 2])), [1]);
+    assert_eq!(init(expr::int(1)), Vec::<i64>::new());
+    assert_eq!(init(ints(&[])), Vec::<i64>::new());
 }
