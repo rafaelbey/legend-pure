@@ -39,6 +39,7 @@ const MAP_M: &str = "map_T_m__Function_1__V_m_";
 const MAP_MANY: &str = "map_T_MANY__Function_1__V_MANY_";
 const MAP_ZERO_ONE: &str = "map_T_$0_1$__Function_1__V_$0_1$_";
 const SLICE: &str = "slice_T_MANY__Integer_1__Integer_1__T_MANY_";
+const FIND: &str = "find_T_MANY__Function_1__T_$0_1$_";
 const TIMES: &str = "times_Number_MANY__Number_1_";
 const EQ: &str = "eq_Any_1__Any_1__Boolean_1_";
 const PLUS: &str = "plus_Number_MANY__Number_1_";
@@ -362,5 +363,29 @@ fn slice_clamps_its_bounds_and_rejects_inverted_ones_with_java_text() {
     assert_eq!(
         run_err(&slice(&[1, 2, 3, 4, 5], 3, 2)),
         "The low bound (3) can't be higher than the high bound (2) in a slice operation"
+    );
+}
+
+/// `{x | $x == n}` over integers.
+fn is_lambda(n: i64) -> ValueSpec {
+    expr::lambda(
+        vec![param("x", named(INTEGER_ID), Multiplicity::PureOne)],
+        vec![expr::call(EQ, vec![expr::var("x"), expr::int(n)])],
+    )
+}
+
+#[test]
+fn find_returns_the_first_match_or_nothing() {
+    assert_eq!(
+        run(&expr::call(FIND, vec![ints(&[1, 2, 3, 2]), is_lambda(2)])),
+        Value::Integer(2)
+    );
+    assert_eq!(
+        run(&expr::call(FIND, vec![ints(&[1, 3]), is_lambda(2)])),
+        Value::Unit
+    );
+    assert_eq!(
+        run(&expr::call(FIND, vec![ints(&[]), is_lambda(2)])),
+        Value::Unit
     );
 }

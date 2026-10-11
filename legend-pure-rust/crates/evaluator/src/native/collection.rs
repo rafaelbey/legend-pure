@@ -516,6 +516,34 @@ impl NativeFunction for Slice {
     }
 }
 
+/// Pure `find<T>(T[*], Function<{T[1]->Boolean[1]}>[1]): T[0..1]`
+///
+/// Returns the first element for which the predicate returns `true`, or
+/// [`Value::Unit`] if no element satisfies the predicate.
+#[derive(Debug)]
+pub struct Find;
+
+impl NativeFunction for Find {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        expect_args("find", args, 2)?;
+        let source = ctx.evaluate(&args[0])?.into_value().to_collection();
+        let lambda_val = ctx.evaluate(&args[1])?.into_value();
+
+        for item in &source {
+            let pred = ctx.call_function(&lambda_val, std::slice::from_ref(item))?;
+            if pred.as_boolean()? {
+                return Ok(Evaluated::new(item.clone()));
+            }
+        }
+
+        Ok(Evaluated::new(Value::Unit))
+    }
+}
+
 /// Register the fished collection natives.
 pub fn register(registry: &mut NativeRegistry) {
     registry.register("fold_T_MANY__Function_1__V_m__V_m_", Fold);
@@ -537,6 +565,7 @@ pub fn register(registry: &mut NativeRegistry) {
     registry.register("map_T_m__Function_1__V_m_", Map);
     registry.register("map_T_$0_1$__Function_1__V_$0_1$_", Map);
     registry.register("slice_T_MANY__Integer_1__Integer_1__T_MANY_", Slice);
+    registry.register("find_T_MANY__Function_1__T_$0_1$_", Find);
 }
 
 #[cfg(test)]
@@ -833,5 +862,13 @@ mod tests {
                 .execute(&[int_spec(&[1, 2, 3]), lit_int(0)], &mut MockCtx)
                 .is_err()
         );
+    }
+
+    // Happy-path `find` exercises the lambda-capable context; covered by
+    // `find_returns_the_first_match_or_nothing` in `tests/collection.rs`.
+
+    #[test]
+    fn find_wrong_arg_count() {
+        assert!(Find.execute(&[int_spec(&[1])], &mut MockCtx).is_err());
     }
 }
