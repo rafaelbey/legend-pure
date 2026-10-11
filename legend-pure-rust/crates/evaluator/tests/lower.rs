@@ -223,7 +223,7 @@ fn nested_lambdas_lower_bare_so_if_takes_a_branch() {
         panic!("expected a call");
     };
     assert!(
-        matches!(&*call.arguments[1].kind, ExprKind::Lambda { parameters, body } if parameters.is_empty() && body.len() == 1)
+        matches!(&*call.arguments[1].kind, ExprKind::Lambda { parameters, body, .. } if parameters.is_empty() && body.len() == 1)
     );
     lowering.into_extension().apply(&mut model).expect("apply");
     assert_eq!(run(&model, closure), Value::String("yes".into()));

@@ -285,9 +285,11 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
                 value,
             } => Ok(Self::eval_enum_value(*enum_element, value)),
 
-            ExprKind::Lambda { parameters, body } => {
-                Ok(self.eval_lambda_creation(parameters, body))
-            }
+            ExprKind::Lambda {
+                parameters,
+                body,
+                free,
+            } => Ok(self.eval_lambda_creation(parameters, body, free)),
 
             ExprKind::Collection { elements } => self.eval_collection(elements),
 
@@ -1479,19 +1481,19 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
 
     fn eval_lambda_creation(
         &self,
-        parameters: &[legend_pure_metamodel::types::Parameter],
-        body: &[ValueSpec],
+        parameters: &std::sync::Arc<[legend_pure_metamodel::types::Parameter]>,
+        body: &std::sync::Arc<[ValueSpec]>,
+        free: &std::sync::Arc<[SmolStr]>,
     ) -> Value {
-        let free = collect_free_variables(body, parameters);
         let mut captures = HashMap::with_capacity(free.len());
-        for name in free {
-            if let Some(val) = self.context.get(&name) {
-                captures.insert(name, val.clone());
+        for name in free.iter() {
+            if let Some(val) = self.context.get(name) {
+                captures.insert(name.clone(), val.clone());
             }
         }
         Value::Function(Box::new(FunctionValue::Lambda(LambdaClosure {
-            parameters: std::sync::Arc::from(parameters),
-            body: std::sync::Arc::from(body),
+            parameters: std::sync::Arc::clone(parameters),
+            body: std::sync::Arc::clone(body),
             captures,
         })))
     }
@@ -2110,6 +2112,20 @@ fn multiplicity_constant_bounds(
 /// `parameters`. A "free" variable is any `Variable { name }` reference in
 /// the body that isn't introduced by one of the lambda's own parameters or
 /// by a `let` / nested-lambda binding along the walk.
+/// The free variables of a lambda body, in a stable order, as the node
+/// stores them: computed once when the node is built.
+#[must_use]
+pub fn free_variable_names(
+    body: &[ValueSpec],
+    parameters: &[legend_pure_metamodel::types::Parameter],
+) -> std::sync::Arc<[SmolStr]> {
+    let mut names: Vec<SmolStr> = collect_free_variables(body, parameters)
+        .into_iter()
+        .collect();
+    names.sort_unstable();
+    names.into()
+}
+
 pub(crate) fn collect_free_variables(
     body: &[ValueSpec],
     parameters: &[legend_pure_metamodel::types::Parameter],
@@ -2156,12 +2172,13 @@ fn walk_free_variables(
         ExprKind::Lambda {
             parameters: inner_params,
             body: inner_body,
+            ..
         } => {
             let mut inner_binders = binders.clone();
-            for p in inner_params {
+            for p in inner_params.iter() {
                 inner_binders.insert(p.name.clone());
             }
-            for inner in inner_body {
+            for inner in inner_body.iter() {
                 walk_free_variables(inner, &mut inner_binders, free);
             }
         }
