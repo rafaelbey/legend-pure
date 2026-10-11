@@ -12,9 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! The meta natives driven through a real `Evaluator` over hand-built
-//! classes, enumerations and lambdas. The cases mirror the platform PCT
-//! tests (`essential/lang/flow/match.pure`, …).
+//! The meta natives, and `eval`, driven through a real `Evaluator` over
+//! hand-built classes, enumerations and lambdas. The cases mirror the
+//! platform PCT tests (`essential/lang/flow/match.pure`,
+//! `essential/lang/eval/eval.pure`, …).
 //!
 //! `NativeRegistry::standard()` does not register the meta natives yet,
 //! so every test adds them with `native::meta::register`.
@@ -32,6 +33,12 @@ use legend_pure_metamodel::types::{DateValue, Multiplicity, TypeExpr, ValueSpec}
 const NEW: &str = "new_Class_1__String_1__Any_MANY__T_1_";
 const MATCH: &str = "match_Any_MANY__Function_$1_MANY$__T_m_";
 const MATCH_WITH: &str = "match_Any_MANY__Function_$1_MANY$__P_o__T_m_";
+const LET: &str = "letFunction_String_1__T_m__T_m_";
+const PLUS: &str = "plus_Number_MANY__Number_1_";
+const EVAL_0: &str = "eval_Function_1__V_m_";
+const EVAL_1: &str = "eval_Function_1__T_n__V_m_";
+const EVAL_2: &str = "eval_Function_1__T_n__U_p__V_m_";
+const EVAL_7: &str = "eval_Function_1__S_n__T_o__U_p__W_q__X_r__Y_s__Z_t__V_m_";
 
 fn registry() -> NativeRegistry {
     let mut registry = NativeRegistry::standard();
@@ -393,5 +400,83 @@ fn match_without_a_fitting_branch_is_an_evaluation_error() {
     assert!(
         msg.starts_with("match: no branch matched for value"),
         "{msg}"
+    );
+}
+
+/// `$a + $b + …` over the named variables.
+fn sum_of(names: &[&str]) -> ValueSpec {
+    expr::call(
+        PLUS,
+        vec![expr::collection(
+            names.iter().map(|n| expr::var(n)).collect(),
+        )],
+    )
+}
+
+fn integer_params(names: &[&str]) -> Vec<legend_pure_metamodel::types::Parameter> {
+    names
+        .iter()
+        .map(|n| param(n, named(INTEGER_ID), Multiplicity::PureOne))
+        .collect()
+}
+
+#[test]
+fn eval_applies_a_lambda_to_its_arguments() {
+    let model = ModelBuilder::new().finish();
+    let registry = registry();
+    let mut eval = Evaluator::new(&model, &registry);
+
+    // `{|7}->eval()`
+    let call = expr::call(EVAL_0, vec![expr::lambda(Vec::new(), vec![expr::int(7)])]);
+    assert_eq!(eval.eval(&call).unwrap(), Value::Integer(7));
+
+    // testNumberExp's shape: `let z = {a | $a + 41}; $z->eval(1)`
+    eval.context_mut().push_scope();
+    let add_41 = expr::call(
+        PLUS,
+        vec![expr::collection(vec![expr::var("a"), expr::int(41)])],
+    );
+    let body = [
+        expr::call(
+            LET,
+            vec![
+                expr::string("z"),
+                expr::lambda(integer_params(&["a"]), vec![add_41]),
+            ],
+        ),
+        expr::call(EVAL_1, vec![expr::var("z"), expr::int(1)]),
+    ];
+    assert_eq!(eval.eval_body(&body).unwrap(), Value::Integer(42));
+
+    // testNumberPow's shape: two parameters.
+    let call = expr::call(
+        EVAL_2,
+        vec![
+            expr::lambda(integer_params(&["a", "b"]), vec![sum_of(&["a", "b"])]),
+            expr::int(3),
+            expr::int(2),
+        ],
+    );
+    assert_eq!(eval.eval(&call).unwrap(), Value::Integer(5));
+
+    // The widest arity: seven parameters.
+    let names = ["a", "b", "c", "d", "e", "f", "g"];
+    let mut args = vec![expr::lambda(integer_params(&names), vec![sum_of(&names)])];
+    args.extend((1..=7).map(expr::int));
+    assert_eq!(
+        eval.eval(&expr::call(EVAL_7, args)).unwrap(),
+        Value::Integer(28)
+    );
+}
+
+#[test]
+fn eval_without_a_function_is_an_evaluation_error() {
+    let model = ModelBuilder::new().finish();
+    let registry = registry();
+    let mut eval = Evaluator::new(&model, &registry);
+    let err = eval.eval(&expr::call(EVAL_0, Vec::new())).unwrap_err();
+    assert_eq!(
+        evaluation_error(&err),
+        Some("eval: expected at least 1 argument (the function)")
     );
 }
