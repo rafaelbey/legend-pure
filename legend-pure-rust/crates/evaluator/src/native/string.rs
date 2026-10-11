@@ -800,6 +800,24 @@ impl NativeFunction for ParseDecimal {
     }
 }
 
+/// Pure `contains(String[1], String[1]): Boolean[1]`
+#[derive(Debug)]
+pub struct Contains;
+
+impl NativeFunction for Contains {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("contains", &values, 2)?;
+        let s = values[0].as_string()?;
+        let sub = values[1].as_string()?;
+        Ok(Evaluated::new(Value::Boolean(s.contains(sub.as_str()))))
+    }
+}
+
 fn i64_arg(v: &Value, ctx: &str) -> Result<i64, PureException> {
     match v {
         Value::Integer(n) => Ok(*n),
@@ -828,6 +846,7 @@ pub fn register(registry: &mut NativeRegistry) {
         "parseDecimal_String_1__Integer_1__Integer_1__Decimal_1_",
         ParseDecimal,
     );
+    registry.register("contains_String_1__String_1__Boolean_1_", Contains);
 }
 
 #[cfg(test)]
@@ -1005,6 +1024,26 @@ mod tests {
         };
         assert_eq!(from(0), Value::Integer(1));
         assert_eq!(from(3), Value::Integer(5));
+    }
+
+    #[test]
+    fn string_contains() {
+        assert_eq!(
+            Contains
+                .execute(&[lit_str("hello"), lit_str("ell")], &mut MockCtx)
+                .unwrap()
+                .into_value(),
+            Value::Boolean(true)
+        );
+    }
+
+    #[test]
+    fn contains_type_mismatch_errors() {
+        assert!(
+            Contains
+                .execute(&[lit_str("a"), lit_int(1)], &mut MockCtx)
+                .is_err()
+        );
     }
 
     // -- joinStrings --
