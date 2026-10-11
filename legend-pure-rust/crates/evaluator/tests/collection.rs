@@ -26,6 +26,7 @@ use legend_pure_metamodel::model::PureModel;
 use legend_pure_metamodel::types::{Multiplicity, ValueSpec};
 
 const FOLD: &str = "fold_T_MANY__Function_1__V_m__V_m_";
+const DROP: &str = "drop_T_MANY__Integer_1__T_MANY_";
 const PLUS: &str = "plus_Number_MANY__Number_1_";
 const MINUS: &str = "minus_Number_MANY__Number_1_";
 
@@ -33,8 +34,27 @@ fn model() -> PureModel {
     ModelBuilder::new().finish()
 }
 
+/// Evaluate `spec` on a fresh evaluator over the bootstrap.
+fn run(spec: &ValueSpec) -> Value {
+    let model = model();
+    let registry = NativeRegistry::standard();
+    Evaluator::new(&model, &registry)
+        .eval(spec)
+        .unwrap_or_else(|e| panic!("evaluation failed: {e:?}"))
+}
+
 fn ints(items: &[i64]) -> ValueSpec {
     expr::collection(items.iter().map(|&i| expr::int(i)).collect())
+}
+
+/// The integers of a result, whatever its multiplicity shape (`Unit`,
+/// scalar or `Collection`).
+fn as_ints(value: &Value) -> Vec<i64> {
+    value
+        .to_collection()
+        .iter()
+        .map(|v| v.as_integer().expect("an Integer"))
+        .collect()
 }
 
 /// `{a, b | $a + $b}` over integers (Pure `plus` takes its operands as
@@ -92,4 +112,13 @@ fn fold_over_an_empty_collection_returns_the_identity() {
     let mut eval = Evaluator::new(&model, &registry);
     let folded = expr::call(FOLD, vec![ints(&[]), plus_lambda("x", "y"), expr::int(1)]);
     assert_eq!(eval.eval(&folded).unwrap(), Value::Integer(1));
+}
+
+#[test]
+fn drop_skips_the_first_n_and_clamps_the_count() {
+    let drop = |items: &[i64], n: i64| run(&expr::call(DROP, vec![ints(items), expr::int(n)]));
+    assert_eq!(as_ints(&drop(&[1, 2, 3], 1)), [2, 3]);
+    assert_eq!(as_ints(&drop(&[1, 2, 3], 5)), Vec::<i64>::new());
+    assert_eq!(as_ints(&drop(&[1, 2, 3], -1)), [1, 2, 3]);
+    assert_eq!(as_ints(&drop(&[], 1)), Vec::<i64>::new());
 }
