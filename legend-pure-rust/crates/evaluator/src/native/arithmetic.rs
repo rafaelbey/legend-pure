@@ -479,7 +479,7 @@ mod tests {
 
     fn is_outside_i64(r: Result<Evaluated, PureException>) -> bool {
         matches!(
-            r.map_err(|e| e.kind),
+            r.map_err(|e| e.into_data().kind),
             Err(crate::error::PureExceptionKind::ExecutionError(
                 PureRuntimeError::Unsupported(what)
             )) if what.contains("64-bit")

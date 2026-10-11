@@ -784,7 +784,6 @@ impl NativeFunction for Last {
 /// fields collide in the same bucket even across distinct `ObjectHandle`s.
 /// Collections, maps, and functions never compare meaningfully and raise
 /// an explicit error.
-#[allow(clippy::result_large_err)]
 fn value_to_key(v: &Value, ctx: &dyn EvalContextTrait) -> Result<ValueKey, PureException> {
     match v {
         Value::Boolean(b) => Ok(ValueKey::Boolean(*b)),
@@ -807,7 +806,6 @@ fn value_to_key(v: &Value, ctx: &dyn EvalContextTrait) -> Result<ValueKey, PureE
 }
 
 /// Resolve a heap object into a `ValueKey`.
-#[allow(clippy::result_large_err)]
 fn object_equality_key(
     id: ObjectHandle,
     ctx: &dyn EvalContextTrait,
@@ -1069,7 +1067,6 @@ impl NativeFunction for PutAll {
 }
 
 /// Read the `first` / `second` properties of a `Pair` heap object.
-#[allow(clippy::result_large_err)]
 fn pair_first_second(
     ctx: &mut dyn EvalContextTrait,
     pair: &Value,
