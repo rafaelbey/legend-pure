@@ -350,6 +350,7 @@ impl NativeRegistry {
         datetime::register(&mut registry);
         lang::register(&mut registry);
         math::register(&mut registry);
+        meta::register(&mut registry);
         string::register(&mut registry);
         testing::register(&mut registry);
         registry
@@ -500,8 +501,8 @@ impl NativeFunction for NotYet {
     }
 }
 
-/// Heap shapes for reflection over functions and multiplicities
-/// (helpers only; no natives registered).
+/// Reflection natives (`match`, `cast`, `extractEnumValue`, `genericType`,
+/// `deactivate`) and the heap shapes for functions and multiplicities.
 pub mod meta;
 
 /// Construct a [`ValueSpec`] wrapping an [`IntegerLiteral`](ExprKind::IntegerLiteral).
