@@ -23,7 +23,7 @@ use legend_pure_evaluator::error::{PureExceptionKind, PureRuntimeError};
 use legend_pure_evaluator::eval::Evaluator;
 use legend_pure_evaluator::native::NativeRegistry;
 use legend_pure_evaluator::value::Value;
-use legend_pure_metamodel::bootstrap::{INTEGER_ID, STRING_ID};
+use legend_pure_metamodel::bootstrap::{ANY_ID, INTEGER_ID, STRING_ID};
 use legend_pure_metamodel::ids::ElementId;
 use legend_pure_metamodel::model::PureModel;
 use legend_pure_metamodel::types::{DateValue, Multiplicity, ValueSpec};
@@ -31,6 +31,8 @@ use legend_pure_metamodel::types::{DateValue, Multiplicity, ValueSpec};
 const NEW: &str = "new_Class_1__String_1__Any_MANY__T_1_";
 const TO_STRING: &str = "toString_Any_1__String_1_";
 const FORMAT: &str = "format_String_1__Any_MANY__String_1_";
+const JOIN: &str = "joinStrings_String_MANY__String_1__String_1_";
+const JOIN_AFFIXED: &str = "joinStrings_String_MANY__String_1__String_1__String_1__String_1_";
 
 /// The elements `toString` is exercised against.
 struct Fixture {
@@ -427,5 +429,110 @@ fn format_rejects_too_few_and_too_many_arguments() {
     assert_eq!(
         evaluation_error(&model, &many),
         "Unused format args. [3] arguments provided to expression \"Hello %s %s\""
+    );
+}
+
+fn strings(values: &[&str]) -> ValueSpec {
+    expr::collection(values.iter().map(|s| expr::string(s)).collect())
+}
+
+/// `testJoinStrings*`: both overloads, one string, none.
+#[test]
+fn join_strings_with_and_without_prefix_and_suffix() {
+    let model = ModelBuilder::new().finish();
+    let join = |values: &[&str]| expr::call(JOIN, vec![strings(values), expr::string(",")]);
+    let affixed = |values: &[&str]| {
+        expr::call(
+            JOIN_AFFIXED,
+            vec![
+                strings(values),
+                expr::string("["),
+                expr::string(","),
+                expr::string("]"),
+            ],
+        )
+    };
+    assert_eq!(string(&model, &join(&["a", "b", "c"])), "a,b,c");
+    assert_eq!(string(&model, &affixed(&["a", "b", "c"])), "[a,b,c]");
+    assert_eq!(string(&model, &join(&["a"])), "a");
+    assert_eq!(string(&model, &affixed(&["a"])), "[a]");
+    assert_eq!(string(&model, &join(&[])), "");
+    assert_eq!(string(&model, &affixed(&[])), "[]");
+}
+
+/// The platform's `Pair` with its `toString()`:
+/// `['<', $this.first->toString(), ', ', $this.second->toString(), '>']->joinStrings('', '', '')`.
+fn pair_model() -> (PureModel, ElementId) {
+    let mut b = ModelBuilder::new();
+    let mut pair = class(
+        Vec::new(),
+        vec![
+            property("first", named(ANY_ID), Multiplicity::PureOne),
+            property("second", named(ANY_ID), Multiplicity::PureOne),
+        ],
+    );
+    let part = |p: &str| expr::call(TO_STRING, vec![expr::prop(expr::var("this"), p)]);
+    pair.qualified_properties.push(qualified_property(
+        "toString",
+        Vec::new(),
+        named(STRING_ID),
+        Multiplicity::PureOne,
+        vec![expr::call(
+            JOIN_AFFIXED,
+            vec![
+                expr::collection(vec![
+                    expr::string("<"),
+                    part("first"),
+                    expr::string(", "),
+                    part("second"),
+                    expr::string(">"),
+                ]),
+                expr::string(""),
+                expr::string(""),
+                expr::string(""),
+            ],
+        )],
+    ));
+    let id = b.class("my::Pair", pair);
+    (b.finish(), id)
+}
+
+/// `^Pair(first=$first, second=$second)`.
+fn new_pair(pair: ElementId, first: ValueSpec, second: ValueSpec) -> ValueSpec {
+    expr::call(
+        NEW,
+        vec![
+            expr::type_ref(named(pair)),
+            expr::string(""),
+            expr::collection(Vec::new()),
+            expr::collection(Vec::new()),
+            expr::string("first"),
+            first,
+            expr::boolean(false),
+            expr::string("second"),
+            second,
+            expr::boolean(false),
+        ],
+    )
+}
+
+/// `testPairToString`, `testFormatPair`: `toString` and `%s` on a pair
+/// run its `toString()`, which recurses through `toString` and
+/// `joinStrings`.
+#[test]
+fn pair_to_string_runs_through_to_string_and_join_strings() {
+    let (model, pair) = pair_model();
+    let ab = new_pair(pair, expr::string("a"), expr::string("b"));
+    assert_eq!(render(&model, ab), "<a, b>");
+    let a1 = new_pair(pair, expr::string("a"), expr::int(1));
+    assert_eq!(render(&model, a1), "<a, 1>");
+    let nested = new_pair(
+        pair,
+        expr::string("dog"),
+        new_pair(pair, expr::string("cat"), expr::string("mouse")),
+    );
+    assert_eq!(
+        string(&model, &fox("%s", nested)),
+        fox_says("<dog, <cat, mouse>>")
     );
 }

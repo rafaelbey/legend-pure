@@ -608,10 +608,76 @@ fn format_date_pattern(d: &crate::date::PureDate, pat: &str) -> String {
     out
 }
 
+/// Pure `joinStrings` — concatenate a collection of strings with a separator.
+///
+/// Two arities are supported:
+/// - `joinStrings(String[*], String[1]): String[1]` — elements joined by
+///   `separator`.
+/// - `joinStrings(String[*], String[1], String[1], String[1]): String[1]` —
+///   `prefix + elements.join(separator) + suffix`.
+///
+/// The `execute` implementation dispatches on `values.len()` so a single
+/// struct can back both mangled registrations.
+#[derive(Debug)]
+pub struct JoinStrings;
+
+impl NativeFunction for JoinStrings {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        // Pure signature: `joinStrings(strings, prefix, separator, suffix)`
+        // for the 4-arg overload; `joinStrings(strings, separator)` for the
+        // 2-arg one. The previous code swapped prefix and separator —
+        // `'rrr2'->joinStrings('[', ', ', ']')` produced `, 'rrr2'['eee2']`
+        // (separator-then-element-then-prefix-then-element-then-suffix)
+        // because the index map landed `values[1]→separator,
+        // values[2]→prefix`. The Pure platform itself uses
+        // `joinStrings('\nexpected: [', ', ', ']')` so the broken order
+        // emitted by `assertSameElements` / size-many `assertEquals`
+        // diff messages was bucketing all collection comparisons under
+        // a misformatted "Assert failure" string.
+        let (separator, prefix, suffix) = match values.len() {
+            2 => (values[1].as_string()?.clone(), None, None),
+            4 => (
+                values[2].as_string()?.clone(),
+                Some(values[1].as_string()?.clone()),
+                Some(values[3].as_string()?.clone()),
+            ),
+            n => {
+                return Err(PureRuntimeError::EvaluationError(format!(
+                    "joinStrings: expected 2 or 4 argument(s), got {n}"
+                ))
+                .into());
+            }
+        };
+
+        let coll = values[0].to_collection();
+        let mut parts: Vec<String> = Vec::with_capacity(coll.len());
+        for v in &coll {
+            parts.push(v.as_string()?.as_str().to_owned());
+        }
+        let joined = parts.join(separator.as_str());
+
+        let result = match (prefix, suffix) {
+            (Some(p), Some(s)) => format!("{p}{joined}{s}"),
+            _ => joined,
+        };
+        Ok(Evaluated::new(Value::String(SmolStr::new(result))))
+    }
+}
+
 /// Register the fished string natives.
 pub fn register(registry: &mut NativeRegistry) {
     registry.register("toString_Any_1__String_1_", ToString);
     registry.register("format_String_1__Any_MANY__String_1_", Format);
+    registry.register("joinStrings_String_MANY__String_1__String_1_", JoinStrings);
+    registry.register(
+        "joinStrings_String_MANY__String_1__String_1__String_1__String_1_",
+        JoinStrings,
+    );
 }
 
 #[cfg(test)]
@@ -750,6 +816,76 @@ mod tests {
             .unwrap();
         // f64::to_string formatting — exact form pinned for regression.
         assert_eq!(r.into_value(), Value::String("3.25".into()));
+    }
+
+    // -- joinStrings --
+
+    #[test]
+    fn join_strings_2arg_basic() {
+        let coll = lit_collection(vec![lit_str("a"), lit_str("b"), lit_str("c")]);
+        let r = JoinStrings
+            .execute(&[coll, lit_str(",")], &mut MockCtx)
+            .unwrap();
+        assert_eq!(r.into_value(), Value::String("a,b,c".into()));
+    }
+
+    #[test]
+    fn join_strings_2arg_empty_collection() {
+        let coll = lit_collection(vec![]);
+        let r = JoinStrings
+            .execute(&[coll, lit_str(",")], &mut MockCtx)
+            .unwrap();
+        assert_eq!(r.into_value(), Value::String("".into()));
+    }
+
+    #[test]
+    fn join_strings_2arg_scalar_treated_as_singleton() {
+        // A bare String[1] value passed where String[*] is expected should
+        // be treated as a one-element collection via Value::to_collection.
+        let r = JoinStrings
+            .execute(&[lit_str("lone"), lit_str(",")], &mut MockCtx)
+            .unwrap();
+        assert_eq!(r.into_value(), Value::String("lone".into()));
+    }
+
+    #[test]
+    fn join_strings_4arg_with_prefix_and_suffix() {
+        // 4-arg signature is `joinStrings(strings, prefix, separator, suffix)`
+        // — see commit b72e67822ca for the impl's arg-order fix that this
+        // test had drifted out of sync with.
+        let coll = lit_collection(vec![lit_str("a"), lit_str("b")]);
+        let r = JoinStrings
+            .execute(
+                &[coll, lit_str("["), lit_str(", "), lit_str("]")],
+                &mut MockCtx,
+            )
+            .unwrap();
+        assert_eq!(r.into_value(), Value::String("[a, b]".into()));
+    }
+
+    #[test]
+    fn join_strings_wrong_arg_count() {
+        assert!(JoinStrings.execute(&[], &mut MockCtx).is_err());
+        assert!(
+            JoinStrings
+                .execute(&[lit_str("only")], &mut MockCtx)
+                .is_err()
+        );
+        assert!(
+            JoinStrings
+                .execute(&[lit_str("a"), lit_str("b"), lit_str("c")], &mut MockCtx)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn join_strings_element_type_mismatch() {
+        let coll = lit_collection(vec![lit_str("a"), lit_int(1)]);
+        assert!(
+            JoinStrings
+                .execute(&[coll, lit_str(",")], &mut MockCtx)
+                .is_err()
+        );
     }
 
     /// Build `Collection(Collection(... Integer(0) ...))` `depth`

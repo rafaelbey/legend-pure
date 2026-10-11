@@ -52,6 +52,8 @@ const FISHED: &[&str] = &[
     // string
     "toString_Any_1__String_1_",
     "format_String_1__Any_MANY__String_1_",
+    "joinStrings_String_MANY__String_1__String_1_",
+    "joinStrings_String_MANY__String_1__String_1__String_1__String_1_",
     // testing
     "assert_Boolean_1__Function_1__Boolean_1_",
 ];
