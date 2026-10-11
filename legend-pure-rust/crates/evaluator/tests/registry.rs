@@ -62,6 +62,7 @@ const FISHED: &[&str] = &[
     "contains_String_1__String_1__Boolean_1_",
     "endsWith_String_1__String_1__Boolean_1_",
     "length_String_1__Integer_1_",
+    "split_String_1__String_1__String_MANY_",
     // testing
     "assert_Boolean_1__Function_1__Boolean_1_",
 ];

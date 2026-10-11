@@ -854,6 +854,33 @@ impl NativeFunction for Length {
     }
 }
 
+/// Pure `split(str:String[1], token:String[1]):String[*]`
+///
+/// Splits `str` at every occurrence of `token`. When `token` is absent,
+/// the result is a single-element collection holding the original
+/// string. Mirror of Java's `String.split(literal)` modulo regex —
+/// `token` is treated as a literal substring, not a regex.
+#[derive(Debug)]
+pub struct Split;
+
+impl NativeFunction for Split {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("split", &values, 2)?;
+        let s = values[0].as_string()?;
+        let token = values[1].as_string()?;
+        let parts: Vec<Value> = s
+            .split(token.as_str())
+            .map(|p| Value::String(SmolStr::new(p)))
+            .collect();
+        Ok(Evaluated::new(Value::from_vec(parts)))
+    }
+}
+
 fn i64_arg(v: &Value, ctx: &str) -> Result<i64, PureException> {
     match v {
         Value::Integer(n) => Ok(*n),
@@ -885,6 +912,7 @@ pub fn register(registry: &mut NativeRegistry) {
     registry.register("contains_String_1__String_1__Boolean_1_", Contains);
     registry.register("endsWith_String_1__String_1__Boolean_1_", EndsWith);
     registry.register("length_String_1__Integer_1_", Length);
+    registry.register("split_String_1__String_1__String_MANY_", Split);
 }
 
 #[cfg(test)]
@@ -1115,6 +1143,25 @@ mod tests {
     fn length_wrong_arg_count_and_type_mismatch_error() {
         assert!(Length.execute(&[], &mut MockCtx).is_err());
         assert!(Length.execute(&[lit_int(1)], &mut MockCtx).is_err());
+    }
+
+    /// `testSplit`, `testSplitWithNoSplit`: a found token splits, an
+    /// absent one leaves the whole string as the single element.
+    #[test]
+    fn string_split() {
+        let split = |s, token| {
+            Split
+                .execute(&[lit_str(s), lit_str(token)], &mut MockCtx)
+                .unwrap()
+                .into_value()
+                .to_collection()
+        };
+        let strings = |parts: &[&str]| -> im_rc::Vector<Value> {
+            parts.iter().map(|p| Value::String((*p).into())).collect()
+        };
+        assert_eq!(split("Hello World", " "), strings(&["Hello", "World"]));
+        assert_eq!(split("Hello World", ";"), strings(&["Hello World"]));
+        assert!(Split.execute(&[lit_str("a")], &mut MockCtx).is_err());
     }
 
     // -- joinStrings --
