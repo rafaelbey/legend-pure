@@ -81,6 +81,26 @@ pub fn java_number_string(v: &Value) -> String {
     }
 }
 
+/// Pure `floor(Number[1]):Integer[1]` — largest integer ≤ x.
+#[derive(Debug)]
+pub struct Floor;
+
+impl NativeFunction for Floor {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("floor", &values, 1)?;
+        let x = number_to_f64("floor", &values[0])?;
+        // cast_possible_truncation acceptable here — Pure's floor returns Integer and
+        // values outside i64 range are genuinely out of spec.
+        #[allow(clippy::cast_possible_truncation)]
+        Ok(Evaluated::new(Value::Integer(x.floor() as i64)))
+    }
+}
+
 /// Pure `ceiling(Number[1]):Integer[1]` — smallest integer ≥ x.
 #[derive(Debug)]
 pub struct Ceiling;
@@ -182,6 +202,7 @@ fn scale_arg(v: &Value) -> Result<u32, PureException> {
 /// Register the fished mathematical natives under their mangled Pure FQNs.
 pub fn register(registry: &mut NativeRegistry) {
     // rounding
+    registry.register("floor_Number_1__Integer_1_", Floor);
     registry.register("ceiling_Number_1__Integer_1_", Ceiling);
     registry.register("round_Number_1__Integer_1_", Round);
     registry.register("round_Decimal_1__Integer_1__Decimal_1_", Round);
@@ -191,7 +212,54 @@ pub fn register(registry: &mut NativeRegistry) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::native::{MockCtx, lit_bool, lit_float, lit_str};
+    use std::str::FromStr;
+
+    use crate::native::{MockCtx, lit_bool, lit_decimal, lit_float, lit_int, lit_str};
+
+    /// Decimal-literal shim — mirrors the `ld` helper in arithmetic.rs.
+    fn ld(d: Decimal) -> legend_pure_metamodel::types::ValueSpec {
+        lit_decimal(d)
+    }
+
+    #[test]
+    fn floor_positive_float() {
+        let r = Floor.execute(&[lit_float(3.7)], &mut MockCtx).unwrap();
+        assert_eq!(r.into_value(), Value::Integer(3));
+    }
+
+    #[test]
+    fn floor_negative_float() {
+        let r = Floor.execute(&[lit_float(-3.2)], &mut MockCtx).unwrap();
+        assert_eq!(r.into_value(), Value::Integer(-4));
+    }
+
+    #[test]
+    fn floor_integer_passthrough() {
+        let r = Floor.execute(&[lit_int(5)], &mut MockCtx).unwrap();
+        assert_eq!(r.into_value(), Value::Integer(5));
+    }
+
+    #[test]
+    fn floor_decimal() {
+        let d = Decimal::from_str("4.9").unwrap();
+        let r = Floor.execute(&[ld(d)], &mut MockCtx).unwrap();
+        assert_eq!(r.into_value(), Value::Integer(4));
+    }
+
+    #[test]
+    fn floor_wrong_arg_count() {
+        assert!(Floor.execute(&[], &mut MockCtx).is_err());
+        assert!(
+            Floor
+                .execute(&[lit_float(1.0), lit_float(2.0)], &mut MockCtx)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn floor_type_mismatch() {
+        assert!(Floor.execute(&[lit_str("hi")], &mut MockCtx).is_err());
+    }
 
     #[test]
     fn ceiling_positive_float() {
