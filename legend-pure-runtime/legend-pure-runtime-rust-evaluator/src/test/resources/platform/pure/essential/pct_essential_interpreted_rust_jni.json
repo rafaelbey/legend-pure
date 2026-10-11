@@ -6,18 +6,6 @@
       "expectedError": "Assert failed"
     },
     {
-      "test": "meta::pure::functions::collection::tests::fold::testFoldFiltering_Function_1__Boolean_1_",
-      "expectedError": "copy: expected (key, value, augmented) triples, got 2 extra arguments"
-    },
-    {
-      "test": "meta::pure::functions::collection::tests::fold::testFoldToMany_Function_1__Boolean_1_",
-      "expectedError": "copy: expected (key, value, augmented) triples, got 2 extra arguments"
-    },
-    {
-      "test": "meta::pure::functions::collection::tests::fold::testFold_Function_1__Boolean_1_",
-      "expectedError": "copy: expected (key, value, augmented) triples, got 2 extra arguments"
-    },
-    {
       "test": "meta::pure::functions::collection::tests::put::testPut_addsEntry_Function_1__Boolean_1_",
       "expectedError": "Unsupported: a Map value across the boundary"
     },

@@ -31,7 +31,7 @@ use smol_str::SmolStr;
 use crate::error::{PureException, PureRuntimeError};
 use crate::heap::ObjectHandle;
 use crate::native::{
-    EvalContextTrait, Evaluated, NativeFunction, NativeRegistry, expect_args, force_all,
+    EvalContextTrait, Evaluated, NativeFunction, NativeRegistry, expect_args, force_all, force2,
 };
 use crate::value::Value;
 
@@ -713,6 +713,75 @@ impl NativeFunction for Copy {
             )
             .into());
         }
+        copy_with_triples(ctx, &values[0], &values[1..])
+    }
+}
+
+/// Pure `copy<T>(object:T[1], id:String[1]):T[1]`: a copy with no override.
+#[derive(Debug)]
+pub struct CopyWithId;
+
+impl NativeFunction for CopyWithId {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let (source, _id) = force2("copy", args, ctx)?;
+        copy_with_triples(ctx, &source, &[])
+    }
+}
+
+/// Pure `copy<T>(object:T[1], id:String[1], keyExpressions:KeyExpression[*]):T[1]`
+///
+/// The platform-declared overload: the overrides arrive as M3
+/// `KeyExpression` heap objects, decoded the way `new` decodes them, and
+/// the copy proceeds from `(key, values, add)` triples.
+#[derive(Debug)]
+pub struct CopyWithKeyExpressions;
+
+impl NativeFunction for CopyWithKeyExpressions {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        if values.len() < 2 {
+            return Err(PureRuntimeError::EvaluationError(format!(
+                "copy(object, id, [keyExpressions]): expected at least 2 arguments, got {}",
+                values.len()
+            ))
+            .into());
+        }
+        let key_expr_id = crate::m3_paths::resolve(ctx.model(), crate::m3_paths::KEY_EXPRESSION);
+        let payload: Vec<&Value> = match values.get(2) {
+            Some(Value::Collection(coll)) => coll.iter().collect(),
+            Some(Value::Unit) | None => Vec::new(),
+            Some(single) => vec![single],
+        };
+        let triples = decode_key_expressions(ctx, key_expr_id, &payload)?;
+        let mut kvs: Vec<Value> = Vec::with_capacity(triples.len() * 3);
+        for (key, expression_values, add) in triples {
+            kvs.push(Value::String(key));
+            kvs.push(Value::from_vec(expression_values));
+            kvs.push(Value::Boolean(add));
+        }
+        copy_with_triples(ctx, &values[0], &kvs)
+    }
+}
+
+/// The copy itself: `source` with the `(key, values, add)` triples of
+/// `kvs` applied (`add` appends, otherwise the key's values are replaced).
+fn copy_with_triples(
+    ctx: &mut dyn EvalContextTrait,
+    source: &Value,
+    kvs: &[Value],
+) -> Result<Evaluated, PureException> {
+    {
+        let values: Vec<Value> = std::iter::once(source.clone())
+            .chain(kvs.iter().cloned())
+            .collect();
 
         if let Value::Element(elem_id) = &values[0] {
             let element = ctx.model().get_element(*elem_id);
@@ -1440,6 +1509,9 @@ pub fn register(registry: &mut NativeRegistry) {
         "new_Class_1__String_1__KeyExpression_MANY__T_1_",
         NewWithKeyExpressions,
     );
-    registry.register("copy_T_1__String_1__T_1_", Copy);
-    registry.register("copy_T_1__String_1__KeyExpression_MANY__T_1_", Copy);
+    registry.register("copy_T_1__String_1__T_1_", CopyWithId);
+    registry.register(
+        "copy_T_1__String_1__KeyExpression_MANY__T_1_",
+        CopyWithKeyExpressions,
+    );
 }

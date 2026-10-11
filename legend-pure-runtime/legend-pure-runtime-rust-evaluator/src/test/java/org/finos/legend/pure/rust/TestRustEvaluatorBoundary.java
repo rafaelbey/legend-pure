@@ -244,15 +244,15 @@ public class TestRustEvaluatorBoundary
     @Test
     public void aWiredButUnfishedNativeReportsNotImplemented()
     {
-        CoreInstance lambda = findLambda(pctTest(PlatformCodeRepositoryProvider.grammarFunctions, "testSinglePlusType"));
+        CoreInstance lambda = findLambda(pctTest(PlatformCodeRepositoryProvider.essentialFunctions, "testMatchWithMixedReturnType"));
         PureRustEvaluationException e = Assert.assertThrows(PureRustEvaluationException.class,
                 () -> evaluator.start(lambda, Lists.immutable.empty()));
         Assert.assertEquals(e.getMessage(), PureRustEvaluationException.Kind.NOT_IMPLEMENTED, e.getKind());
-        Assert.assertEquals("NotImplemented: genericType_Any_MANY__GenericType_1_", e.getMessage());
-        Assert.assertEquals("genericType_Any_MANY__GenericType_1_", e.getInfo());
+        Assert.assertEquals("NotImplemented: deactivate_Any_MANY__ValueSpecification_1_", e.getMessage());
+        Assert.assertEquals("deactivate_Any_MANY__ValueSpecification_1_", e.getInfo());
         PureException cause = PureException.findPureException(e);
         Assert.assertNotNull(cause);
-        Assert.assertEquals("NotImplemented: genericType_Any_MANY__GenericType_1_", cause.getInfo());
+        Assert.assertEquals("NotImplemented: deactivate_Any_MANY__ValueSpecification_1_", cause.getInfo());
     }
 
     /**

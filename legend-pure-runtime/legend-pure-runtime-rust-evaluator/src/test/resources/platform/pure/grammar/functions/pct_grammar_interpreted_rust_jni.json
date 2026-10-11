@@ -26,16 +26,8 @@
       "expectedError": "Execution error (resource:<ffi> line:0 column:0)"
     },
     {
-      "test": "meta::pure::functions::math::tests::minus::testSingleMinusType_Function_1__Boolean_1_",
-      "expectedError": "NotImplemented: genericType_Any_MANY__GenericType_1_"
-    },
-    {
       "test": "meta::pure::functions::math::tests::plus::testLargePlus_Function_1__Boolean_1_",
       "expectedError": "Unsupported: Integer arithmetic outside the 64-bit range"
-    },
-    {
-      "test": "meta::pure::functions::math::tests::plus::testSinglePlusType_Function_1__Boolean_1_",
-      "expectedError": "NotImplemented: genericType_Any_MANY__GenericType_1_"
     },
     {
       "test": "meta::pure::functions::math::tests::times::testLargeTimes_Function_1__Boolean_1_",

@@ -154,6 +154,30 @@ pub(crate) fn build_multiplicity_wrapper(
     Ok(obj)
 }
 
+/// Pure `genericType(any:Any[*]):GenericType[1]`: a `GenericType` heap
+/// object whose `rawType` is the runtime type of the value, as a model
+/// element. A collection of one type takes that type; a mixed collection
+/// needs the least upper bound, which is not here yet, and reports
+/// `Unsupported`.
+#[derive(Debug)]
+pub struct GenericTypeOf;
+
+impl NativeFunction for GenericTypeOf {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("genericType", &values, 1)?;
+        let raw_type = resolve_value_type(&values[0], ctx.model(), ctx.heap())?;
+        let obj = ctx.heap_mut().alloc_dynamic(crate::m3_paths::GENERIC_TYPE);
+        ctx.heap_mut()
+            .mutate_set(&obj, "rawType", &[Value::Element(raw_type)])?;
+        Ok(Evaluated::new(Value::Object(obj)))
+    }
+}
+
 /// Pure `match<T|m,n>(var:Any[*], functions:Function<{Nil[n]->T[m]}>[1..*]):T[m]`
 ///
 /// Type-based pattern matching: finds the first lambda in `functions` whose
@@ -655,10 +679,7 @@ pub fn register(registry: &mut NativeRegistry) {
         ExtractEnumValue,
     );
     registry.register("cast_Any_m__T_1__T_m_", Cast);
-    registry.register(
-        "genericType_Any_MANY__GenericType_1_",
-        NotYet("genericType_Any_MANY__GenericType_1_"),
-    );
+    registry.register("genericType_Any_MANY__GenericType_1_", GenericTypeOf);
     registry.register(
         "deactivate_Any_MANY__ValueSpecification_1_",
         NotYet("deactivate_Any_MANY__ValueSpecification_1_"),

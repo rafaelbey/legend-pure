@@ -15,15 +15,15 @@
     },
     {
       "test": "meta::pure::functions::collection::tests::fold::testFoldFiltering_Function_1__Boolean_1_",
-      "expectedError": "Execution error at (resource:/platform/pure/essential/collection/iteration/fold.pure line:96 column:81), \"copy: expected (key, value, augmented) triples, got 2 extra arguments\""
+      "expectedError": "Execution error at (resource:/platform/pure/essential/collection/iteration/fold.pure lines:93c71-99c1), \"Unexpected error executing function with params [testAdapterForRustExecution_Function_1__X_o_]\""
     },
     {
       "test": "meta::pure::functions::collection::tests::fold::testFoldToMany_Function_1__Boolean_1_",
-      "expectedError": "Execution error at (resource:/platform/pure/essential/collection/iteration/fold.pure line:88 column:52), \"copy: expected (key, value, augmented) triples, got 2 extra arguments\""
+      "expectedError": "Execution error at (resource:/platform/pure/essential/collection/iteration/fold.pure lines:85c71-91c1), \"Unexpected error executing function with params [testAdapterForRustExecution_Function_1__X_o_]\""
     },
     {
       "test": "meta::pure::functions::collection::tests::fold::testFold_Function_1__Boolean_1_",
-      "expectedError": "Execution error at (resource:/platform/pure/essential/collection/iteration/fold.pure line:81 column:52), \"copy: expected (key, value, augmented) triples, got 2 extra arguments\""
+      "expectedError": "Execution error at (resource:/platform/pure/essential/collection/iteration/fold.pure lines:78c71-83c1), \"Unexpected error executing function with params [testAdapterForRustExecution_Function_1__X_o_]\""
     },
     {
       "test": "meta::pure::functions::collection::tests::put::testPut_addsEntry_Function_1__Boolean_1_",
