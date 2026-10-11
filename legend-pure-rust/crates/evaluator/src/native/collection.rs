@@ -347,6 +347,24 @@ fn lambda_or_none(v: &Value) -> Option<&Value> {
     }
 }
 
+/// Pure `size(Any[*]): Integer[1]` — number of elements in a collection.
+#[derive(Debug)]
+pub struct Size;
+
+impl NativeFunction for Size {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("size", &values, 1)?;
+        let coll = values[0].to_collection();
+        #[allow(clippy::cast_possible_wrap)]
+        Ok(Evaluated::new(Value::Integer(coll.len() as i64)))
+    }
+}
+
 /// Register the fished collection natives.
 pub fn register(registry: &mut NativeRegistry) {
     registry.register("fold_T_MANY__Function_1__V_m__V_m_", Fold);
@@ -359,6 +377,7 @@ pub fn register(registry: &mut NativeRegistry) {
         RemoveDuplicates,
     );
     registry.register("sort_T_m__Function_$0_1$__Function_$0_1$__T_m_", Sort);
+    registry.register("size_Any_MANY__Integer_1_", Size);
 }
 
 #[cfg(test)]
@@ -537,5 +556,35 @@ mod tests {
     #[test]
     fn sort_wrong_arg_count() {
         assert!(Sort.execute(&[], &mut MockCtx).is_err());
+    }
+
+    #[test]
+    fn size_of_collection() {
+        assert_eq!(
+            Size.execute(&[int_spec(&[1, 2, 3])], &mut MockCtx)
+                .unwrap()
+                .into_value(),
+            Value::Integer(3)
+        );
+    }
+
+    #[test]
+    fn size_of_scalar() {
+        assert_eq!(
+            Size.execute(&[lit_int(42)], &mut MockCtx)
+                .unwrap()
+                .into_value(),
+            Value::Integer(1)
+        );
+    }
+
+    #[test]
+    fn size_of_unit() {
+        assert_eq!(
+            Size.execute(&[lit_collection(vec![])], &mut MockCtx)
+                .unwrap()
+                .into_value(),
+            Value::Integer(0)
+        );
     }
 }

@@ -32,6 +32,7 @@ const ZIP: &str = "zip_T_MANY__U_MANY__Pair_MANY_";
 const FIRST: &str = "first_T_MANY__T_$0_1$_";
 const REMOVE_DUPLICATES: &str = "removeDuplicates_T_MANY__Function_$0_1$__Function_$0_1$__T_MANY_";
 const SORT: &str = "sort_T_m__Function_$0_1$__Function_$0_1$__T_m_";
+const SIZE: &str = "size_Any_MANY__Integer_1_";
 const TIMES: &str = "times_Number_MANY__Number_1_";
 const EQ: &str = "eq_Any_1__Any_1__Boolean_1_";
 const PLUS: &str = "plus_Number_MANY__Number_1_";
@@ -261,4 +262,17 @@ fn sort_orders_by_natural_order_key_or_comparator() {
         [342, 171, 5, 2, 1]
     );
     assert_eq!(sort(ints(&[]), none(), none()), Vec::<i64>::new());
+}
+
+#[test]
+fn size_counts_elements_of_any_multiplicity() {
+    let size = |v: ValueSpec| run(&expr::call(SIZE, vec![v]));
+    assert_eq!(size(strings(&["a", "b", "c"])), Value::Integer(3));
+    assert_eq!(size(expr::int(9)), Value::Integer(1));
+    assert_eq!(size(ints(&[])), Value::Integer(0));
+    // size of a zip result: heap objects count like any element.
+    assert_eq!(
+        size(expr::call(ZIP, vec![ints(&[1, 2]), strings(&["a", "b"])])),
+        Value::Integer(2)
+    );
 }
