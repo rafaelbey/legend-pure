@@ -3,7 +3,7 @@
   "exclusions": [
     {
       "test": "meta::pure::functions::collection::tests::concatenate::testConcatenateTypeInference_Function_1__Boolean_1_",
-      "expectedError": "Execution error at ??, \"ERROR unhandled type for value: Hoboken instance meta::pure::functions::collection::tests::model::CO_Address (instance of class org.finos.legend.pure.rust.RustCoreInstance)\""
+      "expectedError": "Execution error at ??, \"ERROR unhandled type for value: Anonymous_StripedId instance meta::pure::functions::collection::tests::model::CO_Address (instance of class org.finos.legend.pure.rust.RustCoreInstance)\""
     },
     {
       "test": "meta::pure::functions::collection::tests::drop::testDropInList_Function_1__Boolean_1_",
@@ -55,27 +55,27 @@
     },
     {
       "test": "meta::pure::functions::collection::tests::zip::testZipBothListsAreOfPairs_Function_1__Boolean_1_",
-      "expectedError": "Execution error at ??, \"ERROR unhandled type for value: null instance meta::pure::functions::collection::Pair (instance of class org.finos.legend.pure.rust.RustCoreInstance)\""
+      "expectedError": "Execution error at ??, \"ERROR unhandled type for value: Anonymous_StripedId instance meta::pure::functions::collection::Pair (instance of class org.finos.legend.pure.rust.RustCoreInstance)\""
     },
     {
       "test": "meta::pure::functions::collection::tests::zip::testZipBothListsSameLength_Function_1__Boolean_1_",
-      "expectedError": "Execution error at ??, \"ERROR unhandled type for value: null instance meta::pure::functions::collection::Pair (instance of class org.finos.legend.pure.rust.RustCoreInstance)\""
+      "expectedError": "Execution error at ??, \"ERROR unhandled type for value: Anonymous_StripedId instance meta::pure::functions::collection::Pair (instance of class org.finos.legend.pure.rust.RustCoreInstance)\""
     },
     {
       "test": "meta::pure::functions::collection::tests::zip::testZipFirstListLonger_Function_1__Boolean_1_",
-      "expectedError": "Execution error at ??, \"ERROR unhandled type for value: null instance meta::pure::functions::collection::Pair (instance of class org.finos.legend.pure.rust.RustCoreInstance)\""
+      "expectedError": "Execution error at ??, \"ERROR unhandled type for value: Anonymous_StripedId instance meta::pure::functions::collection::Pair (instance of class org.finos.legend.pure.rust.RustCoreInstance)\""
     },
     {
       "test": "meta::pure::functions::collection::tests::zip::testZipFirstListsIsOfPairs_Function_1__Boolean_1_",
-      "expectedError": "Execution error at ??, \"ERROR unhandled type for value: null instance meta::pure::functions::collection::Pair (instance of class org.finos.legend.pure.rust.RustCoreInstance)\""
+      "expectedError": "Execution error at ??, \"ERROR unhandled type for value: Anonymous_StripedId instance meta::pure::functions::collection::Pair (instance of class org.finos.legend.pure.rust.RustCoreInstance)\""
     },
     {
       "test": "meta::pure::functions::collection::tests::zip::testZipSecondListLonger_Function_1__Boolean_1_",
-      "expectedError": "Execution error at ??, \"ERROR unhandled type for value: null instance meta::pure::functions::collection::Pair (instance of class org.finos.legend.pure.rust.RustCoreInstance)\""
+      "expectedError": "Execution error at ??, \"ERROR unhandled type for value: Anonymous_StripedId instance meta::pure::functions::collection::Pair (instance of class org.finos.legend.pure.rust.RustCoreInstance)\""
     },
     {
       "test": "meta::pure::functions::collection::tests::zip::testZipSecondListsIsOfPairs_Function_1__Boolean_1_",
-      "expectedError": "Execution error at ??, \"ERROR unhandled type for value: null instance meta::pure::functions::collection::Pair (instance of class org.finos.legend.pure.rust.RustCoreInstance)\""
+      "expectedError": "Execution error at ??, \"ERROR unhandled type for value: Anonymous_StripedId instance meta::pure::functions::collection::Pair (instance of class org.finos.legend.pure.rust.RustCoreInstance)\""
     },
     {
       "test": "meta::pure::functions::date::tests::testAdjustByDaysBigNumber_Function_1__Boolean_1_",

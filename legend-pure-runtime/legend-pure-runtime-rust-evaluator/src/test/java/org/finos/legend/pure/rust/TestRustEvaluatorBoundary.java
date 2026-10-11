@@ -181,6 +181,25 @@ public class TestRustEvaluatorBoundary
         Assert.assertTrue(stale.getMessage(), stale.getMessage().contains("Stale or unknown JNI handle:"));
     }
 
+    /**
+     * A Rust object that is not a model element has a name as a Java
+     * instance does: anonymous in the repository's form, and its own.
+     * Pure's {@code id()} (and with it {@code toRepresentation}, which
+     * {@code assertEquals} calls on every collection it compares) reads it.
+     */
+    @Test
+    public void aRustObjectThatIsNotAModelElementHasAnAnonymousName()
+    {
+        String pair = "meta::pure::functions::collection::Pair";
+        CoreInstance first = evaluator.create(pair, new String[]{"first", "second"}, new CoreInstance[][]{{repository.newIntegerCoreInstance(1L)}, {repository.newStringCoreInstance("a")}});
+        CoreInstance second = evaluator.create(pair, new String[]{"first", "second"}, new CoreInstance[][]{{repository.newIntegerCoreInstance(1L)}, {repository.newStringCoreInstance("a")}});
+        Assert.assertNotNull(first.getName());
+        Assert.assertTrue(first.getName(), ModelRepository.isAnonymousInstanceName(first.getName()));
+        Assert.assertNotEquals(first.getName(), second.getName());
+        ((RustCoreInstance) first).close();
+        ((RustCoreInstance) second).close();
+    }
+
     @Test
     public void aPctTestIsFunctionNotFoundWithItsUserPath()
     {
