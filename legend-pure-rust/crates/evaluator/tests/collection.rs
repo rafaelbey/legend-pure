@@ -28,6 +28,7 @@ use legend_pure_metamodel::types::{Multiplicity, ValueSpec};
 const FOLD: &str = "fold_T_MANY__Function_1__V_m__V_m_";
 const DROP: &str = "drop_T_MANY__Integer_1__T_MANY_";
 const TAKE: &str = "take_T_MANY__Integer_1__T_MANY_";
+const ZIP: &str = "zip_T_MANY__U_MANY__Pair_MANY_";
 const PLUS: &str = "plus_Number_MANY__Number_1_";
 const MINUS: &str = "minus_Number_MANY__Number_1_";
 
@@ -131,4 +132,46 @@ fn take_keeps_the_first_n_and_clamps_the_count() {
     assert_eq!(as_ints(&take(&[1, 2, 3], 5)), [1, 2, 3]);
     assert_eq!(as_ints(&take(&[1, 2, 3], -1)), Vec::<i64>::new());
     assert_eq!(as_ints(&take(&[], 1)), Vec::<i64>::new());
+}
+
+fn strings(items: &[&str]) -> ValueSpec {
+    expr::collection(items.iter().map(|s| expr::string(s)).collect())
+}
+
+#[test]
+fn zip_pairs_up_to_the_shorter_side_and_the_pairs_read_back() {
+    let model = model();
+    let registry = NativeRegistry::standard();
+    let mut eval = Evaluator::new(&model, &registry);
+    let zipped = eval
+        .eval(&expr::call(
+            ZIP,
+            vec![ints(&[1, 2, 3]), strings(&["a", "b"])],
+        ))
+        .unwrap();
+    let pairs = zipped.to_collection();
+    assert_eq!(pairs.len(), 2);
+    for pair in &pairs {
+        let Value::Object(handle) = pair else {
+            panic!("expected a Pair object, got {pair:?}");
+        };
+        assert_eq!(
+            eval.heap().classifier(handle).unwrap(),
+            "meta::pure::functions::collection::Pair"
+        );
+    }
+    // $zipped->at(1).first / .second, through property access on the heap object.
+    eval.context_mut().push_scope();
+    eval.context_mut().set("p", pairs[1].clone());
+    assert_eq!(
+        eval.eval(&expr::prop(expr::var("p"), "first")).unwrap(),
+        Value::Integer(2)
+    );
+    assert_eq!(
+        eval.eval(&expr::prop(expr::var("p"), "second")).unwrap(),
+        Value::String("b".into())
+    );
+    // Either side empty: no pairs.
+    assert!(run(&expr::call(ZIP, vec![ints(&[]), strings(&["a"])])).is_empty());
+    assert!(run(&expr::call(ZIP, vec![ints(&[1]), strings(&[])])).is_empty());
 }

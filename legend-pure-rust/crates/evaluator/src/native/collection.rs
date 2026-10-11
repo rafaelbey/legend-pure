@@ -95,11 +95,54 @@ impl NativeFunction for Drop {
     }
 }
 
+/// Pure `zip<T,U>(set1:T[*], set2:U[*]):Pair<T,U>[*]`
+///
+/// Pairwise combines two collections, truncating to the shorter length.
+/// Each pair allocates a heap `Pair` object with `first` / `second`
+/// slots, mirroring the shape produced by `keyValues` and consumed by
+/// `pair()` / Map iteration.
+#[derive(Debug)]
+pub struct Zip;
+
+impl NativeFunction for Zip {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("zip", &values, 2)?;
+        let xs = collection_as_vec(&values[0]);
+        let ys = collection_as_vec(&values[1]);
+        let n = xs.len().min(ys.len());
+        let mut out: Vec<Value> = Vec::with_capacity(n);
+        for i in 0..n {
+            let obj = ctx.heap_mut().alloc_dynamic(crate::m3_paths::PAIR);
+            ctx.heap_mut().mutate_add(&obj, "first", &[xs[i].clone()])?;
+            ctx.heap_mut()
+                .mutate_add(&obj, "second", &[ys[i].clone()])?;
+            out.push(Value::Object(obj));
+        }
+        Ok(Evaluated::new(Value::from_vec(out)))
+    }
+}
+
+/// View any value as a `Vec<Value>` — `Collection` flattens to its
+/// elements; `Unit` is empty; a scalar is wrapped in a singleton.
+fn collection_as_vec(v: &Value) -> Vec<Value> {
+    match v {
+        Value::Collection(c) => c.iter().cloned().collect(),
+        Value::Unit => Vec::new(),
+        other => vec![other.clone()],
+    }
+}
+
 /// Register the fished collection natives.
 pub fn register(registry: &mut NativeRegistry) {
     registry.register("fold_T_MANY__Function_1__V_m__V_m_", Fold);
     registry.register("take_T_MANY__Integer_1__T_MANY_", Take);
     registry.register("drop_T_MANY__Integer_1__T_MANY_", Drop);
+    registry.register("zip_T_MANY__U_MANY__Pair_MANY_", Zip);
 }
 
 #[cfg(test)]
