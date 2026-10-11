@@ -656,6 +656,62 @@ date range (5), 64-bit integer overflow where Java promotes to `BigInteger`
 and `deactivate` (needs the `ValueSpecification` heap shapes and the
 compiler's least upper bound).
 
+**Natives round 2 and the bridge's cost (2026-10-11).** Both halves of
+round 2 merged, and the bridge measured and cut. Before: interpreted
+`Rust_JNI essential: 303 / 327`, `Rust_JNI grammar: 126 / 136`, compiled
+300 / 327 and 125 / 136. After: `Rust_JNI essential: 320 / 327`,
+`Rust_JNI grammar: 132 / 136`, compiled 318 / 327 and 132 / 136. What
+moved, by kind: `Map` out as the host engine's own map (`MapCoreInstance`,
+`PureMap` in a carrier; 6 per engine); the `zip` results, whose cause was
+not equality but `RustCoreInstance.getName()` returning null where every
+Java instance has a name (`assertEquals` builds its message eagerly through
+`id()`; 6 interpreted); a Rust object reaching the compiled engine as an
+instance of its generated `_Impl` class, copied when the call ends (the five
+compiled-only holes and the six compiled `zip` tests); `copy` over key
+expressions (3), `genericType` (2), `getAll` (1), stereotypes and user
+primitive types in the lowering (4), `parseDecimal` scale (1). Along the
+way the review's correctness items: JNI exception discipline and local
+frames, one mutable entry per call (`Session`) with every `unsafe` block
+justified and `undocumented_unsafe_blocks` denied, read failures keeping
+their kind and anchor (typed side-channel), `start` classifying by element
+id and lowering a `ConcreteFunctionDefinition` and its arguments, the
+bridge forgetting the node ids Rust released. What stays red, one line
+each: `adjust` beyond jiff's range (5 per engine) and `%10999` in
+`testDateCompare` (`PureDate` is a jiff civil date-time, years ±9999, and
+its API, i16 years and `inner_datetime()`, is consumed by the literal
+evaluation and `format`; Java's years are `int`); 64-bit overflow (3:
+`Value::Integer` is `i64`, Java promotes to `BigInteger`; `testLargeMinus`
+fails already at the crossing of its literal); `testBigFloatAbs`
+(interpreted only: `Float` is `f64`, the interpreted engine's a
+`BigDecimal`); `deactivate` (the `ValueSpecification` heap shapes); the
+three compiled `fold` tests (`copy` keeps the copy's source information in
+a slot named `sourceInformation`, which the compiled conversion refuses as
+a property the class does not declare). The bridge, `BenchmarkPctExpressions`
+with the release cdylib, interpreted host: before, median 658 µs per PCT
+test against 82 µs for `interpreted/In-Memory` (geomean 8.65x), of which
+the lowering 246 µs and the run under 1 µs, first run 839 µs; after,
+median 94 µs (1.15x, geomean 1.10x), lowering 1 µs, run under 1 µs (431
+tests read nothing during the run), first run 391 µs. Three changes did
+it, each measured: the lowered closure cached per lambda definition (the
+interpreted engine's `LambdaWithContext` is new per evaluation; the key is
+the wrapped lambda's synthetic id), with captured lambdas and lambda
+arguments through the same cache (lowering 246 → 1 µs); the description
+read through field ids resolved once instead of a class and field lookup
+by name per field (one `Integer` crossing 7.7 → 1.9 µs); property keys
+read when asked instead of with every description (an expression node
+5.4 → 2.4 µs; the compiled host built them from the class per node). The
+compiled host has no closure cache (its lambda values expose no stable
+definition), so it still lowers per call: 709 → 203 µs median (geomean
+9.32x → 2.45x of the interpreted engine's adapter). A cached call now costs
+about 5 µs of crossing (the lambda's description, its captures, the end
+of the execution, materialising the result, Java's wrapping); the rest of
+the menu below (columnar description, interning, the thread-local
+`JNIEnv`, subtree prefetch, element resolution) was not needed for the
+gate and waits for a profile that asks for it. An incremental recompile
+of the Java runtime leaves both the model and the closure cache stale
+until the evaluator is replaced (`EvalRust` replaces it when the
+engine's runtime object changes).
+
 **Later: `Rust_Native`.** Once the surveyor's own functions execute in Rust,
 the same corpus runs under cargo through the Rust surveyor, with its own
 manifests, and reports as adapter `Rust_Native`; `Rust_JNI` stays the measure

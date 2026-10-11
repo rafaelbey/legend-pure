@@ -32,8 +32,8 @@ from it, `platform/pure/grammar/m3.pure`, as its bootstrap.
   currency, and the platform PCT corpus running red through the `Rust_JNI` adapter)
   are complete.
 - Java lambdas are lowered through the bridge (plan, Step 2 "Next", done) and the
-  natives backlog is fished from the archive (natives round 1, 2026-10-11): PCT state
-  `Rust_JNI essential: 303 / 327`, `Rust_JNI grammar: 126 / 136`. The module's manifests
+  natives backlog is fished from the archive (natives rounds 1 and 2, 2026-10-11): PCT
+  state `Rust_JNI essential: 320 / 327`, `Rust_JNI grammar: 132 / 136`. The module's manifests
   rank what is left by kind: `FunctionNotFound:` (nothing registered),
   `NotImplemented:` (registered under its key, body not fished), `Unsupported:`
   (lowering or value-shape gap), then bare Pure error texts. Next: Step 2b (the
@@ -51,7 +51,7 @@ from it, `platform/pure/grammar/m3.pure`, as its bootstrap.
   `evalRust` and the `Rust_JNI` PCT adapter; the interpreted engine implements `evalRust`
   through the rust-evaluator module's extension, the compiled engine through its
   `EvalRustExecutor` hook, which the same module provides. Both engines run the corpus:
-  interpreted 303 / 327 and 126 / 136, compiled 300 / 327 and 125 / 136.
+  interpreted 320 / 327 and 132 / 136, compiled 318 / 327 and 132 / 136.
 - Root installs need `mvn clean install` (the PAR plugin trips on a stale descriptor
   otherwise); JDK 11 or 17.
 
