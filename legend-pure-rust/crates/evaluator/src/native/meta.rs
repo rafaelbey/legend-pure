@@ -835,4 +835,11 @@ pub fn register(registry: &mut NativeRegistry) {
         "genericType_Any_1__GenericType_1_",
         NotYet("genericType_Any_1__GenericType_1_"),
     );
+    // `deactivate` rebuilds the argument's expression as M3
+    // `ValueSpecification` heap objects and types it statically (the
+    // compiler's least upper bound again); neither exists here yet.
+    registry.register(
+        "deactivate_Any_MANY__ValueSpecification_1_",
+        NotYet("deactivate_Any_MANY__ValueSpecification_1_"),
+    );
 }
