@@ -140,6 +140,17 @@ impl JniContext {
     /// the extension, and build a fresh evaluator over the grown model.
     /// Then run the closure in its own scope.
     fn lower_and_run(&mut self, function: &Value) -> Result<Value, PureException> {
+        let result = self.lower_and_run_inner(function);
+        // Whether the lowering or the run failed, the nodes this execution
+        // touched hold caches (and cycles) that must go now.
+        self.shared.end_execution();
+        if let Some(message) = self.shared.take_error() {
+            return Err(ffi_error(message));
+        }
+        result
+    }
+
+    fn lower_and_run_inner(&mut self, function: &Value) -> Result<Value, PureException> {
         let closure = {
             let model: &PureModel = unsafe { &*self.model };
             let chunk = self
@@ -170,10 +181,6 @@ impl JniContext {
         let callable = Value::Function(Box::new(FunctionValue::Lambda(closure)));
         let result = evaluator.apply_callable(&callable, &[]);
         evaluator.context_mut().pop_scope();
-        self.shared.end_execution();
-        if let Some(message) = self.shared.take_error() {
-            return Err(ffi_error(message));
-        }
         result
     }
 
