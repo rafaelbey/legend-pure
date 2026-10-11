@@ -49,6 +49,7 @@ const TO_ONE_WITH_MESSAGE: &str = "toOne_T_MANY__String_1__T_1_";
 const FILTER: &str = "filter_T_MANY__Function_1__T_MANY_";
 const NOT: &str = "not_Boolean_1__Boolean_1_";
 const CONCATENATE: &str = "concatenate_T_MANY__T_MANY__T_MANY_";
+const FOR_ALL: &str = "forAll_T_MANY__Function_1__Boolean_1_";
 const TIMES: &str = "times_Number_MANY__Number_1_";
 const EQ: &str = "eq_Any_1__Any_1__Boolean_1_";
 const PLUS: &str = "plus_Number_MANY__Number_1_";
@@ -545,4 +546,13 @@ fn concatenate_appends_the_second_collection() {
     let mixed = concatenate(ints(&[1]), strings(&["a"])).to_collection();
     assert_eq!(mixed[0], Value::Integer(1));
     assert_eq!(mixed[1], Value::String("a".into()));
+}
+
+#[test]
+fn for_all_is_true_when_every_element_matches_and_on_empty() {
+    let for_all =
+        |items: &[i64], n: i64| run(&expr::call(FOR_ALL, vec![ints(items), is_lambda(n)]));
+    assert_eq!(for_all(&[2, 2], 2), Value::Boolean(true));
+    assert_eq!(for_all(&[2, 3], 2), Value::Boolean(false));
+    assert_eq!(for_all(&[], 2), Value::Boolean(true));
 }
