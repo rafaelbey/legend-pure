@@ -80,10 +80,17 @@ impl NativeFunction for Plus {
     }
 }
 
+/// Integer results live in `i64`; Java promotes to `BigInteger` instead.
+fn outside_i64() -> PureRuntimeError {
+    PureRuntimeError::Unsupported("Integer arithmetic outside the 64-bit range".into())
+}
+
 /// Pairwise `plus`.
 fn plus_pair(a: &Value, b: &Value) -> Result<Value, PureRuntimeError> {
     match promote_pair(a, b) {
-        Some((Value::Integer(a), Value::Integer(b))) => Ok(Value::Integer(a.wrapping_add(b))),
+        Some((Value::Integer(a), Value::Integer(b))) => {
+            a.checked_add(b).map(Value::Integer).ok_or_else(outside_i64)
+        }
         Some((Value::Float(a), Value::Float(b))) => Ok(Value::Float(a + b)),
         Some((Value::Decimal(a), Value::Decimal(b))) => Ok(Value::Decimal(a + b)),
         _ => Err(PureRuntimeError::EvaluationError(format!(
@@ -127,7 +134,7 @@ impl NativeFunction for Minus {
 /// negate the payload and keep the unit tag intact.
 fn minus_unary(v: &Value) -> Result<Value, PureRuntimeError> {
     match v {
-        Value::Integer(a) => Ok(Value::Integer(-a)),
+        Value::Integer(a) => a.checked_neg().map(Value::Integer).ok_or_else(outside_i64),
         Value::Float(a) => Ok(Value::Float(-a)),
         Value::Decimal(a) => Ok(Value::Decimal(-*a)),
         Value::UnitInstance { unit_id, inner } => {
@@ -148,7 +155,9 @@ fn minus_unary(v: &Value) -> Result<Value, PureRuntimeError> {
 /// as [`plus_pair`].
 fn minus_pair(a: &Value, b: &Value) -> Result<Value, PureRuntimeError> {
     match promote_pair(a, b) {
-        Some((Value::Integer(a), Value::Integer(b))) => Ok(Value::Integer(a.wrapping_sub(b))),
+        Some((Value::Integer(a), Value::Integer(b))) => {
+            a.checked_sub(b).map(Value::Integer).ok_or_else(outside_i64)
+        }
         Some((Value::Float(a), Value::Float(b))) => Ok(Value::Float(a - b)),
         Some((Value::Decimal(a), Value::Decimal(b))) => Ok(Value::Decimal(a - b)),
         _ => Err(PureRuntimeError::EvaluationError(format!(
@@ -199,7 +208,9 @@ impl NativeFunction for Times {
 /// lattice as [`plus_pair`].
 fn times_pair(a: &Value, b: &Value) -> Result<Value, PureRuntimeError> {
     match promote_pair(a, b) {
-        Some((Value::Integer(a), Value::Integer(b))) => Ok(Value::Integer(a.wrapping_mul(b))),
+        Some((Value::Integer(a), Value::Integer(b))) => {
+            a.checked_mul(b).map(Value::Integer).ok_or_else(outside_i64)
+        }
         Some((Value::Float(a), Value::Float(b))) => Ok(Value::Float(a * b)),
         Some((Value::Decimal(a), Value::Decimal(b))) => Ok(Value::Decimal(a * b)),
         _ => Err(PureRuntimeError::EvaluationError(format!(
@@ -318,7 +329,10 @@ impl NativeFunction for Abs {
         let values = force_all(args, ctx)?;
         expect_args("abs", &values, 1)?;
         let v = match &values[0] {
-            Value::Integer(i) => Value::Integer(i.wrapping_abs()),
+            Value::Integer(i) => i
+                .checked_abs()
+                .map(Value::Integer)
+                .ok_or_else(outside_i64)?,
             Value::Float(f) => Value::Float(f.abs()),
             Value::Decimal(d) => Value::Decimal(d.abs()),
             other => return Err(PureRuntimeError::type_mismatch("Number", other).into()),
@@ -344,7 +358,8 @@ impl NativeFunction for Mod {
         if b == 0 {
             return Err(PureRuntimeError::DivisionByZero.into());
         }
-        Ok(Evaluated::new(Value::Integer(a.rem_euclid(b))))
+        let r = a.checked_rem_euclid(b).ok_or_else(outside_i64)?;
+        Ok(Evaluated::new(Value::Integer(r)))
     }
 }
 
@@ -377,7 +392,9 @@ impl NativeFunction for Rem {
                 if b == 0 {
                     return Err(div_zero_err());
                 }
-                Value::Integer(a % b)
+                a.checked_rem(b)
+                    .map(Value::Integer)
+                    .ok_or_else(outside_i64)?
             }
             (Value::Float(a), Value::Float(b)) => {
                 if b == 0.0 {
@@ -451,6 +468,49 @@ mod tests {
             )
             .unwrap();
         assert_eq!(r.into_value(), Value::Integer(5));
+    }
+
+    fn is_outside_i64(r: Result<Evaluated, PureException>) -> bool {
+        matches!(
+            r.map_err(|e| e.kind),
+            Err(crate::error::PureExceptionKind::ExecutionError(
+                PureRuntimeError::Unsupported(what)
+            )) if what.contains("64-bit")
+        )
+    }
+
+    #[test]
+    fn integer_overflow_is_a_typed_error_not_a_wrap() {
+        let plus = Plus.execute(
+            &[crate::native::lit_collection(vec![
+                lit_int(i64::MAX),
+                lit_int(1),
+            ])],
+            &mut MockCtx,
+        );
+        assert!(is_outside_i64(plus));
+        let negate = Minus.execute(
+            &[crate::native::lit_collection(vec![lit_int(i64::MIN)])],
+            &mut MockCtx,
+        );
+        assert!(is_outside_i64(negate));
+        let times = Times.execute(
+            &[crate::native::lit_collection(vec![
+                lit_int(i64::MAX),
+                lit_int(2),
+            ])],
+            &mut MockCtx,
+        );
+        assert!(is_outside_i64(times));
+        assert!(is_outside_i64(
+            Abs.execute(&[lit_int(i64::MIN)], &mut MockCtx)
+        ));
+        assert!(is_outside_i64(
+            Rem.execute(&[lit_int(i64::MIN), lit_int(-1)], &mut MockCtx)
+        ));
+        assert!(is_outside_i64(
+            Mod.execute(&[lit_int(i64::MIN), lit_int(-1)], &mut MockCtx)
+        ));
     }
 
     #[test]

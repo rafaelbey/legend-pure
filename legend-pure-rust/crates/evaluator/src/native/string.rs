@@ -241,46 +241,58 @@ impl NativeFunction for Format {
             single => vec![single.clone()],
         };
 
-        let bytes = template.as_bytes();
+        let chars: Vec<char> = template.chars().collect();
         let mut result = String::with_capacity(template.len());
         let mut i = 0usize;
         let mut sub_idx = 0usize;
 
-        while i < bytes.len() {
-            let c = bytes[i];
-            if c != b'%' {
-                result.push(c as char);
+        while i < chars.len() {
+            let c = chars[i];
+            if c != '%' {
+                result.push(c);
                 i += 1;
                 continue;
             }
             let mut j = i + 1;
             let mut zero_pad = false;
-            if j < bytes.len()
-                && bytes[j] == b'0'
-                && j + 1 < bytes.len()
-                && bytes[j + 1].is_ascii_digit()
+            if j < chars.len()
+                && chars[j] == '0'
+                && j + 1 < chars.len()
+                && chars[j + 1].is_ascii_digit()
             {
                 zero_pad = true;
                 j += 1;
             }
             let width_start = j;
-            while j < bytes.len() && bytes[j].is_ascii_digit() {
+            while j < chars.len() && chars[j].is_ascii_digit() {
                 j += 1;
             }
             let width: Option<usize> = if j > width_start {
-                Some(template[width_start..j].parse().unwrap_or(0))
+                Some(
+                    chars[width_start..j]
+                        .iter()
+                        .collect::<String>()
+                        .parse()
+                        .unwrap_or(0),
+                )
             } else {
                 None
             };
-            let precision: Option<usize> = if j < bytes.len() && bytes[j] == b'.' {
+            let precision: Option<usize> = if j < chars.len() && chars[j] == '.' {
                 let p_start = j + 1;
                 let mut p_end = p_start;
-                while p_end < bytes.len() && bytes[p_end].is_ascii_digit() {
+                while p_end < chars.len() && chars[p_end].is_ascii_digit() {
                     p_end += 1;
                 }
                 if p_end > p_start {
                     j = p_end;
-                    Some(template[p_start..p_end].parse().unwrap_or(0))
+                    Some(
+                        chars[p_start..p_end]
+                            .iter()
+                            .collect::<String>()
+                            .parse()
+                            .unwrap_or(0),
+                    )
                 } else {
                     j = p_start;
                     None
@@ -288,17 +300,17 @@ impl NativeFunction for Format {
             } else {
                 None
             };
-            if j >= bytes.len() {
+            if j >= chars.len() {
                 result.push('%');
                 i += 1;
                 continue;
             }
-            let spec = bytes[j];
+            let spec = chars[j];
             let date_pattern: Option<String> =
-                if spec == b't' && j + 1 < bytes.len() && bytes[j + 1] == b'{' {
+                if spec == 't' && j + 1 < chars.len() && chars[j + 1] == '{' {
                     let pat_start = j + 2;
-                    if let Some(end) = template[pat_start..].find('}') {
-                        let pat = template[pat_start..pat_start + end].to_string();
+                    if let Some(end) = chars[pat_start..].iter().position(|&c| c == '}') {
+                        let pat: String = chars[pat_start..pat_start + end].iter().collect();
                         j = pat_start + end + 1;
                         Some(pat)
                     } else {
@@ -308,7 +320,7 @@ impl NativeFunction for Format {
                     j += 1;
                     None
                 };
-            if !matches!(spec, b's' | b'r' | b'd' | b'f' | b't') {
+            if !matches!(spec, 's' | 'r' | 'd' | 'f' | 't') {
                 result.push('%');
                 i += 1;
                 continue;
@@ -321,9 +333,9 @@ impl NativeFunction for Format {
             })?;
             sub_idx += 1;
             match spec {
-                b'r' => result.push_str(&repr_value(&v)),
-                b's' => result.push_str(&pure_to_string(&v, ctx)?),
-                b'd' => {
+                'r' => result.push_str(&repr_value(&v)),
+                's' => result.push_str(&pure_to_string(&v, ctx)?),
+                'd' => {
                     let Value::Integer(n) = v else {
                         let got = pure_to_string(&v, ctx)?;
                         return Err(PureRuntimeError::EvaluationError(format!(
@@ -346,7 +358,7 @@ impl NativeFunction for Format {
                     };
                     result.push_str(&body);
                 }
-                b'f' => {
+                'f' => {
                     let Value::Float(f) = v else {
                         let got = pure_to_string(&v, ctx)?;
                         return Err(PureRuntimeError::EvaluationError(format!(
@@ -361,7 +373,7 @@ impl NativeFunction for Format {
                     };
                     result.push_str(&body);
                 }
-                b't' => {
+                't' => {
                     let Value::Date(d) = &v else {
                         let got = pure_to_string(&v, ctx)?;
                         return Err(PureRuntimeError::EvaluationError(format!(
@@ -432,42 +444,42 @@ fn format_date_pattern(d: &crate::date::PureDate, pat: &str) -> String {
     };
     let inner = shifted.inner_datetime();
     let mut out = String::with_capacity(body.len());
-    let bytes = body.as_bytes();
+    let chars: Vec<char> = body.chars().collect();
     let mut i = 0;
-    while i < bytes.len() {
-        let c = bytes[i];
-        if c == b'"' {
+    while i < chars.len() {
+        let c = chars[i];
+        if c == '"' {
             i += 1;
-            while i < bytes.len() && bytes[i] != b'"' {
-                out.push(bytes[i] as char);
+            while i < chars.len() && chars[i] != '"' {
+                out.push(chars[i]);
                 i += 1;
             }
-            if i < bytes.len() {
+            if i < chars.len() {
                 i += 1;
             }
             continue;
         }
         let mut j = i + 1;
-        while j < bytes.len() && bytes[j] == c {
+        while j < chars.len() && chars[j] == c {
             j += 1;
         }
         let count = j - i;
-        let token: String = std::iter::repeat_n(c as char, count).collect();
+        let token: String = std::iter::repeat_n(c, count).collect();
         let _ = token;
         match (c, count) {
-            (b'y', 4) => {
+            ('y', 4) => {
                 let _ = write!(out, "{:04}", inner.year());
             }
-            (b'M', 2) => {
+            ('M', 2) => {
                 let _ = write!(out, "{:02}", inner.month());
             }
-            (b'd', 2) => {
+            ('d', 2) => {
                 let _ = write!(out, "{:02}", inner.day());
             }
-            (b'H', 2) => {
+            ('H', 2) => {
                 let _ = write!(out, "{:02}", inner.hour());
             }
-            (b'h', n) => {
+            ('h', n) => {
                 let h12 = match inner.hour() {
                     0 => 12,
                     h if h > 12 => h - 12,
@@ -479,25 +491,25 @@ fn format_date_pattern(d: &crate::date::PureDate, pat: &str) -> String {
                     let _ = write!(out, "{h12}");
                 }
             }
-            (b'm', 2) => {
+            ('m', 2) => {
                 let _ = write!(out, "{:02}", inner.minute());
             }
-            (b's', 2) => {
+            ('s', 2) => {
                 let _ = write!(out, "{:02}", inner.second());
             }
-            (b'S', n) => {
+            ('S', n) => {
                 let nanos = inner.subsec_nanosecond();
                 let s = format!("{nanos:09}");
                 out.push_str(&s[..n.min(9)]);
             }
-            (b'a', 1) => out.push_str(if inner.hour() < 12 { "AM" } else { "PM" }),
-            (b'Z', 1) => {
+            ('a', 1) => out.push_str(if inner.hour() < 12 { "AM" } else { "PM" }),
+            ('Z', 1) => {
                 let m: i32 = tz_offset_minutes.unwrap_or(0);
                 let sign = if m >= 0 { '+' } else { '-' };
                 let abs = m.abs();
                 let _ = write!(out, "{sign}{:02}{:02}", abs / 60, abs % 60);
             }
-            (b'X', 1) => {
+            ('X', 1) => {
                 let m: i32 = tz_offset_minutes.unwrap_or(0);
                 if m == 0 {
                     out.push('Z');
@@ -509,7 +521,7 @@ fn format_date_pattern(d: &crate::date::PureDate, pat: &str) -> String {
             }
             _ => {
                 for _ in 0..count {
-                    out.push(c as char);
+                    out.push(c);
                 }
             }
         }
@@ -565,6 +577,29 @@ impl NativeFunction for JoinStrings {
     }
 }
 
+/// Java indexes strings by UTF-16 unit; these map between that and
+/// byte offsets.
+fn utf16_len(s: &str) -> usize {
+    s.encode_utf16().count()
+}
+
+/// Byte offset of the `index`-th UTF-16 unit, clamped to the string's
+/// end. An index inside a surrogate pair lands on the next character.
+fn byte_at_utf16(s: &str, index: usize) -> usize {
+    let mut units = 0usize;
+    for (byte, c) in s.char_indices() {
+        if units >= index {
+            return byte;
+        }
+        units += c.len_utf16();
+    }
+    s.len()
+}
+
+fn utf16_at_byte(s: &str, byte: usize) -> usize {
+    utf16_len(&s[..byte])
+}
+
 /// Pure `indexOf(String[1], String[1]): Integer[1]`
 /// Pure `indexOf(String[1], String[1], Integer[1]): Integer[1]` — search
 /// from a non-zero start index.
@@ -588,9 +623,7 @@ impl NativeFunction for IndexOf {
             2 => 0usize,
             3 => {
                 let raw = values[2].as_integer()?.max(0);
-                #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
-                let from = (raw as usize).min(s.len());
-                from
+                byte_at_utf16(s, usize::try_from(raw).unwrap_or(usize::MAX))
             }
             n => {
                 return Err(PureRuntimeError::EvaluationError(format!(
@@ -599,10 +632,9 @@ impl NativeFunction for IndexOf {
                 .into());
             }
         };
-        #[allow(clippy::cast_possible_wrap)]
-        let idx = s[from..]
-            .find(sub.as_str())
-            .map_or(-1, |i| (i + from) as i64);
+        let idx = s[from..].find(sub.as_str()).map_or(-1, |i| {
+            i64::try_from(utf16_at_byte(s, i + from)).unwrap_or(i64::MAX)
+        });
         Ok(Evaluated::new(Value::Integer(idx)))
     }
 }
@@ -737,8 +769,9 @@ impl NativeFunction for Length {
         let values = force_all(args, ctx)?;
         expect_args("length", &values, 1)?;
         let s = values[0].as_string()?;
-        #[allow(clippy::cast_possible_wrap)]
-        Ok(Evaluated::new(Value::Integer(s.len() as i64)))
+        Ok(Evaluated::new(Value::Integer(
+            i64::try_from(utf16_len(s)).unwrap_or(i64::MAX),
+        )))
     }
 }
 
@@ -786,8 +819,7 @@ impl NativeFunction for Substring {
         let (start_i, end_i) = match values.len() {
             2 => {
                 let start = values[1].as_integer()?.max(0);
-                #[allow(clippy::cast_possible_wrap)]
-                let end = s.len() as i64;
+                let end = i64::try_from(utf16_len(s)).unwrap_or(i64::MAX);
                 (start, end)
             }
             3 => (
@@ -801,10 +833,8 @@ impl NativeFunction for Substring {
                 .into());
             }
         };
-        #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
-        let start = (start_i as usize).min(s.len());
-        #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
-        let end = (end_i as usize).min(s.len());
+        let start = byte_at_utf16(s, usize::try_from(start_i).unwrap_or(usize::MAX));
+        let end = byte_at_utf16(s, usize::try_from(end_i).unwrap_or(usize::MAX));
         let start = start.min(end);
         Ok(Evaluated::new(Value::String(SmolStr::new(&s[start..end]))))
     }
@@ -1024,6 +1054,37 @@ mod tests {
             .execute(&[lit_str("%r"), coll], &mut MockCtx)
             .unwrap();
         assert_eq!(r.into_value(), Value::String("'foo'".into()));
+    }
+
+    #[test]
+    fn strings_are_indexed_by_utf16_unit_like_java() {
+        let n = Length.execute(&[lit_str("é😀")], &mut MockCtx).unwrap();
+        assert_eq!(n.into_value(), Value::Integer(3));
+        let i = IndexOf
+            .execute(&[lit_str("héllo"), lit_str("l")], &mut MockCtx)
+            .unwrap();
+        assert_eq!(i.into_value(), Value::Integer(2));
+        let i = IndexOf
+            .execute(&[lit_str("héllo"), lit_str("l"), lit_int(3)], &mut MockCtx)
+            .unwrap();
+        assert_eq!(i.into_value(), Value::Integer(3));
+        let sub = Substring
+            .execute(&[lit_str("héllo"), lit_int(0), lit_int(2)], &mut MockCtx)
+            .unwrap();
+        assert_eq!(sub.into_value(), Value::String("hé".into()));
+        let sub = Substring
+            .execute(&[lit_str("héllo"), lit_int(2)], &mut MockCtx)
+            .unwrap();
+        assert_eq!(sub.into_value(), Value::String("llo".into()));
+    }
+
+    #[test]
+    fn format_keeps_non_ascii_template_text() {
+        let coll = lit_collection(vec![lit_str("x")]);
+        let r = Format
+            .execute(&[lit_str("café %s ∞"), coll], &mut MockCtx)
+            .unwrap();
+        assert_eq!(r.into_value(), Value::String("café x ∞".into()));
     }
 
     #[test]

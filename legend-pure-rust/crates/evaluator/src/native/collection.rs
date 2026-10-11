@@ -375,16 +375,19 @@ impl NativeFunction for Range {
         }
         let mut result = PVector::new();
         let mut i = start;
-        if increment > 0 {
-            while i < end_exclusive {
-                result.push_back(Value::Integer(i));
-                i += increment;
+        let keep_going = |i: i64| {
+            if increment > 0 {
+                i < end_exclusive
+            } else {
+                i > end_exclusive
             }
-        } else {
-            while i > end_exclusive {
-                result.push_back(Value::Integer(i));
-                i += increment;
-            }
+        };
+        while keep_going(i) {
+            result.push_back(Value::Integer(i));
+            let Some(next) = i.checked_add(increment) else {
+                break;
+            };
+            i = next;
         }
         Ok(Evaluated::new(Value::Collection(Box::new(result))))
     }
@@ -1450,6 +1453,20 @@ mod tests {
                 .unwrap()
                 .into_value(),
             Value::Boolean(false)
+        );
+    }
+
+    #[test]
+    fn range_stops_at_the_edge_of_i64_instead_of_overflowing() {
+        assert_eq!(
+            Range
+                .execute(
+                    &[lit_int(i64::MAX - 1), lit_int(i64::MAX), lit_int(2)],
+                    &mut MockCtx
+                )
+                .unwrap()
+                .into_value(),
+            int_collection(&[i64::MAX - 1])
         );
     }
 
