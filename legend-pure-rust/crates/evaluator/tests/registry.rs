@@ -40,6 +40,8 @@ const FISHED: &[&str] = &[
     // comparison
     "eq_Any_1__Any_1__Boolean_1_",
     "equal_Any_MANY__Any_MANY__Boolean_1_",
+    // datetime
+    "adjust_Date_1__Integer_1__DurationUnit_1__Date_1_",
     // lang
     "letFunction_String_1__T_m__T_m_",
     "if_Boolean_1__Function_1__Function_1__T_m_",
